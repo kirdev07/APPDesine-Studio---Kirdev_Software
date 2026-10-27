@@ -29,6 +29,10 @@ def _install_excepthook() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
+    if "--smoke-test" in argv:  # самопроверка сборки: своя временная папка данных, данные пользователя не трогает
+        from app import smoke
+        i = argv.index("--smoke-test")
+        return smoke.run(argv[i + 1] if len(argv) > i + 1 else None)
     paths = AppPaths.default().ensure()
     setup_logging(paths.logs)
     log.info("Запуск %s %s, Python %s", APP_NAME, APP_VERSION, sys.version.split()[0])

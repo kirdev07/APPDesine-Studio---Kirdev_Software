@@ -3,8 +3,12 @@
 Локальная студия дизайна интерфейсов Android (Jetpack Compose / Material 3) и Windows (Python / PySide6).
 Спецификация — файлы `00_START_HERE.md` … `08_OPEN_DECISIONS.md` и `assets/mockups/`.
 
-**Состояние:** этапы 1–7 из 8 (Foundation & Project Hub, Fusion Workspace, Auto Layout, компоненты/SVG/типографика,
-анимации и визуальная логика, интерактивный предпросмотр на устройствах, проверка проекта и AI-экспорт).
+**Версия 1.0.0** — все 8 этапов: Project Hub, рабочая область, Auto Layout, компоненты/SVG/типографика,
+анимации и логика, интерактивный предпросмотр, проверка и AI-экспорт, стабилизация и сборка.
+
+Документация: [руководство](docs/USER_GUIDE.md) · [ограничения](docs/KNOWN_LIMITATIONS.md) ·
+[тестирование S01–S24](docs/TESTING.md) · [производительность](docs/PERFORMANCE.md) ·
+[сборка и выпуск](docs/RELEASE.md) · [изменения](CHANGELOG.md)
 
 ## Запуск (Windows 10/11, Python 3.12)
 
@@ -15,6 +19,8 @@ py -3.12 -m venv .venv
 ```
 
 Тесты: `.venv\Scripts\python -m pytest -q`
+Сборка программы (без Python у пользователя): `powershell -ExecutionPolicy Bypass -File packaging\build.ps1`
+Самопроверка сборки: `AppDesignStudio.exe --smoke-test отчёт.json`
 Скриншоты для отчёта: `.venv\Scripts\python -m tools.stage_screenshots docs\screenshots`
 
 ## Данные
@@ -57,6 +63,9 @@ app/ui                тема Fusion AMOLED, оболочка, Project Hub, м�
 app/ui/workspace      холст, слои, инспектор, полоса экранов
 app/ui/studio         Component Builder, SVG-редактор, типографика, цвета, ресурсы, анимации, логика, предпросмотр,
                       проверка проекта, AI-экспорт
+app/smoke.py          самопроверка сборки (--smoke-test)
+packaging/            PyInstaller (.spec), иконка, скрипт сборки, установщик Inno Setup
+tools/                скриншоты для отчётов, замер производительности
 tests/                pytest + pytest-qt
 ```
 

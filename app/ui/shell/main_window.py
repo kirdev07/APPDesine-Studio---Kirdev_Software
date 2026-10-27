@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         b = QToolButton()
         b.setObjectName("NavButton")
         b.setText(text)
+        b.setAccessibleName(text)  # имя для экранного диктора
         b.setIcon(glyph_icon(icon, 20, fallback=text))
         b.setIconSize(QSize(20, 20))
         b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
@@ -407,6 +408,12 @@ class MainWindow(QMainWindow):
 
     def show_validator(self) -> None:
         self.show_page(PAGE_VALIDATE)
+
+    def export_screens(self, screen_ids: list[str]) -> None:
+        """AI-экспорт с заранее выбранными экранами (например, где используется компонент)."""
+        self.show_page(PAGE_EXPORT)
+        if self.pages.currentWidget() is self.export_page:
+            self.export_page.select_screens(screen_ids)
 
     def open_task(self) -> None:
         if self.doc is None:

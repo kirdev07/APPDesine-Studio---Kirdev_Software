@@ -225,10 +225,11 @@ def test_export_page_builds_archive_and_blocks_on_critical(qtbot, app_win):
     assert page.screens.count() == 2 and page.plat["android"].isChecked() and not page.plat["windows"].isEnabled()
     assert "## Экраны для реализации" in page.task.toPlainText() and page.b_export.isEnabled()
     page.screens.item(1).setCheckState(Qt.CheckState.Unchecked)
-    assert "Выбрано экранов: 1" in page.screens_info.text()
+    qtbot.waitUntil(lambda: "Выбрано экранов: 1" in page.screens_info.text(), timeout=3000)  # пересборка с паузой
     page.task.setPlainText(page.task.toPlainText() + "\nДополнение пользователя.")
     assert page.task_edited
     page.m_update.setChecked(True)                   # смена настроек не затирает правку
+    page.rebuild()
     assert page.task.toPlainText().endswith("Дополнение пользователя.")
     page.folder.setText(str(projects / "Экспорт"))
     path = page.export()

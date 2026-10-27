@@ -124,7 +124,7 @@ class NewProjectWizard(QDialog):
         self.type_ui.setChecked(True)
         lay.addWidget(self.type_ui)
         full = QRadioButton("Полный проект с кодом — недоступно: программа не генерирует приложения, "
-                            "только пакет задания для Claude Code (этап 7)")
+                            "только пакет задания для Claude Code (AI-экспорт)")
         full.setEnabled(False)
         lay.addWidget(full)
         imp = QRadioButton("Импорт дизайна из Figma / изображений — не входит в v1.0")
@@ -191,7 +191,7 @@ class NewProjectWizard(QDialog):
             self.density_combo.addItem(text, key)
         form.addRow("Плотность элементов", self.density_combo)
         lay.addLayout(form)
-        lay.addWidget(label("Импорт собственных шрифтов TTF/OTF — этап 4 (Typography Studio).", "Muted"))
+        lay.addWidget(label("Собственные шрифты TTF/OTF импортируются в студии «Шрифты» после создания проекта.", "Muted"))
         lay.addStretch()
         return w
 
@@ -220,7 +220,7 @@ class NewProjectWizard(QDialog):
         self.safe_areas = QCheckBox("Учитывать безопасные области (статус-бар, навигация, вырез)")
         self.safe_areas.setChecked(True)
         lay.addWidget(self.safe_areas)
-        lay.addWidget(label("Собственные профили устройств — этап 6 (Interactive Preview).", "Muted"))
+        lay.addWidget(label("Другие устройства, плотность и ориентация проверяются на странице «Просмотр» (F5).", "Muted"))
         lay.addStretch()
         return w
 
@@ -232,7 +232,7 @@ class NewProjectWizard(QDialog):
         for d in CONTENT_DIRS:
             lay.addWidget(label(f"▢  {d}/  —  {STRUCTURE_INFO[d]}"))
         lay.addSpacing(8)
-        lay.addWidget(label("README.md, .gitignore и структура для Claude Code формируются при AI-экспорте (этап 7).",
+        lay.addWidget(label("README.md, AI_TASK.md и структура для Claude Code формируются при AI-экспорте (Ctrl+E).",
                             "Muted", wrap=True))
         lay.addStretch()
         return w

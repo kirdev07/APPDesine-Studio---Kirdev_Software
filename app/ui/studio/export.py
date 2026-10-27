@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLineEdit, QListWidget,
@@ -116,6 +116,12 @@ class ExportPage(QWidget):
         self._loading = False
         self._thumbs: dict[str, bytes] = {}
         self.last_path: Path | None = None
+        self.package = None
+        self.issues = []
+        self._rebuild = QTimer(self)  # настройки меняются пачкой — пересобираем один раз после паузы
+        self._rebuild.setSingleShot(True)
+        self._rebuild.setInterval(250)
+        self._rebuild.timeout.connect(self.rebuild)
         root = QHBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -264,17 +270,26 @@ class ExportPage(QWidget):
                                 str(self.ws.ctx.settings.projects_dir / "Экспорт"))
         self.inc["include_previews"].setChecked(self.ws.ctx.settings.get("export/include_previews"))
         self._loading = False
-        self._options_changed()
+        self.rebuild()
 
     def _options_changed(self) -> None:
-        if self._loading or self.main.doc is None:
+        if not self._loading and self.main.doc is not None:
+            self._rebuild.start()
+
+    def rebuild(self) -> None:
+        """Пересчитать проверку, состав пакета и черновик задания по текущим настройкам."""
+        self._rebuild.stop()
+        if self.main.doc is None:
             return
         self.notes.setEnabled(self.m_update.isChecked())
         o = self.options()
+        platforms = {s.id: s.platform for s in self.main.doc.screens}
+        self._loading = True
         for i in range(self.screens.count()):  # экраны невыбранной платформы не экспортируются
             it = self.screens.item(i)
-            s = next(x for x in self.main.doc.screens if x.id == it.data(ROLE))
-            it.setForeground(self.palette().text() if s.platform in o.platforms else self.palette().mid())
+            it.setForeground(self.palette().text() if platforms.get(it.data(ROLE)) in o.platforms
+                             else self.palette().mid())
+        self._loading = False
         chosen = scope_screens(self.main.doc, o)
         self.screens_info.setText(f"Выбрано экранов: {len(chosen)} из {len(self.main.doc.screens)}")
         self.issues = run_validation(self.main, [s.id for s in chosen]) if chosen else []
@@ -286,7 +301,9 @@ class ExportPage(QWidget):
         self.b_export.setToolTip("" if self.b_export.isEnabled() else
                                  "Нет экранов или есть критичные замечания проверки")
         try:
-            pkg = build_package(self.main.doc, o, self.issues, self._previews(chosen) if o.include_previews else None)
+            # превью рисуются только при сборке; здесь — их места в пакете
+            pkg = build_package(self.main.doc, o, self.issues, {s.id: b"" for s in chosen}
+                                if o.include_previews else None)
         except ExportError as exc:
             self.files.clear()
             self.assets.clear()
@@ -327,7 +344,7 @@ class ExportPage(QWidget):
                     node.setExpanded(part in ("screens", "assets"))
                     dirs[key] = node
                 parent = dirs[key]
-            leaf = QTreeWidgetItem([parts[-1], format_size(len(data))])
+            leaf = QTreeWidgetItem([parts[-1], format_size(len(data)) if data else "при сборке"])
             (parent.addChild(leaf) if parent else self.files.addTopLevelItem(leaf))
         for key, node in dirs.items():
             node.setText(1, f"{node.childCount()}")
@@ -354,11 +371,19 @@ class ExportPage(QWidget):
 
     def regenerate_task(self) -> None:
         self.task_edited = False
-        self._options_changed()
+        self.rebuild()
 
     def copy_task(self) -> None:
         QGuiApplication.clipboard().setText(self.task.toPlainText())
         self.task_info.setText("Задание скопировано в буфер обмена")
+
+    def select_screens(self, screen_ids: list[str]) -> None:
+        self._loading = True
+        for i in range(self.screens.count()):
+            it = self.screens.item(i)
+            it.setCheckState(Qt.CheckState.Checked if it.data(ROLE) in screen_ids else Qt.CheckState.Unchecked)
+        self._loading = False
+        self.rebuild()
 
     def focus_task(self) -> None:
         self.task.setFocus()

@@ -144,7 +144,7 @@ def test_autosave_and_recovery(qtbot, win, ctx, projects_dir, monkeypatch):  # S
     assert ctx.recovery.entries() == []
 
 
-def test_future_sections_are_disabled_and_labelled(win):
+def test_no_unfinished_sections_left(win):
     from PySide6.QtWidgets import QToolButton
     future = [b for b in win.findChildren(QToolButton) if b.objectName() == "NavButton" and not b.isEnabled()
               and "этапе" in b.toolTip()]

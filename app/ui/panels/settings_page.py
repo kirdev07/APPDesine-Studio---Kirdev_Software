@@ -17,7 +17,7 @@ from app.context import AppContext
 from app.libraries.catalog import DEVICES
 from app.ui.widgets import label, panel
 
-SECTIONS = ["Основные", "Проект и автосохранение", "Устройства", "Журнал и данные", "О программе"]
+SECTIONS = ["Основные", "Проект и автосохранение", "Устройства", "Экспорт", "Журнал и данные", "О программе"]
 
 
 class SettingsPage(QWidget):
@@ -43,7 +43,7 @@ class SettingsPage(QWidget):
         root.addWidget(nav)
 
         self.stack = QStackedWidget()
-        for build in (self._general, self._project, self._devices, self._data, self._about):
+        for build in (self._general, self._project, self._devices, self._export, self._data, self._about):
             self.stack.addWidget(build())
         root.addWidget(self.stack, 1)
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
@@ -108,7 +108,7 @@ class SettingsPage(QWidget):
         return w
 
     def _devices(self) -> QWidget:
-        w, lay, form = self._section("Устройства", "Встроенные профили. Собственные профили и предпросмотр — этап 6.")
+        w, lay, form = self._section("Устройства", "Профили для новых проектов. Устройства предпросмотра (телефоны, складные, планшеты, окна, свой размер и плотность) выбираются на странице «Просмотр».")
         self.def_android = QComboBox()
         self.def_windows = QComboBox()
         for d in DEVICES:
@@ -122,6 +122,30 @@ class SettingsPage(QWidget):
         form.addRow("Windows по умолчанию", self.def_windows)
         lay.addStretch()
         return w
+
+    def _export(self) -> QWidget:
+        w, lay, form = self._section("Экспорт", "Настройки AI-экспорта по умолчанию. Состав пакета и задание "
+                                                "настраиваются перед каждой сборкой на странице «Экспорт».")
+        row = QHBoxLayout()
+        self.export_dir = QLineEdit()
+        self.export_dir.setPlaceholderText("<папка проектов>\Экспорт")
+        self.export_dir.editingFinished.connect(lambda: self._set("export/folder", self.export_dir.text().strip()))
+        browse = QPushButton("Обзор…")
+        browse.clicked.connect(self._browse_export)
+        row.addWidget(self.export_dir, 1)
+        row.addWidget(browse)
+        form.addRow("Папка для пакетов", row)
+        self.export_previews = QCheckBox("Добавлять превью экранов (PNG)")
+        self.export_previews.toggled.connect(lambda v: self._set("export/include_previews", v))
+        form.addRow("", self.export_previews)
+        lay.addStretch()
+        return w
+
+    def _browse_export(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "Папка для пакетов экспорта", self.export_dir.text())
+        if d:
+            self.export_dir.setText(os.path.normpath(d))
+            self._set("export/folder", self.export_dir.text())
 
     def _data(self) -> QWidget:
         w, lay, form = self._section("Журнал и данные", "Служебные файлы программы хранятся только на этом компьютере.")
@@ -150,7 +174,7 @@ class SettingsPage(QWidget):
     def load(self) -> None:
         s = self.ctx.settings
         widgets = (self.show_hub, self.recent, self.autosave, self.autosave_min, self.backups, self.def_android,
-                   self.def_windows)
+                   self.def_windows, self.export_previews)
         for wdg in widgets:
             wdg.blockSignals(True)
         self.show_hub.setChecked(s.get("general/show_hub_on_start"))
@@ -161,6 +185,8 @@ class SettingsPage(QWidget):
         self.backups.setValue(s.get("project/backups_keep"))
         self.def_android.setCurrentIndex(max(0, self.def_android.findData(s.get("devices/default_android"))))
         self.def_windows.setCurrentIndex(max(0, self.def_windows.findData(s.get("devices/default_windows"))))
+        self.export_dir.setText(s.get("export/folder"))
+        self.export_previews.setChecked(s.get("export/include_previews"))
         for wdg in widgets:
             wdg.blockSignals(False)
 

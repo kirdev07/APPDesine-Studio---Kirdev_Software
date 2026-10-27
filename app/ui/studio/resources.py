@@ -41,7 +41,7 @@ class ColorsPage(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         left, ll = panel()
         ll.addWidget(label("Цветовые токены", "H2"))
-        ll.addWidget(label("Именованные цвета проекта. Попадут в токены AI-экспорта (этап 7).", "Muted", wrap=True))
+        ll.addWidget(label("Именованные цвета проекта. Попадают в токены AI-экспорта (styles/tokens.json).", "Muted", wrap=True))
         self.tokens = QListWidget()
         self.tokens.currentItemChanged.connect(self._select)
         ll.addWidget(self.tokens, 1)

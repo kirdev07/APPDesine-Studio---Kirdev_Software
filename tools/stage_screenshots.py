@@ -297,6 +297,31 @@ def _stage7(win, ed, app, out):
     print("Пакет:", path)
 
 
+def _stage8(win, ed, app, out):
+    from app.ui.shell.main_window import PAGE_SETTINGS
+    cid = next((c.id for c in ed.doc.components if c.behavior.get("hover") or c.behavior.get("toggle")),
+               ed.doc.components[0].id if ed.doc.components else None)
+    if cid is not None:
+        win.open_in_builder(cid)
+        b = win.builder
+        b.set_mode(1)
+        p = b.live_player
+        if p is not None:
+            p.stop_clock()
+            inst = next(n for n in p.screen.nodes if n.is_instance)
+            from PySide6.QtCore import QPointF
+            p.hover(QPointF(inst.x + inst.w / 2, inst.y + inst.h / 2))
+            p.advance(1000)
+        app.processEvents()
+        win.grab().save(str(out / "stage8_01_component_live_preview.png"))
+        b.set_mode(0)
+    win.show_page(PAGE_SETTINGS)
+    win.settings_page.nav.setCurrentRow(3)
+    app.processEvents()
+    win.grab().save(str(out / "stage8_02_settings_export.png"))
+    win.settings_page.nav.setCurrentRow(0)
+
+
 def tree_find(ed, node_id):
     from app.core.document import tree
     return tree.find(ed.screen(), node_id)[0]
@@ -453,6 +478,7 @@ def main(out_dir: str) -> int:
         _stage5(win, ed, app, out)
         _stage6(win, ed, app, out)
         _stage7(win, ed, app, out)
+        _stage8(win, ed, app, out)
         win.save_project()
         win.show_page(PAGE_SETTINGS)
         app.processEvents()

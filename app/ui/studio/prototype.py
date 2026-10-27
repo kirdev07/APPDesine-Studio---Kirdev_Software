@@ -214,6 +214,7 @@ class PrototypePlayer(QWidget):
         self.reduced_motion = False
         self.touch_mode = False       # касание: нет наведения, след пальца; иначе мышь
         self.show_safe = False
+        self.device_chrome = True     # рамка и системные панели устройства (в песочнице компонента — нет)
         self.specs: dict[str, ViewSpec] = {}   # платформа → устройство
         self.now = 0.0
         self.active: list[tuple[object, float]] = []   # (Animation, время старта)
@@ -442,7 +443,14 @@ class PrototypePlayer(QWidget):
         # содержимое за краем экрана устройство не показывает: закрываем всё вокруг корпуса фоном сцены
         outside, device = QPainterPath(), QPainterPath()
         outside.addRect(self.view.sceneRect().adjusted(-1e5, -1e5, 1e5, 1e5))
-        fr = frame_rect(s, spec)
+        fr = frame_rect(s, spec) if self.device_chrome else QRectF(0, 0, W, H)
+        if not self.device_chrome:
+            device.addRect(fr)
+            p.fillPath(outside.subtracted(device), STAGE_BG)
+            p.setPen(QPen(QColor("#3A3A3A"), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(fr)
+            return
         if spec.profile.platform == PLATFORM_ANDROID:
             r = spec.profile.corner_dp * u + bezel(s, spec)
             device.addRoundedRect(fr, r, r)

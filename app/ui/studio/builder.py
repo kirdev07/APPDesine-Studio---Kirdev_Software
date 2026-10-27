@@ -16,7 +16,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QStackedWidget, QTableWidget,
+    QListWidgetItem, QMessageBox, QPlainTextEdit, QSplitter, QStackedWidget, QTableWidget,
     QTableWidgetItem, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -165,15 +165,11 @@ class ComponentBuilderPage(QWidget):
         v.setSpacing(6)
         top = QHBoxLayout()
         self.mode_buttons = []
-        for i, (text, stage) in enumerate((("Дизайн", 0), ("Интерактивный просмотр", 6), ("Структура", 0))):
+        for i, text in enumerate(("Дизайн", "Интерактивный просмотр", "Структура")):
             b = QToolButton()
             b.setText(text)
             b.setCheckable(True)
-            if stage:
-                b.setEnabled(False)
-                b.setToolTip(f"Будет доступно на этапе {stage}")
-            else:
-                b.clicked.connect(lambda _=False, n=i: self.set_mode(n))
+            b.clicked.connect(lambda _=False, n=i: self.set_mode(n))
             self.mode_buttons.append(b)
             top.addWidget(b)
         top.addSpacing(12)
@@ -204,6 +200,14 @@ class ComponentBuilderPage(QWidget):
                            "Muted", wrap=True)
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.center_stack.addWidget(self.empty)
+        self.live = QWidget()  # интерактивный просмотр: экземпляр компонента в проигрывателе
+        self.live_lay = QVBoxLayout(self.live)
+        self.live_lay.setContentsMargins(0, 0, 0, 0)
+        self.live_lay.addWidget(label("Наведите курсор, нажмите и щёлкните — поведение компонента и переходы "
+                                      "между состояниями как в прототипе. Изменения на холсте видны сразу.",
+                                      "Muted", wrap=True))
+        self.live_player = None
+        self.center_stack.addWidget(self.live)
         cl.addWidget(self.center_stack, 1)
         v.addWidget(canvas_box, 1)
 
@@ -243,12 +247,53 @@ class ComponentBuilderPage(QWidget):
         if self.current_id is None:
             self.center_stack.setCurrentWidget(self.empty)
             return
+        if n != 1 and self.live_player is not None:
+            self.live_player.stop_clock()
         if n == 2:
             self.refresh_structure()
             self.center_stack.setCurrentWidget(self.structure)
+        elif n == 1:
+            self.start_live()
+            self.center_stack.setCurrentWidget(self.live)
         else:
             self.center_stack.setCurrentWidget(self.canvas)
         self.toolbar.setEnabled(n == 0)
+
+    def start_live(self) -> None:
+        """Проигрыватель с одним экземпляром редактируемого (ещё не сохранённого) компонента."""
+        from types import SimpleNamespace
+
+        from app.core.document.model import ComponentDef, ProjectDocument, Screen
+        from app.engines.preview.devices import ViewSpec, custom_profile, screen_dpi
+        from app.ui.studio.prototype import PrototypePlayer
+        defn = self._current_def()
+        if self.live_player is not None:
+            self.live_player.stop_clock()
+            self.live_player.setParent(None)
+            self.live_player.deleteLater()
+            self.live_player = None
+        if defn is None:
+            return
+        doc = self.main.doc
+        comps = [ComponentDef.from_dict(c.to_dict()) for c in doc.components if c.id != defn.id] + [defn]
+        plat = defn.platform or (doc.meta.platforms[0] if doc.meta.platforms else "android")
+        dev = next((s.device_id for s in doc.screens if s.platform == plat), "")
+        w, h = int(max(defn.root.w + 160, 480)), int(max(defn.root.h + 160, 320))
+        screen = Screen(name=f"Компонент «{defn.name}»", platform=plat, width=w, height=h, device_id=dev)
+        screen.nodes.append(ce.make_instance(defn, (w - defn.root.w) / 2, (h - defn.root.h) / 2, self.main.engine))
+        scratch = ProjectDocument(meta=doc.meta, screens=[screen], components=comps, assets=doc.assets,
+                                  text_styles=doc.text_styles, colors=doc.colors)
+        scratch.asset_data = doc.asset_data
+        shim = SimpleNamespace(doc=scratch, engine=self.main.engine, screen_id=screen.id,
+                               artboard_color=self.main.artboard_color)
+        self.live_player = PrototypePlayer(shim)
+        self.live_player.device_chrome = False
+        self.live_player.specs[plat] = ViewSpec(custom_profile(plat, w, h, screen_dpi(screen)),
+                                                "landscape" if w > h else "portrait")  # размер ровно как у сцены
+        self.live_player.render(fit=True)
+        self.live_lay.addWidget(self.live_player, 1)
+        if self.isVisible():
+            self.live_player.start_clock()
 
     # ---------- инспектор ----------
     def _build_inspector(self) -> QWidget:
@@ -275,9 +320,8 @@ class ComponentBuilderPage(QWidget):
                              "Сохранить компонент (с ресурсами и стилями) для других проектов"))
         row.addWidget(button("Экспорт…", self.export_file, "Сохранить файл .adscomp"))
         dl.addLayout(row)
-        ai = QPushButton("Экспорт с ИИ-заданием — этап 7")
-        ai.setEnabled(False)
-        ai.setToolTip("Пакет для Claude Code формируется на этапе 7 (AI Export)")
+        ai = button("Экспорт с ИИ-заданием…", self.export_with_task,
+                    "Пакет для Claude Code с экранами, где используется компонент")
         dl.addWidget(ai)
         self.tabs.addTab(design, "Дизайн")
         self.tabs.addTab(self._build_states(), "Состояния")
@@ -490,6 +534,30 @@ class ComponentBuilderPage(QWidget):
 
     def open_nested(self, component_id: str) -> None:
         self.open_component(component_id, nested=True)
+
+    def hideEvent(self, e):
+        if self.live_player is not None:
+            self.live_player.stop_clock()
+        super().hideEvent(e)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self.live_player is not None and self.center_stack.currentWidget() is self.live:
+            self.live_player.start_clock()
+
+    def export_with_task(self) -> None:
+        if self.current_id is None or not self.confirm_leave():
+            return
+        cid = self.current_id
+        used = [s.id for s in self.main.doc.screens
+                if any(n.is_instance and n.component_id == cid for n, _, _ in tree.walk(s.nodes))]
+        if not used:
+            QMessageBox.information(self, "Экспорт", "Компонент ещё не используется на экранах. Вставьте его на "
+                                                     "экран («Вставить на экран») и повторите.")
+            return
+        win = self.window()
+        if hasattr(win, "export_screens"):
+            win.export_screens(used)
 
     def _current_def(self) -> ComponentDef | None:
         """Компонент по текущему состоянию редактора (ещё не сохранённый в проект)."""
