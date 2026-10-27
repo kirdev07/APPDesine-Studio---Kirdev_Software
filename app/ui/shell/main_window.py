@@ -25,27 +25,27 @@ from app.ui.workspace.page import WorkspacePage
 log = logging.getLogger(__name__)
 
 # (подпись, иконка, этап) — разделы, которые ещё не реализованы, неактивны и подписаны этапом.
-NAV_FUTURE = [
-    ("Проверка", "validate", 7), ("Экспорт", "export", 7), ("ИИ-задание", "ai", 7),
-]
+NAV_FUTURE: list[tuple[str, str, int]] = []
 MENU_FUTURE = {
     "Инструменты": [],
-    "Экспорт": [("Проверка проекта", 7), ("AI-экспорт для Claude Code", 7)],
+    "Экспорт": [],
     "Устройства": [],
 }
 
 (PAGE_HUB, PAGE_PROJECT, PAGE_SETTINGS, PAGE_BUILDER, PAGE_ICONS, PAGE_FONTS, PAGE_COLORS, PAGE_RESOURCES,
- PAGE_ANIMATIONS, PAGE_LOGIC, PAGE_PREVIEW) = range(11)
+ PAGE_ANIMATIONS, PAGE_LOGIC, PAGE_PREVIEW, PAGE_VALIDATE, PAGE_EXPORT) = range(13)
 # студии, которым нужен открытый проект: (страница, подпись, иконка, сочетание клавиш)
 STUDIOS = [(PAGE_BUILDER, "Компоненты", "components", "Ctrl+Alt+1"), (PAGE_ICONS, "Иконки", "icons", "Ctrl+Alt+2"),
            (PAGE_FONTS, "Шрифты", "fonts", "Ctrl+Alt+3"), (PAGE_COLORS, "Цвета", "colors", "Ctrl+Alt+4"),
            (PAGE_RESOURCES, "Ресурсы", "resources", "Ctrl+Alt+5"),
            (PAGE_ANIMATIONS, "Анимации", "animations", "Ctrl+Alt+6"), (PAGE_LOGIC, "Логика", "logic", "Ctrl+Alt+7"),
-           (PAGE_PREVIEW, "Просмотр", "devices", "Ctrl+Alt+8")]
+           (PAGE_PREVIEW, "Просмотр", "devices", "Ctrl+Alt+8"), (PAGE_VALIDATE, "Проверка", "validate", "Ctrl+Alt+9"),
+           (PAGE_EXPORT, "Экспорт", "export", "Ctrl+Alt+0")]
 STUDIO_TITLES = {PAGE_BUILDER: "Component Builder", PAGE_ICONS: "SVG-редактор и иконки",
                  PAGE_FONTS: "Typography Studio", PAGE_COLORS: "Цвета", PAGE_RESOURCES: "Ресурсы",
                  PAGE_ANIMATIONS: "Animation Studio", PAGE_LOGIC: "Визуальная логика",
-                 PAGE_PREVIEW: "Интерактивный предпросмотр"}
+                 PAGE_PREVIEW: "Интерактивный предпросмотр", PAGE_VALIDATE: "Проверка проекта",
+                 PAGE_EXPORT: "AI-экспорт для Claude Code"}
 
 
 class MainWindow(QMainWindow):
@@ -84,8 +84,13 @@ class MainWindow(QMainWindow):
         self.logic.run_requested.connect(self.run_prototype)
         from app.ui.studio.preview import PreviewPage
         self.preview = PreviewPage(self.project_page)
+        from app.ui.studio.export import ExportPage, ValidatorPage
+        self.validator = ValidatorPage(self.project_page)
+        self.validator.goto.connect(self.go_to_node)
+        self.export_page = ExportPage(self.project_page)
         for p in (self.hub, self.project_page, self.settings_page, self.builder, self.icons, self.fonts_page,
-                  self.colors, self.resources, self.animations, self.logic, self.preview):
+                  self.colors, self.resources, self.animations, self.logic, self.preview, self.validator,
+                  self.export_page):
             self.pages.addWidget(p)
         for page in (self.builder, self.icons, self.resources):
             page.insert_requested.connect(lambda: self.show_page(PAGE_PROJECT))
@@ -148,6 +153,10 @@ class MainWindow(QMainWindow):
             self.nav_group.addButton(b)
             self.nav_studios[page] = b
             v.addWidget(b)
+        self.nav_task = self._nav_button("ИИ-задание", "ai")
+        self.nav_task.setToolTip("Задание для Claude Code (AI_TASK.md) на странице экспорта")
+        self.nav_task.clicked.connect(self.open_task)
+        v.addWidget(self.nav_task)
         for text, icon, stage in NAV_FUTURE:
             b = self._nav_button(text, icon)
             b.setEnabled(False)
@@ -194,6 +203,11 @@ class MainWindow(QMainWindow):
                                   lambda _=False, pg=page: self.show_page(pg))
                     self.studio_actions.append(a)
                 sub.addSeparator()
+            if title == "Экспорт":
+                for text, sc, slot in (("Проверка проекта", "F7", self.show_validator),
+                                       ("AI-экспорт для Claude Code…", "Ctrl+E", lambda: self.show_page(PAGE_EXPORT)),
+                                       ("Задание для Claude Code (AI_TASK.md)", None, self.open_task)):
+                    self.studio_actions.append(self._act(sub, text, QKeySequence(sc) if sc else None, slot))
             if title == "Устройства":
                 self.act_run = self._act(sub, "▶ Интерактивный предпросмотр", QKeySequence("F5"),
                                          self.run_prototype)
@@ -230,7 +244,7 @@ class MainWindow(QMainWindow):
         self.pages.setCurrentIndex(page)
         {PAGE_HUB: self.nav_hub, PAGE_PROJECT: self.nav_project, PAGE_SETTINGS: self.nav_settings,
          **self.nav_studios}[page].setChecked(True)
-        if page in (PAGE_COLORS, PAGE_RESOURCES, PAGE_FONTS, PAGE_ANIMATIONS, PAGE_LOGIC):
+        if page in (PAGE_COLORS, PAGE_RESOURCES, PAGE_FONTS, PAGE_ANIMATIONS, PAGE_LOGIC, PAGE_VALIDATE, PAGE_EXPORT):
             self.pages.widget(page).refresh()
         if page != PAGE_ANIMATIONS and hasattr(self, "animations"):
             self.animations.stop(keep_position=True)
@@ -245,6 +259,9 @@ class MainWindow(QMainWindow):
         self.act_close.setEnabled(has)
         self.nav_project.setEnabled(has)
         self.nav_layers.setEnabled(has)
+        self.nav_task.setEnabled(has)
+        self.nav_task.setToolTip("Задание для Claude Code (AI_TASK.md) на странице экспорта" if has
+                                 else "Откройте или создайте проект")
         for b in self.nav_studios.values():
             b.setEnabled(has)
             b.setToolTip("" if has else "Откройте или создайте проект")
@@ -387,6 +404,27 @@ class MainWindow(QMainWindow):
             return
         self.preview.start(self.project_page.editor.screen_id)  # новый сеанс с текущего экрана
         self.show_page(PAGE_PREVIEW)
+
+    def show_validator(self) -> None:
+        self.show_page(PAGE_VALIDATE)
+
+    def open_task(self) -> None:
+        if self.doc is None:
+            return
+        self.show_page(PAGE_EXPORT)
+        self.export_page.focus_task()
+
+    def go_to_node(self, screen_id: str, node_id: str) -> None:
+        """Из списка замечаний — к экрану и элементу в рабочей области."""
+        ed = self.project_page.editor
+        if self.doc is None or all(s.id != screen_id for s in self.doc.screens):
+            return
+        ed.set_screen(screen_id)
+        self.show_page(PAGE_PROJECT)
+        if node_id:
+            from app.core.document import tree
+            if node_id in tree.node_map(ed.screen()):
+                ed.select_any([node_id])
 
     def open_in_builder(self, component_id: str) -> None:
         self.show_page(PAGE_BUILDER)

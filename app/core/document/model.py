@@ -467,6 +467,8 @@ class ProjectMeta:
         )
 
 
+# цвет монтажной области по теме проекта (фон экрана, если у элементов нет своего)
+ARTBOARD_COLORS = {"amoled": "#000000", "dark": "#121212", "gray": "#2B2B2B", "light": "#FFFFFF"}
 ASSET_KINDS = {"icon": ("svg",), "font": ("ttf", "otf"), "image": ("png", "jpg", "jpeg", "webp", "svg")}
 REDISTRIBUTION = ("allowed", "forbidden", "unknown")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")

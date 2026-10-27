@@ -24,6 +24,8 @@ DEFAULTS = {
     "workspace/grid_size": 8,
     "workspace/snap": True,
     "workspace/guides_visible": True,
+    "export/folder": "",              # пусто — «<папка проектов>\Экспорт»
+    "export/include_previews": True,
 }
 
 

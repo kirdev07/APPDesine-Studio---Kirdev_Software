@@ -277,6 +277,26 @@ def _stage6(win, ed, app, out):
     page.deactivate()
 
 
+def _stage7(win, ed, app, out):
+    import tempfile
+    from app.ui.shell.main_window import PAGE_EXPORT, PAGE_VALIDATE
+    ed.set_screen(ed.doc.screens[0].id)
+    win.show_page(PAGE_VALIDATE)
+    app.processEvents()
+    win.grab().save(str(out / "stage7_01_validator.png"))
+    win.show_page(PAGE_EXPORT)
+    page = win.export_page
+    page.folder.setText(str(Path(tempfile.mkdtemp(prefix="ads_export_"))))
+    app.processEvents()
+    win.grab().save(str(out / "stage7_02_ai_export.png"))
+    page.m_update.setChecked(True)
+    page.notes.setPlainText("Существующий проект Android: модули app/, chat/; сохранить вход по номеру.")
+    path = page.export(confirm_overwrite=False)
+    app.processEvents()
+    win.grab().save(str(out / "stage7_03_export_done.png"))
+    print("Пакет:", path)
+
+
 def tree_find(ed, node_id):
     from app.core.document import tree
     return tree.find(ed.screen(), node_id)[0]
@@ -432,6 +452,7 @@ def main(out_dir: str) -> int:
         _stage4(win, ed, app, out)
         _stage5(win, ed, app, out)
         _stage6(win, ed, app, out)
+        _stage7(win, ed, app, out)
         win.save_project()
         win.show_page(PAGE_SETTINGS)
         app.processEvents()

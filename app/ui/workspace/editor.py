@@ -30,7 +30,7 @@ TOOL_SELECT, TOOL_HAND, TOOL_RECT, TOOL_ELLIPSE, TOOL_TEXT, TOOL_FRAME, TOOL_PEN
 CLIPBOARD_MIME = "application/x-ads-nodes"
 TYPE_NAMES = {"rect": "Прямоугольник", "ellipse": "Эллипс", "text": "Текст", "group": "Группа", "frame": "Фрейм",
               "vector": "Вектор", "image": "Изображение", "instance": "Экземпляр"}
-ARTBOARD_COLORS = {"amoled": "#000000", "dark": "#121212", "gray": "#2B2B2B", "light": "#FFFFFF"}
+from app.core.document.model import ARTBOARD_COLORS  # noqa: E402 — общий с проверкой проекта
 
 
 class Editor(QObject):
