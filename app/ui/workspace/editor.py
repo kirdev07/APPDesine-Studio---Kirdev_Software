@@ -8,18 +8,22 @@ import logging
 from PySide6.QtCore import QObject, Signal
 
 from app.core.commands import (
-    AddNodes, AddScreen, Command, DeleteNodes, Group, RemoveScreen, Reorder, SetMeta, SetProps, SetScreenProps,
-    Ungroup, UndoStack,
+    AddNodes, AddScreen, Batch, Command, DeleteNodes, Group, MoveToIndex, RemoveScreen, Reorder, SetMeta, SetProps,
+    SetScreenProps, Ungroup, UndoStack,
 )
 from app.core.document import tree
 from app.core.document.model import Guide, ModelError, Node, ProjectDocument, Screen, new_id
 from app.core.document.tree import Rect
+from app.engines.layout import Diagnostic, LayoutEngine
+from app.libraries import components
+from app.ui.workspace.text_measure import QtTextMeasurer
 
 log = logging.getLogger(__name__)
 
-TOOL_SELECT, TOOL_HAND, TOOL_RECT, TOOL_ELLIPSE, TOOL_TEXT = "select", "hand", "rect", "ellipse", "text"
+TOOL_SELECT, TOOL_HAND, TOOL_RECT, TOOL_ELLIPSE, TOOL_TEXT, TOOL_FRAME = (
+    "select", "hand", "rect", "ellipse", "text", "frame")
 CLIPBOARD_MIME = "application/x-ads-nodes"
-TYPE_NAMES = {"rect": "Прямоугольник", "ellipse": "Эллипс", "text": "Текст", "group": "Группа"}
+TYPE_NAMES = {"rect": "Прямоугольник", "ellipse": "Эллипс", "text": "Текст", "group": "Группа", "frame": "Фрейм"}
 ARTBOARD_COLORS = {"amoled": "#000000", "dark": "#121212", "gray": "#2B2B2B", "light": "#FFFFFF"}
 
 
@@ -44,6 +48,9 @@ class Editor(QObject):
         self.guides_visible = True
         self._clipboard: list[dict] = []
         self._paste_serial = 0
+        self.engine = LayoutEngine(QtTextMeasurer())
+        self.diagnostics: list[Diagnostic] = []
+        self._preview_base: dict[str, Rect] | None = None
 
     # ---------- документ ----------
     def set_document(self, doc: ProjectDocument | None) -> None:
@@ -53,6 +60,7 @@ class Editor(QObject):
             self.stack.listeners.append(self._after_stack_change)
         self.screen_id = doc.screens[0].id if doc and doc.screens else None
         self.selection, self.entered_group = [], None
+        self.refresh_diagnostics()
         self.screen_changed.emit()
         self.document_changed.emit()
         self.selection_changed.emit()
@@ -66,14 +74,39 @@ class Editor(QObject):
             return None
 
     def execute(self, cmd: Command) -> bool:
+        """Выполняет команду, затем раскладку; обе попадают в историю одной записью."""
         if self.stack is None:
             return False
+        before = {s.id: (tree.geometry(s), (s.width, s.height)) for s in self.doc.screens}
         try:
-            self.stack.push(cmd)
+            cmd.redo(self.doc)
         except ModelError as exc:
             log.warning("Команда «%s» отклонена: %s", cmd.label, exc)
             return False
+        parts = [cmd]
+        for s in self.doc.screens:
+            geo, size = before.get(s.id, (None, None))
+            changes, diags = self.engine.layout_screen(s, geo, size)
+            if s.id == self.screen_id:
+                self.diagnostics = diags
+            if changes:
+                layout_cmd = SetProps(s.id, changes, "Раскладка")
+                layout_cmd.redo(self.doc)
+                parts.append(layout_cmd)
+        self.stack.push_done(Batch(parts, cmd.label) if len(parts) > 1 else cmd)
         return True
+
+    def refresh_diagnostics(self) -> None:
+        s = self.screen()
+        if s is None:
+            self.diagnostics = []
+            return
+        snapshot = tree.geometry(s)
+        _, self.diagnostics = self.engine.layout_screen(s)
+        m = tree.node_map(s)  # проверочный прогон не должен менять документ
+        for nid, (x, y, w, h) in snapshot.items():
+            n = m[nid]
+            n.x, n.y, n.w, n.h = x, y, w, h
 
     def undo(self) -> None:
         if self.stack is not None:
@@ -87,6 +120,7 @@ class Editor(QObject):
         if self.doc and (not self.screen_id or all(s.id != self.screen_id for s in self.doc.screens)):
             self.screen_id = self.doc.screens[0].id if self.doc.screens else None
             self.screen_changed.emit()
+        self.refresh_diagnostics()
         s = self.screen()
         if s is not None:
             nodes = tree.node_map(s)
@@ -100,6 +134,7 @@ class Editor(QObject):
         if screen_id != self.screen_id:
             self.screen_id = screen_id
             self.selection, self.entered_group = [], None
+            self.refresh_diagnostics()
             self.screen_changed.emit()
             self.selection_changed.emit()
 
@@ -158,7 +193,7 @@ class Editor(QObject):
             for n in nodes:
                 v, lk = vis and n.visible, lock or n.locked
                 result[n.id] = (v, lk)
-                if n.is_group:
+                if n.is_container:
                     rec(n.children, v, lk)
         rec(s.nodes, True, False)
         return result
@@ -214,9 +249,11 @@ class Editor(QObject):
 
     # ---------- геометрия ----------
     def translate_changes(self, nodes: list[Node], dx: float, dy: float) -> dict[str, dict]:
+        """Сдвиг узлов. Двигаются только узлы с собственной геометрией (сквозь группы);
+        дети фреймов следуют за ними через раскладку (привязки)."""
         changes = {}
         for n in nodes:
-            for leaf in tree.leaves(n):
+            for leaf in tree.geo_nodes(n):
                 changes[leaf.id] = {"x": round(leaf.x + dx, 2), "y": round(leaf.y + dy, 2)}
         return changes
 
@@ -232,11 +269,35 @@ class Editor(QObject):
                             "w": round(max(0.0, w * sx), 2), "h": round(max(0.0, h * sy), 2)}
         return changes
 
-    def preview(self, changes: dict[str, dict]) -> None:
-        """Временное изменение геометрии без команды (во время перетаскивания)."""
+    def begin_preview(self) -> None:
         s = self.screen()
+        self._preview_base = tree.geometry(s) if s else None
+
+    def _restore_preview_base(self) -> None:
+        s = self.screen()
+        if s is None or self._preview_base is None:
+            return
+        m = tree.node_map(s)
+        for nid, (x, y, w, h) in self._preview_base.items():
+            if nid in m:
+                n = m[nid]
+                n.x, n.y, n.w, n.h = x, y, w, h
+
+    def preview(self, changes: dict[str, dict], keep: set[str] | None = None) -> None:
+        """Временное изменение геометрии без команды (во время перетаскивания) с живой раскладкой.
+        keep — узлы, чьё положение из changes важнее раскладки (перетаскиваемые внутри Auto Layout)."""
+        s = self.screen()
+        if self._preview_base is None:
+            self.begin_preview()
+        self._restore_preview_base()
         m = tree.node_map(s)
         for nid, props in changes.items():
+            for k, v in props.items():
+                setattr(m[nid], k, v)
+        layout, _ = self.engine.layout_screen(s, self._preview_base)
+        for nid, props in layout.items():
+            if keep and nid in keep:
+                continue
             for k, v in props.items():
                 setattr(m[nid], k, v)
         self.preview_changed.emit()
@@ -244,6 +305,9 @@ class Editor(QObject):
     def commit_geometry(self, originals: dict[str, Rect], changes: dict[str, dict], label: str) -> None:
         """Возвращает исходную геометрию и применяет итог одной командой (одна запись в истории)."""
         s = self.screen()
+        if self._preview_base is not None:
+            self._restore_preview_base()
+            self._preview_base = None
         m = tree.node_map(s)
         for nid, (x, y, w, h) in originals.items():
             n = m[nid]
@@ -252,6 +316,39 @@ class Editor(QObject):
                 if any(getattr(m[nid], k) != v for k, v in props.items())}
         if real:
             self.execute(SetProps(s.id, real, label))
+        else:
+            self.preview_changed.emit()
+
+    def auto_layout_parent(self, node_id: str) -> Node | None:
+        s = self.screen()
+        anc = tree.ancestors(s, node_id) if s else []
+        return anc[-1] if anc and anc[-1].auto_layout else None
+
+    def drop_in_auto_layout(self, node_id: str, point: tuple[float, float]) -> None:
+        """Перестановка ребёнка Auto Layout перетаскиванием: индекс — по положению точки на главной оси."""
+        s = self.screen()
+        if self._preview_base is not None:
+            self._restore_preview_base()
+            self._preview_base = None
+        parent = self.auto_layout_parent(node_id)
+        if parent is None:
+            return
+        siblings = [c for c in parent.children if c.id != node_id]
+        axis = 0 if parent.layout == "horizontal" else 1
+        index = 0
+        for c in siblings:
+            b = tree.bounds(c)
+            if b and point[axis] > b[axis] + b[axis + 2] / 2:
+                index += 1
+        if parent.layout == "grid":
+            index = 0
+            for c in siblings:
+                b = tree.bounds(c)
+                if b and (point[1] > b[1] + b[3] or (point[1] >= b[1] and point[0] > b[0] + b[2] / 2)):
+                    index += 1
+        current = next(i for i, c in enumerate(parent.children) if c.id == node_id)
+        if index != current:
+            self.execute(MoveToIndex(s.id, node_id, index))
         else:
             self.preview_changed.emit()
 
@@ -264,7 +361,7 @@ class Editor(QObject):
         excluded_leaves = set()
         for nid in exclude:
             try:
-                excluded_leaves |= {leaf.id for leaf in tree.leaves(tree.find(s, nid)[0])}
+                excluded_leaves |= {d.id for d in tree.descendants(tree.find(s, nid)[0])}
             except ModelError:
                 pass
         for n, _, _ in tree.walk(s.nodes):
@@ -312,6 +409,10 @@ class Editor(QObject):
             n.fill = ""
             n.text = "Текст"
             n.text_color = "#111111" if self.artboard_color() == "#FFFFFF" else "#F2F2F2"
+            n.sizing_v = "hug"  # высота по тексту; ширина задаётся рамкой
+        elif node_type == "frame":
+            n.fill = "#F2F2F2" if self.artboard_color() == "#FFFFFF" else "#141414"
+            n.radius = 0.0
         else:
             n.radius = 0 if node_type == "ellipse" else float(self.doc.meta.appearance.corner_radius if self.doc else 0)
         return n
@@ -375,14 +476,44 @@ class Editor(QObject):
                 self.select([cmd.group_id])
 
     def ungroup_selection(self) -> None:
+        """Разгруппировать группы и «снять» фреймы (дети остаются на своих местах)."""
         s = self.screen()
-        groups = [n for n in self.selected_nodes() if n.is_group]
+        groups = [n for n in self.selected_nodes() if n.is_container]
         if not s or not groups:
             return
         children = [c.id for g in groups for c in g.children]
-        for g in groups:
-            self.execute(Ungroup(s.id, g.id))
+        cmds = [Ungroup(s.id, g.id) for g in groups]
+        self.execute(Batch(cmds, "Разгруппировать") if len(cmds) > 1 else cmds[0])
         self.select(children)
+
+    def wrap_in_auto_layout(self, direction: str = "vertical") -> None:
+        """Обернуть выделение во фрейм с Auto Layout; порядок детей — по положению на холсте."""
+        s = self.screen()
+        nodes = self.selected_nodes()
+        bb = self.selection_bbox()
+        if not s or not nodes or not bb:
+            return
+        axis = 1 if direction == "vertical" else 0
+        ordered = sorted(nodes, key=lambda n: tree.bounds(n)[axis])
+        rects = [tree.bounds(n) for n in ordered]
+        gaps = [rects[i + 1][axis] - (rects[i][axis] + rects[i][axis + 2]) for i in range(len(rects) - 1)]
+        gap = max(0.0, round(sum(gaps) / len(gaps))) if gaps else 0.0
+        frame = Node(type="frame", name="Auto Layout", x=bb[0], y=bb[1], w=bb[2], h=bb[3], fill="",
+                     layout=direction, gap=gap, sizing_h="hug", sizing_v="hug")
+        cmds: list[Command] = [Group(s.id, [n.id for n in nodes], frame, label="Обернуть в Auto Layout")]
+        cmds += [MoveToIndex(s.id, n.id, i) for i, n in enumerate(ordered)]
+        if self.execute(Batch(cmds, "Обернуть в Auto Layout")):
+            self.select([frame.id], entered_group=self.entered_group)
+
+    def insert_component(self, kind: str) -> Node | None:
+        s = self.screen()
+        if not s or not self.doc:
+            return None
+        node = components.build(kind, s, self.doc.meta.appearance)
+        if self.execute(AddNodes(s.id, [node], self._container_id(), label=f"Добавить: {node.name}")):
+            self.select([node.id])
+            return node
+        return None
 
     def reorder(self, mode: str) -> None:
         s = self.screen()
@@ -460,7 +591,7 @@ class Editor(QObject):
             return
         off = 16 * self._paste_serial
         for n in nodes:
-            for leaf in tree.leaves(n):
+            for leaf in tree.descendants(n):  # вставка: сдвигаем всё поддерево, включая детей фреймов
                 leaf.x += off
                 leaf.y += off
         if self.execute(AddNodes(s.id, nodes, self._container_id(), label="Вставить")):

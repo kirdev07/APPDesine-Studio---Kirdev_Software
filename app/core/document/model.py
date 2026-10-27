@@ -8,8 +8,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-# 1 — этап 1 (экраны без содержимого); 2 — узлы и направляющие на экранах.
-SCHEMA_VERSION = 2
+# 1 — этап 1 (экраны без содержимого); 2 — узлы и направляющие; 3 — фреймы, Auto Layout и привязки.
+SCHEMA_VERSION = 3
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -69,13 +69,32 @@ class Appearance:
         )
 
 
-NODE_TYPES = ("rect", "ellipse", "text", "group")
+NODE_TYPES = ("rect", "ellipse", "text", "group", "frame")
 GEOMETRY_PROPS = ("x", "y", "w", "h")
 STYLE_PROPS = ("fill", "stroke", "stroke_width", "radius", "opacity")
 TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align")
 COMMON_PROPS = ("name", "visible", "locked")
-LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + TEXT_PROPS
+# Поведение узла внутри родителя: размер в Auto Layout и привязки в обычном контейнере.
+CHILD_PROPS = ("sizing_h", "sizing_v", "min_w", "max_w", "min_h", "max_h", "constraint_h", "constraint_v")
+# Свойства контейнера-фрейма.
+FRAME_PROPS = ("layout", "gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "main_align", "cross_align",
+               "grid_columns", "clip")
+LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + TEXT_PROPS + CHILD_PROPS
+ALLOWED_PROPS = {
+    "group": COMMON_PROPS,
+    "frame": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + FRAME_PROPS,
+}
 ALIGNMENTS = ("left", "center", "right")
+ENUMS = {
+    "align": ALIGNMENTS,
+    "sizing_h": ("fixed", "fill", "hug"),
+    "sizing_v": ("fixed", "fill", "hug"),
+    "constraint_h": ("left", "right", "left_right", "center", "scale"),
+    "constraint_v": ("top", "bottom", "top_bottom", "center", "scale"),
+    "layout": ("none", "vertical", "horizontal", "grid"),
+    "main_align": ("start", "center", "end", "space_between"),
+    "cross_align": ("start", "center", "end", "stretch"),
+}
 MAX_DEPTH = 32
 MAX_COORD = 1_000_000.0
 _COLOR = re.compile(r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")
@@ -83,10 +102,18 @@ _COLOR = re.compile(r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")
 
 def check_prop(name: str, value, node_type: str = "rect"):
     """Проверяет и нормализует значение свойства узла. Возвращает нормализованное значение."""
-    allowed = COMMON_PROPS if node_type == "group" else LEAF_PROPS
+    allowed = ALLOWED_PROPS.get(node_type, LEAF_PROPS)
     if name not in allowed:
         raise ModelError(f"Свойство «{name}» недоступно для типа {node_type}")
-    if name in ("visible", "locked"):
+    if name in ENUMS:
+        if value not in ENUMS[name]:
+            raise ModelError(f"Недопустимое значение «{name}»: {value!r}")
+        return value
+    if name == "grid_columns":
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 64:
+            raise ModelError("Число колонок должно быть от 1 до 64")
+        return value
+    if name in ("visible", "locked", "clip"):
         if not isinstance(value, bool):
             raise ModelError(f"«{name}» должно быть логическим")
         return value
@@ -107,6 +134,8 @@ def check_prop(name: str, value, node_type: str = "rect"):
     value = float(value)
     limits = {"w": (0, MAX_COORD), "h": (0, MAX_COORD), "stroke_width": (0, 1000), "radius": (0, MAX_COORD),
               "opacity": (0, 1), "font_size": (1, 1000), "font_weight": (100, 900)}
+    for k in ("gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "min_w", "max_w", "min_h", "max_h"):
+        limits[k] = (0, MAX_COORD)  # для max_* ноль означает «без ограничения»
     lo, hi = limits.get(name, (-MAX_COORD, MAX_COORD))
     if not lo <= value <= hi:
         raise ModelError(f"«{name}» вне диапазона {lo}…{hi}")
@@ -134,6 +163,27 @@ class Node:
     font_weight: int = 400
     text_color: str = "#FFFFFF"
     align: str = "left"
+    # поведение в родителе
+    sizing_h: str = "fixed"
+    sizing_v: str = "fixed"
+    min_w: float = 0.0
+    max_w: float = 0.0
+    min_h: float = 0.0
+    max_h: float = 0.0
+    constraint_h: str = "left"
+    constraint_v: str = "top"
+    # фрейм
+    layout: str = "none"
+    gap: float = 0.0
+    row_gap: float = 0.0
+    pad_t: float = 0.0
+    pad_r: float = 0.0
+    pad_b: float = 0.0
+    pad_l: float = 0.0
+    main_align: str = "start"
+    cross_align: str = "start"
+    grid_columns: int = 2
+    clip: bool = True
     children: list[Node] = field(default_factory=list)
     id: str = field(default_factory=new_id)
 
@@ -141,16 +191,32 @@ class Node:
     def is_group(self) -> bool:
         return self.type == "group"
 
+    @property
+    def is_frame(self) -> bool:
+        return self.type == "frame"
+
+    @property
+    def is_container(self) -> bool:
+        return self.type in ("group", "frame")
+
+    @property
+    def auto_layout(self) -> bool:
+        return self.is_frame and self.layout != "none"
+
     def to_dict(self) -> dict:
         d = {"id": self.id, "type": self.type, "name": self.name, "visible": self.visible, "locked": self.locked}
         if self.is_group:
             d["children"] = [c.to_dict() for c in self.children]
             return d
-        for k in GEOMETRY_PROPS + STYLE_PROPS:
+        for k in GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS:
             d[k] = getattr(self, k)
         if self.type == "text":
             for k in TEXT_PROPS:
                 d[k] = getattr(self, k)
+        if self.is_frame:
+            for k in FRAME_PROPS:
+                d[k] = getattr(self, k)
+            d["children"] = [c.to_dict() for c in self.children]
         return d
 
     @classmethod
@@ -165,11 +231,17 @@ class Node:
         node = cls(type=node_type, id=_req(d, "id", str))
         if node_type == "text":
             node.fill = ""
-        for k in COMMON_PROPS + (() if node.is_group else GEOMETRY_PROPS + STYLE_PROPS) + (
-                TEXT_PROPS if node_type == "text" else ()):
+        props = COMMON_PROPS
+        if not node.is_group:
+            props += GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS
+        if node_type == "text":
+            props += TEXT_PROPS
+        if node.is_frame:
+            props += FRAME_PROPS
+        for k in props:
             if k in d:
                 setattr(node, k, check_prop(k, d[k], node_type))
-        if node.is_group:
+        if node.is_container:
             children = d.get("children", [])
             if not isinstance(children, list):
                 raise ModelError("children должно быть списком")

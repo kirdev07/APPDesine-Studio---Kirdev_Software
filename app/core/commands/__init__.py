@@ -40,6 +40,10 @@ class UndoStack:
 
     def push(self, cmd: Command) -> None:
         cmd.redo(self.doc)
+        self.push_done(cmd)
+
+    def push_done(self, cmd: Command) -> None:
+        """Записывает уже выполненную команду (например, пакет «действие + раскладка»)."""
         self._done.append(cmd)
         if self._clean > len(self._done) - 1:
             self._clean = -1  # чистое состояние было в отменённой ветке и больше недостижимо
@@ -90,6 +94,22 @@ class UndoStack:
         return len(self._done)
 
 
+class Batch(Command):
+    """Несколько команд как одна запись истории. Отмена — в обратном порядке."""
+
+    def __init__(self, commands: list[Command], label: str | None = None):
+        self.commands = list(commands)
+        self.label = label or (commands[0].label if commands else "Изменение")
+
+    def redo(self, doc):
+        for c in self.commands:
+            c.redo(doc)
+
+    def undo(self, doc):
+        for c in reversed(self.commands):
+            c.undo(doc)
+
+
 # ---------------- узлы ----------------
 
 class AddNodes(Command):
@@ -131,7 +151,7 @@ class DeleteNodes(Command):
         while changed:  # группа, у которой удаляются все дети, удаляется целиком
             changed = False
             for n, _, _ in tree.walk(screen.nodes):
-                if n.is_group and n.id not in wanted and n.children and all(c.id in wanted for c in n.children):
+                if n.is_group and n.id not in wanted and n.children and all(c.id in wanted for c in n.children):  # фрейм может быть пустым
                     wanted.add(n.id)
                     changed = True
         return tree.top_ids(screen, wanted)
@@ -247,13 +267,40 @@ def _ungroup(screen: Screen, parent_id: str | None, group_id: str, indices: list
         cont.insert(i, child)
 
 
+class MoveToIndex(Command):
+    label = "Переместить в раскладке"
+
+    def __init__(self, screen_id: str, node_id: str, index: int):
+        self.screen_id, self.node_id, self.index = screen_id, node_id, index
+        self.old_index: int | None = None
+        self.parent_id: str | None = None
+
+    def redo(self, doc):
+        screen = doc.screen(self.screen_id)
+        node, parent, idx = tree.find(screen, self.node_id)
+        self.parent_id, self.old_index = (parent.id if parent else None), idx
+        cont = tree.container(screen, self.parent_id)
+        cont.pop(idx)
+        cont.insert(max(0, min(self.index, len(cont))), node)
+
+    def undo(self, doc):
+        screen = doc.screen(self.screen_id)
+        cont = tree.container(screen, self.parent_id)
+        node = next(n for n in cont if n.id == self.node_id)
+        cont.remove(node)
+        cont.insert(self.old_index, node)
+
+
 class Group(Command):
+    """Объединяет узлы одного уровня в группу или во фрейм (если передан узел-фрейм с геометрией)."""
     label = "Сгруппировать"
 
-    def __init__(self, screen_id: str, ids: list[str], group: Node | None = None):
+    def __init__(self, screen_id: str, ids: list[str], group: Node | None = None, label: str | None = None):
         self.screen_id, self.ids = screen_id, list(ids)
         g = group or Node(type="group", name="Группа")
-        self.group = {"id": g.id, "type": "group", "name": g.name, "visible": True, "locked": False}
+        self.group = {k: v for k, v in g.to_dict().items() if k != "children"}
+        if label:
+            self.label = label
         self.parent_id: str | None = None
         self.indices: list[int] = []
 
@@ -290,8 +337,8 @@ class Ungroup(Command):
     def redo(self, doc):
         screen = doc.screen(self.screen_id)
         node, parent, idx = tree.find(screen, self.group_id)
-        if not node.is_group:
-            raise ModelError("Это не группа")
+        if not node.is_container:
+            raise ModelError("Это не группа и не фрейм")
         self.parent_id = parent.id if parent else None
         self.indices = list(range(idx, idx + len(node.children)))
         self.group = {k: v for k, v in node.to_dict().items() if k != "children"}

@@ -13,12 +13,14 @@ from app.core.document.model import ProjectDocument
 from app.ui.widgets import glyph_icon, label, stage_badge
 from app.ui.workspace.canvas import CanvasView
 from app.ui.workspace.editor import (
-    CLIPBOARD_MIME, TOOL_ELLIPSE, TOOL_HAND, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor,
+    CLIPBOARD_MIME, TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor,
 )
+from app.ui.workspace.layout_tools import DiagnosticsPanel, ResponsiveDialog
 from app.ui.workspace.panels import Inspector, LayersPanel, ScreensStrip
 
 TOOLS = [(TOOL_SELECT, "➤", "Выделение", "V"), (TOOL_HAND, "✋", "Рука (или пробел)", "H"),
-         (TOOL_RECT, "▭", "Прямоугольник", "R"), (TOOL_ELLIPSE, "◯", "Эллипс", "O"), (TOOL_TEXT, "T", "Текст", "T")]
+         (TOOL_FRAME, "#", "Фрейм", "F"), (TOOL_RECT, "▭", "Прямоугольник", "R"), (TOOL_ELLIPSE, "◯", "Эллипс", "O"),
+         (TOOL_TEXT, "T", "Текст", "T")]
 ZOOMS = [25, 50, 75, 100, 150, 200, 400, 800]
 
 
@@ -52,6 +54,10 @@ class WorkspacePage(QMainWindow):
         self.dock_layers = self._dock("Элементы и слои", self.layers, Qt.DockWidgetArea.LeftDockWidgetArea, 280)
         self.dock_inspector = self._dock("Свойства", self.inspector, Qt.DockWidgetArea.RightDockWidgetArea, 320)
         self.dock_screens = self._dock("Экраны", self.screens, Qt.DockWidgetArea.BottomDockWidgetArea, 0)
+        self.diagnostics = DiagnosticsPanel(self.editor)
+        self.dock_diag = self._dock("Диагностика раскладки", self.diagnostics, Qt.DockWidgetArea.BottomDockWidgetArea, 0)
+        self.tabifyDockWidget(self.dock_screens, self.dock_diag)
+        self.dock_screens.raise_()
 
         self.editor.document_changed.connect(self._on_changed)
         self.editor.selection_changed.connect(self._update_actions)
@@ -135,6 +141,14 @@ class WorkspacePage(QMainWindow):
         self.view_actions = [self.a_zoom_in, self.a_zoom_out, self.a_zoom_fit, self.a_zoom_100, None,
                              self.a_grid, self.a_snap, self.a_guides]
 
+        self.a_wrap_v = self._action("Обернуть в Auto Layout ↓", lambda: ed.wrap_in_auto_layout("vertical"),
+                                     "Shift+A")
+        self.a_wrap_h = self._action("Обернуть в Auto Layout →", lambda: ed.wrap_in_auto_layout("horizontal"),
+                                     "Ctrl+Shift+A")
+        self.a_unwrap = self._action("Убрать фрейм / разгруппировать", ed.ungroup_selection)
+        self.a_responsive = self._action("Проверка адаптивности…", self.show_responsive, "Ctrl+Alt+R")
+        self.tools_actions = [self.a_wrap_v, self.a_wrap_h, self.a_unwrap, None, self.a_responsive]
+
     def _build_toolbar(self) -> QToolBar:
         bar = QToolBar("Инструменты", self)
         bar.setObjectName("WorkspaceToolbar")
@@ -148,7 +162,7 @@ class WorkspacePage(QMainWindow):
         design.setChecked(True)
         design.setToolTip("Режим дизайна")
         bar.addWidget(design)
-        for text, stage in (("Просмотр", 6), ("Структура", 3)):
+        for text, stage in (("Просмотр", 6), ("Структура", 4)):
             b = QToolButton()
             b.setText(text)
             b.setEnabled(False)
@@ -159,11 +173,12 @@ class WorkspacePage(QMainWindow):
             bar.addAction(self.tool_actions[key])
         bar.addSeparator()
         for action, short in ((self.a_undo, "↶"), (self.a_redo, "↷"), (self.a_group, "Группа"),
-                              (self.a_ungroup, "Разгруппировать"), (self.a_grid, "Сетка"), (self.a_snap, "Привязка"),
-                              (self.a_guides, "Направляющие")):
+                              (self.a_ungroup, "Разгр."), (self.a_wrap_v, "Auto Layout"),
+                              (self.a_responsive, "Адаптивность"), (self.a_grid, "Сетка"), (self.a_snap, "Привязка"),
+                              (self.a_guides, "Направл.")):
             action.setIconText(short)
             bar.addAction(action)
-            if action in (self.a_redo, self.a_ungroup):
+            if action in (self.a_redo, self.a_ungroup, self.a_responsive):
                 bar.addSeparator()
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -219,7 +234,11 @@ class WorkspacePage(QMainWindow):
         for a in (self.a_cut, self.a_copy, self.a_dup, self.a_delete, self.a_group, self.a_lock, self.a_hide,
                   self.a_up, self.a_down, self.a_top, self.a_bottom):
             a.setEnabled(sel)
-        self.a_ungroup.setEnabled(any(n.is_group for n in ed.selected_nodes()))
+        self.a_ungroup.setEnabled(any(n.is_container for n in ed.selected_nodes()))
+        self.a_unwrap.setEnabled(any(n.is_container for n in ed.selected_nodes()))
+        self.a_wrap_v.setEnabled(sel)
+        self.a_wrap_h.setEnabled(sel)
+        self.a_responsive.setEnabled(has_doc)
         self.a_paste.setEnabled(has_doc)
         self.a_select_all.setEnabled(has_doc)
 
@@ -270,6 +289,10 @@ class WorkspacePage(QMainWindow):
             self.canvas.set_zoom(float(t) / 100)
         except ValueError:
             self.zoom_combo.setEditText(f"{round(self.canvas.zoom() * 100)}%")
+
+    def show_responsive(self) -> None:
+        if self.editor.screen() is not None:
+            ResponsiveDialog(self.editor, self).exec()
 
     def focus_layers(self) -> None:
         self.dock_layers.show()

@@ -16,8 +16,14 @@ def _v1_to_v2(raw: dict) -> dict:
     return raw
 
 
+def _v2_to_v3(raw: dict) -> dict:
+    # В схеме 3 появились фреймы и свойства раскладки. У существующих узлов поля отсутствуют и при чтении
+    # получают значения по умолчанию (фиксированный размер, привязка слева-сверху), поэтому геометрия не меняется.
+    return raw
+
+
 # {исходная_версия: функция(raw) -> raw}
-MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2}
+MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2, 2: _v2_to_v3}
 
 
 def migrate(raw: dict, version: int) -> dict:

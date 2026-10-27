@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QInp
 from app.core.document import tree
 from app.core.document.model import Node, Screen
 from app.ui.themes.fusion_amoled import TOKENS
-from app.ui.workspace.editor import TOOL_ELLIPSE, TOOL_HAND, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor
+from app.ui.workspace.editor import TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor
 
 ACCENT = QColor(TOKENS["accent"])
 HANDLE = 8  # px на экране
@@ -76,6 +76,13 @@ class NodeItem(QGraphicsItem):
         m = n.stroke_width / 2 + 1
         return QRectF(n.x, n.y, n.w, n.h).adjusted(-m, -m, m, m)
 
+    def shape(self) -> QPainterPath:
+        n = self.node
+        path = QPainterPath()
+        r = min(n.radius, n.w / 2, n.h / 2)
+        path.addRoundedRect(QRectF(n.x, n.y, n.w, n.h), r, r)
+        return path
+
     def sync(self) -> None:
         self.prepareGeometryChange()
         self.update()
@@ -106,16 +113,23 @@ def build_scene(scene: QGraphicsScene, screen: Screen, artboard_color: str) -> d
     scene.addItem(ArtboardItem(screen, artboard_color))
     items: dict[str, NodeItem] = {}
 
-    def rec(nodes, visible):
+    def rec(nodes, visible, parent_item):
         for n in nodes:
             v = visible and n.visible
             if n.is_group:
-                rec(n.children, v)
+                rec(n.children, v, parent_item)
             elif v:
                 item = NodeItem(n)
-                scene.addItem(item)
+                if parent_item is not None:
+                    item.setParentItem(parent_item)
+                else:
+                    scene.addItem(item)
                 items[n.id] = item
-    rec(screen.nodes, True)
+                if n.is_frame:
+                    # дети фрейма — дочерние элементы сцены, чтобы работала обрезка по форме фрейма
+                    item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemClipsChildrenToShape, n.clip)
+                    rec(n.children, v, item)
+    rec(screen.nodes, True, None)
     return items
 
 
@@ -284,6 +298,7 @@ class CanvasView(QGraphicsView):
         self._originals: dict = {}
         self._orig_bbox = None
         self._handle = -1
+        self._reorder_id: str | None = None
         self._fitted_screen: str | None = None
 
         editor.document_changed.connect(self.rebuild)
@@ -361,7 +376,7 @@ class CanvasView(QGraphicsView):
     # ---------- ввод ----------
     def _tool_cursor(self):
         return {TOOL_HAND: Qt.CursorShape.OpenHandCursor, TOOL_RECT: Qt.CursorShape.CrossCursor,
-                TOOL_ELLIPSE: Qt.CursorShape.CrossCursor, TOOL_TEXT: Qt.CursorShape.IBeamCursor,
+                TOOL_ELLIPSE: Qt.CursorShape.CrossCursor, TOOL_FRAME: Qt.CursorShape.CrossCursor, TOOL_TEXT: Qt.CursorShape.IBeamCursor,
                 }.get(self.editor.tool, Qt.CursorShape.ArrowCursor)
 
     def _scene_pos(self, event) -> QPointF:
@@ -409,7 +424,7 @@ class CanvasView(QGraphicsView):
         if event.button() != Qt.MouseButton.LeftButton or not ed.screen():
             return super().mousePressEvent(event)
         self._start = p
-        if ed.tool in (TOOL_RECT, TOOL_ELLIPSE, TOOL_TEXT):
+        if ed.tool in (TOOL_RECT, TOOL_ELLIPSE, TOOL_TEXT, TOOL_FRAME):
             self._mode = "create"
             self._start = self._snap_point(p)
             self.create_rect = QRectF(self._start, self._start)
@@ -447,6 +462,10 @@ class CanvasView(QGraphicsView):
     def _begin_transform(self) -> None:
         self._originals = {n.id: (n.x, n.y, n.w, n.h) for n in self.editor.selected_leaves()}
         self._orig_bbox = self.editor.selection_bbox()
+        self.editor.begin_preview()
+        sel = self.editor.selection
+        # перетаскивание ребёнка Auto Layout — это перестановка, а не свободное перемещение
+        self._reorder_id = sel[0] if len(sel) == 1 and self.editor.auto_layout_parent(sel[0]) else None
 
     def mouseMoveEvent(self, event):
         p = self._scene_pos(event)
@@ -469,7 +488,11 @@ class CanvasView(QGraphicsView):
             sx, sy, lx, ly = ed.snap_rect((x + dx, y + dy, w, h), "lcrtmb", set(ed.selection), self._snap_threshold())
             dx, dy = round(dx + sx), round(dy + sy)
             self.snap_lines_x, self.snap_lines_y = lx, ly
-            ed.preview(self._translated(dx, dy))
+            if self._reorder_id:
+                self.snap_lines_x, self.snap_lines_y = [], []
+                ed.preview(self._translated(dx, dy), keep=set(self._originals))
+            else:
+                ed.preview(self._translated(dx, dy))
             return
         if self._mode == "resize" and self._orig_bbox:
             ed.preview(Editor.scale_changes(self._originals, self._orig_bbox, self._resized_bbox(p, event)))
@@ -557,9 +580,15 @@ class CanvasView(QGraphicsView):
         p = self._scene_pos(event)
         if mode == "pan":
             self.viewport().setCursor(self._tool_cursor())
+        elif mode == "move" and self._reorder_id:
+            moved = math.hypot(p.x() - self._start.x(), p.y() - self._start.y()) * self.zoom() >= 3
+            if moved:
+                ed.drop_in_auto_layout(self._reorder_id, (p.x(), p.y()))
+            else:
+                ed.commit_geometry(self._originals, {}, "Переместить")  # просто клик — вернуть как было
         elif mode == "move":
-            dx = ed.screen() and tree.node_map(ed.screen())
-            changes = {nid: {"x": dx[nid].x, "y": dx[nid].y} for nid in self._originals}
+            m = tree.node_map(ed.screen())
+            changes = {nid: {"x": m[nid].x, "y": m[nid].y} for nid in self._originals}
             ed.commit_geometry(self._originals, changes, "Переместить")
         elif mode == "resize":
             m = tree.node_map(ed.screen())
@@ -573,7 +602,7 @@ class CanvasView(QGraphicsView):
             ed.select(ids)
         elif mode == "create" and self.create_rect is not None:
             r = self.create_rect
-            kind = {TOOL_RECT: "rect", TOOL_ELLIPSE: "ellipse", TOOL_TEXT: "text"}[ed.tool]
+            kind = {TOOL_RECT: "rect", TOOL_ELLIPSE: "ellipse", TOOL_TEXT: "text", TOOL_FRAME: "frame"}[ed.tool]
             if r.width() < 3 and r.height() < 3:
                 w, h = (200, 40) if kind == "text" else (100, 100)
                 rect = (r.x(), r.y(), w, h)
@@ -603,7 +632,7 @@ class CanvasView(QGraphicsView):
         if not hit:
             return
         node = tree.node_map(ed.screen())[hit]
-        if node.is_group:
+        if node.is_container:
             ed.select([], entered_group=node.id)
             inner = ed.hit(p.x(), p.y())
             ed.select([inner] if inner else [])
@@ -646,7 +675,7 @@ class CanvasView(QGraphicsView):
             ed.view_changed.emit()
             return
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and len(ed.selected_nodes()) == 1 \
-                and ed.selected_nodes()[0].is_group:
+                and ed.selected_nodes()[0].is_container:
             g = ed.selected_nodes()[0]
             ed.select([c.id for c in g.children[-1:]], entered_group=g.id)
             return

@@ -69,6 +69,40 @@ def _demo_screen(ed) -> None:
     ed.select(ids[:2])
 
 
+def tree_find(ed, node_id):
+    from app.core.document import tree
+    return tree.find(ed.screen(), node_id)[0]
+
+
+def _demo_components(ed) -> str:
+    """Экран из базовых компонентов: верхняя панель, поле, карточка с длинным текстом, кнопки, навигация."""
+    s = ed.screen()
+    k = s.width / 411
+    ed.insert_component("m3_top_app_bar")
+    title = next(n for n in tree_find(ed, ed.selection[0]).children if n.type == "text")
+    ed.set_props({title.id: {"text": "Профиль"}})
+    ed.insert_component("m3_text_field")
+    ed.set_props({ed.selection[0]: {"x": round(16 * k), "y": round(96 * k), "w": s.width - round(32 * k),
+                                    "constraint_h": "left_right"}})
+    card = ed.insert_component("m3_card")
+    ed.set_props({card.id: {"x": round(16 * k), "y": round(200 * k), "w": s.width - round(32 * k),
+                            "constraint_h": "left_right"}})
+    desc = tree_find(ed, card.id).children[1]
+    ed.set_props({desc.id: {"text": "Карточка растёт по высоте вместе с текстом. Длинный русский текст переносится "
+                                    "по словам и не обрезается: высота карточки задана «по содержимому», а ширина "
+                                    "привязана к краям экрана, поэтому на планшете строк становится меньше."}})
+    row = ed.insert_component("m3_button_outlined")
+    ok = ed.insert_component("m3_button_filled")
+    ed.select([row.id, ok.id])
+    ed.wrap_in_auto_layout("horizontal")
+    frame = ed.selection[0]
+    ed.set_props({frame: {"x": round(16 * k), "y": round(470 * k), "w": s.width - round(32 * k),
+                          "sizing_h": "fixed", "main_align": "end", "gap": round(8 * k),
+                          "constraint_h": "left_right"}})
+    ed.insert_component("m3_nav_bar")
+    return card.id
+
+
 def _demo_window(ed) -> None:
     side = ed.add_node("rect", (0, 0, 240, 800))
     ed.set_props({side.id: {"name": "Боковая панель", "fill": "#0F0F0F", "radius": 0}})
@@ -152,6 +186,39 @@ def main(out_dir: str) -> int:
         ed.select([ed.screen().nodes[1].id])
         app.processEvents()
         win.grab().save(str(out / "stage2_04_zoom_grid_handles.png"))
+
+        # ---- этап 3: Auto Layout и базовые компоненты
+        from app.core.document.model import Screen
+        from app.ui.workspace.layout_tools import ResponsiveDialog
+        ed.add_screen(Screen(name="Настройки профиля", platform="android", width=1080, height=2400,
+                             device_id="android_phone"))
+        card_id = _demo_components(ed)
+        ws.screens.rebuild()
+        ws.canvas.fit()
+        ed.select([card_id])
+        app.processEvents()
+        win.grab().save(str(out / "stage3_01_components_autolayout.png"))
+        ed.select_any([tree_find(ed, card_id).children[1].id])
+        ws.dock_diag.raise_()
+        app.processEvents()
+        win.grab().save(str(out / "stage3_02_child_sizing_diagnostics.png"))
+        dlg = ResponsiveDialog(ed, win)
+        dlg.show()
+        app.processEvents()
+        dlg.grab().save(str(out / "stage3_03_responsive_check.png"))
+        dlg.close()
+        ed.set_screen(ed.doc.screens[1].id)
+        ed.insert_component("win_nav_pane")
+        nav = ed.selection[0]
+        ed.insert_component("win_command_bar")
+        ed.set_props({ed.selection[0]: {"x": 300, "y": 230}})
+        ed.insert_component("win_card")
+        ed.set_props({ed.selection[0]: {"x": 300, "y": 300, "w": 600}})
+        ed.select([nav])
+        ws.screens.rebuild()
+        ws.canvas.fit()
+        app.processEvents()
+        win.grab().save(str(out / "stage3_04_windows_components.png"))
         win.save_project()
         win.show_page(PAGE_SETTINGS)
         app.processEvents()

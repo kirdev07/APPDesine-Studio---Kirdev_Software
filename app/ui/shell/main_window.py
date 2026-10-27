@@ -31,7 +31,7 @@ NAV_FUTURE = [
     ("Ресурсы", "resources", 4), ("Проверка", "validate", 7), ("Экспорт", "export", 7), ("ИИ-задание", "ai", 7),
 ]
 MENU_FUTURE = {
-    "Инструменты": [("Auto Layout", 3), ("Конструктор компонентов", 4), ("SVG-редактор", 4), ("Типографика", 4),
+    "Инструменты": [("Конструктор компонентов", 4), ("SVG-редактор", 4), ("Типографика", 4),
                     ("Анимации", 5), ("Визуальная логика", 5)],
     "Экспорт": [("Проверка проекта", 7), ("AI-экспорт для Claude Code", 7)],
     "Устройства": [("Интерактивный предпросмотр", 6)],
@@ -140,10 +140,14 @@ class MainWindow(QMainWindow):
             for a in actions:
                 menu.addSeparator() if a is None else menu.addAction(a)
         self.menu_view.addSeparator()
-        for dock in (ws.dock_layers, ws.dock_inspector, ws.dock_screens):
+        for dock in (ws.dock_layers, ws.dock_inspector, ws.dock_screens, ws.dock_diag):
             self.menu_view.addAction(dock.toggleViewAction())
         for title, items in MENU_FUTURE.items():
             sub = mb.addMenu(title)
+            if title == "Инструменты":
+                for a in ws.tools_actions:
+                    sub.addSeparator() if a is None else sub.addAction(a)
+                sub.addSeparator()
             for text, stage in items:
                 a = sub.addAction(f"{text}  —  этап {stage}")
                 a.setEnabled(False)

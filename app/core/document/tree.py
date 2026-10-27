@@ -1,4 +1,8 @@
-"""Обход дерева узлов экрана. Координаты листьев абсолютные; границы группы вычисляются по детям."""
+"""Обход дерева узлов экрана.
+
+Координаты всех узлов абсолютные (в системе экрана). Группа не имеет собственной геометрии — её границы
+вычисляются по детям. Фрейм — контейнер с собственным прямоугольником.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ def walk(nodes: list[Node], parent: Node | None = None, depth: int = 0) -> Itera
     """Обход в порядке отрисовки (снизу вверх)."""
     for n in nodes:
         yield n, parent, depth
-        if n.is_group:
+        if n.is_container:
             yield from walk(n.children, n, depth + 1)
 
 
@@ -37,13 +41,13 @@ def container(screen: Screen, parent_id: str | None) -> list[Node]:
     if parent_id is None:
         return screen.nodes
     node = find(screen, parent_id)[0]
-    if not node.is_group:
-        raise ModelError("Родитель должен быть группой")
+    if not node.is_container:
+        raise ModelError("Родитель должен быть группой или фреймом")
     return node.children
 
 
 def ancestors(screen: Screen, node_id: str) -> list[Node]:
-    """Группы-предки от корня к непосредственному родителю."""
+    """Контейнеры-предки от корня к непосредственному родителю."""
     pm = parent_map(screen)
     chain = []
     p = pm.get(node_id)
@@ -53,12 +57,20 @@ def ancestors(screen: Screen, node_id: str) -> list[Node]:
     return list(reversed(chain))
 
 
-def leaves(node: Node) -> Iterator[Node]:
+def geo_nodes(node: Node) -> Iterator[Node]:
+    """Узлы с собственной геометрией, представляющие node: сквозь группы, но не внутрь фреймов."""
     if node.is_group:
         for c in node.children:
-            yield from leaves(c)
+            yield from geo_nodes(c)
     else:
         yield node
+
+
+def descendants(node: Node) -> Iterator[Node]:
+    """Все узлы поддерева с геометрией (включая сам node, если он не группа)."""
+    for n, _, _ in walk([node]):
+        if not n.is_group:
+            yield n
 
 
 def union(rects: list[Rect]) -> Rect | None:
@@ -72,7 +84,7 @@ def union(rects: list[Rect]) -> Rect | None:
 
 
 def bounds(node: Node) -> Rect | None:
-    return union([(n.x, n.y, n.w, n.h) for n in leaves(node)])
+    return union([(n.x, n.y, n.w, n.h) for n in geo_nodes(node)])
 
 
 def bounds_of(nodes: list[Node]) -> Rect | None:
@@ -87,3 +99,12 @@ def top_ids(screen: Screen, ids) -> list[str]:
         if n.id in wanted and not any(a.id in wanted for a in ancestors(screen, n.id)):
             result.append(n.id)
     return result
+
+
+def geometry(screen: Screen) -> dict[str, Rect]:
+    """Снимок геометрии всех узлов экрана (кроме групп)."""
+    return {n.id: (n.x, n.y, n.w, n.h) for n, _, _ in walk(screen.nodes) if not n.is_group}
+
+
+# Совместимость: «листья» = узлы с геометрией, представляющие node.
+leaves = geo_nodes

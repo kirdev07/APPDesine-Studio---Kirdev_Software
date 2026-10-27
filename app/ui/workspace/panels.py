@@ -5,20 +5,38 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFormLayout, QHBoxLayout, QHeaderView,
-    QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
+    QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFormLayout, QGridLayout, QHBoxLayout,
+    QHeaderView,
+    QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
     QScrollArea, QSpinBox, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.core.document import tree
 from app.core.document.model import Screen
+from app.libraries import components
 from app.libraries.catalog import DEVICES
 from app.ui.widgets import glyph_icon, label, pixmap_icon, separator
 from app.ui.workspace.canvas import qcolor, render_thumbnail
 from app.ui.workspace.editor import TYPE_NAMES, Editor
 
 ROLE_ID = Qt.ItemDataRole.UserRole
-TYPE_GLYPH = {"rect": "▭", "ellipse": "◯", "text": "T", "group": "▣"}
+TYPE_GLYPH = {"rect": "▭", "ellipse": "◯", "text": "T", "group": "▣", "frame": "#"}
+SIZING = [("fixed", "Фиксированный"), ("fill", "Заполнить"), ("hug", "По содержимому")]
+LAYOUTS = [("none", "Нет (свободно)"), ("vertical", "Вертикально ↓"), ("horizontal", "Горизонтально →"),
+           ("grid", "Сетка ▦")]
+MAIN_ALIGN = [("start", "В начале"), ("center", "По центру"), ("end", "В конце"), ("space_between", "Равномерно")]
+CROSS_ALIGN = [("start", "В начале"), ("center", "По центру"), ("end", "В конце"), ("stretch", "Растянуть")]
+CONSTRAINT_H = [("left", "Слева"), ("right", "Справа"), ("left_right", "Слева и справа"), ("center", "По центру"),
+                ("scale", "Масштаб")]
+CONSTRAINT_V = [("top", "Сверху"), ("bottom", "Снизу"), ("top_bottom", "Сверху и снизу"), ("center", "По центру"),
+                ("scale", "Масштаб")]
+
+
+def _combo(options) -> QComboBox:
+    c = QComboBox()
+    for key, text in options:
+        c.addItem(text, key)
+    return c
 
 
 # ---------------- элементы и слои ----------------
@@ -30,15 +48,22 @@ class LayersPanel(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.addWidget(label("Элементы", "H2"))
-        row = QHBoxLayout()
-        for kind, key, short in (("rect", "R", "Прямоуг."), ("ellipse", "O", "Эллипс"), ("text", "T", "Текст")):
-            b = QPushButton(f"{TYPE_GLYPH[kind]} {short}")
-            b.setStyleSheet("padding:6px 6px")
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        for i, (kind, key, short) in enumerate((("frame", "F", "Фрейм"), ("rect", "R", "Прямоугольник"),
+                                                ("ellipse", "O", "Эллипс"), ("text", "T", "Текст"))):
+            b = QPushButton(f"{TYPE_GLYPH[kind]}  {short}")
+            b.setStyleSheet("padding:6px 4px")
             b.setToolTip(f"{TYPE_NAMES[kind]}: добавить в центр экрана (инструмент — клавиша {key})")
             b.clicked.connect(lambda _=False, k=kind: editor.add_node(k))
-            row.addWidget(b)
-        lay.addLayout(row)
-        lay.addWidget(label("Готовые компоненты — этапы 3–4.", "Muted"))
+            grid.addWidget(b, i // 2, i % 2)
+        lay.addLayout(grid)
+        lay.addWidget(label("Компоненты", "H2"))
+        self.components = QListWidget()
+        self.components.setFixedHeight(170)
+        self.components.itemClicked.connect(self._insert_component)
+        lay.addWidget(self.components)
+        lay.addWidget(label("Заготовки из фреймов с Auto Layout. Мастер-компоненты — этап 4.", "Muted", wrap=True))
         lay.addWidget(separator())
         head = QHBoxLayout()
         head.addWidget(label("Слои", "H2"))
@@ -77,6 +102,21 @@ class LayersPanel(QWidget):
         editor.document_changed.connect(self.rebuild)
         editor.screen_changed.connect(self.rebuild)
         editor.selection_changed.connect(self.sync_selection)
+        editor.screen_changed.connect(self.rebuild_components)
+
+    def rebuild_components(self) -> None:
+        self.components.clear()
+        s = self.editor.screen()
+        if s is None:
+            return
+        for spec in components.specs_for(s.platform):
+            it = QListWidgetItem(f"{spec.category} · {spec.name}")
+            it.setData(ROLE_ID, spec.kind)
+            it.setToolTip("Нажмите, чтобы добавить на экран")
+            self.components.addItem(it)
+
+    def _insert_component(self, item: QListWidgetItem) -> None:
+        self.editor.insert_component(item.data(ROLE_ID))
 
     def rebuild(self) -> None:
         self._syncing = True
@@ -96,7 +136,7 @@ class LayersPanel(QWidget):
                     if not n.visible:
                         it.setForeground(0, QColor("#5A5A5A"))
                     (parent.addChild(it) if parent else self.tree.addTopLevelItem(it))
-                    if n.is_group:
+                    if n.is_container:
                         add(n.children, it)
                         it.setExpanded(True)
             add(s.nodes, None)
@@ -219,6 +259,8 @@ def _spin(lo=-100000.0, hi=100000.0, decimals=0, suffix="") -> QDoubleSpinBox:
     s.setKeyboardTracking(False)
     s.setSuffix(suffix)
     s.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+    s.setMinimumWidth(52)  # компактно: в строке инспектора помещаются 4 поля
+    s.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return s
 
 
@@ -235,6 +277,9 @@ class Inspector(QScrollArea):
         self._loading = False
         self._build_node()
         self._build_screen()
+        for combo in body.findChildren(QComboBox):  # длинные пункты не должны расширять панель
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
         self.lay.addStretch()
         editor.selection_changed.connect(self.refresh)
         editor.document_changed.connect(self.refresh)
@@ -303,6 +348,8 @@ class Inspector(QScrollArea):
             al.addWidget(b)
         f.addRow(al)
 
+        self._build_layout()
+
         self.sec_style, f = self._section("Заливка и обводка")
         self.fill = ColorField()
         self.fill.committed.connect(lambda v: self._commit_leaves("fill", v, "Заливка"))
@@ -355,6 +402,133 @@ class Inspector(QScrollArea):
         self.align.currentIndexChanged.connect(
             lambda: self._commit_leaves("align", self.align.currentData(), "Выравнивание текста", "text"))
         f.addRow("Выравнивание", self.align)
+
+    # --- раскладка
+    def _build_layout(self) -> None:
+        self.sec_al, f = self._section("Auto Layout")
+        self.al_mode = _combo(LAYOUTS)
+        self.al_mode.currentIndexChanged.connect(lambda: self._commit_frames("layout", self.al_mode.currentData(),
+                                                                             "Режим раскладки"))
+        f.addRow("Раскладка", self.al_mode)
+        self.al_gap, self.al_row_gap = _spin(0, 100000), _spin(0, 100000)
+        self.al_gap.valueChanged.connect(lambda v: self._commit_frames("gap", v, "Промежуток"))
+        self.al_row_gap.valueChanged.connect(lambda v: self._commit_frames("row_gap", v, "Промежуток строк"))
+        gaps = QHBoxLayout()
+        gaps.addWidget(self.al_gap)
+        self.al_row_gap_label = label("строки", "Muted")
+        gaps.addWidget(self.al_row_gap_label)
+        gaps.addWidget(self.al_row_gap)
+        f.addRow("Промежуток", gaps)
+        self.al_cols = QSpinBox()
+        self.al_cols.setRange(1, 64)
+        self.al_cols.setKeyboardTracking(False)
+        self.al_cols.valueChanged.connect(lambda v: self._commit_frames("grid_columns", v, "Колонки сетки"))
+        self.al_cols_label = label("Колонки")
+        f.addRow(self.al_cols_label, self.al_cols)
+        pads = QHBoxLayout()
+        self.al_pads = {}
+        for key, tip in (("pad_t", "Сверху"), ("pad_r", "Справа"), ("pad_b", "Снизу"), ("pad_l", "Слева")):
+            s = _spin(0, 100000)
+            s.setToolTip(f"Отступ: {tip.lower()}")
+            s.valueChanged.connect(lambda v, k=key: self._commit_frames(k, v, "Отступы"))
+            self.al_pads[key] = s
+            pads.addWidget(s)
+        f.addRow("Отступы ↑→↓←", pads)
+        self.al_main = _combo(MAIN_ALIGN)
+        self.al_main.currentIndexChanged.connect(
+            lambda: self._commit_frames("main_align", self.al_main.currentData(), "Распределение"))
+        f.addRow("По главной оси", self.al_main)
+        self.al_cross = _combo(CROSS_ALIGN)
+        self.al_cross.currentIndexChanged.connect(
+            lambda: self._commit_frames("cross_align", self.al_cross.currentData(), "Выравнивание"))
+        f.addRow("По поперечной", self.al_cross)
+        self.al_clip = QCheckBox("Обрезать содержимое по фрейму")
+        self.al_clip.clicked.connect(lambda v: self._commit_frames("clip", v, "Обрезка"))
+        f.addRow(self.al_clip)
+
+        self.sec_size, f = self._section("Размер в раскладке")
+        self.sz_h, self.sz_v = _combo(SIZING), _combo(SIZING)
+        self.sz_h.currentIndexChanged.connect(lambda: self._commit_geo_nodes("sizing_h", self.sz_h.currentData(),
+                                                                            "Ширина: режим"))
+        self.sz_v.currentIndexChanged.connect(lambda: self._commit_geo_nodes("sizing_v", self.sz_v.currentData(),
+                                                                            "Высота: режим"))
+        f.addRow("Ширина", self.sz_h)
+        f.addRow("Высота", self.sz_v)
+        self.sz_limits = {}
+        for row_label, keys in (("Ширина мин/макс", ("min_w", "max_w")), ("Высота мин/макс", ("min_h", "max_h"))):
+            row = QHBoxLayout()
+            for k in keys:
+                s = _spin(0, 100000)
+                s.setSpecialValueText("—")
+                s.setToolTip("0 — без ограничения")
+                s.valueChanged.connect(lambda v, key=k: self._commit_geo_nodes(key, v, "Ограничение размера"))
+                self.sz_limits[k] = s
+                row.addWidget(s)
+            f.addRow(row_label, row)
+
+        self.sec_cons, f = self._section("Привязки")
+        self.cons_h, self.cons_v = _combo(CONSTRAINT_H), _combo(CONSTRAINT_V)
+        self.cons_h.currentIndexChanged.connect(
+            lambda: self._commit_geo_nodes("constraint_h", self.cons_h.currentData(), "Привязка"))
+        self.cons_v.currentIndexChanged.connect(
+            lambda: self._commit_geo_nodes("constraint_v", self.cons_v.currentData(), "Привязка"))
+        f.addRow("По горизонтали", self.cons_h)
+        f.addRow("По вертикали", self.cons_v)
+        f.addRow(label("Как элемент ведёт себя при изменении размера экрана или фрейма.", "Muted", wrap=True))
+
+    def _refresh_layout(self, nodes) -> None:
+        ed = self.editor
+        geo = [n for n in ed.selected_leaves()]
+        frames = [n for n in geo if n.is_frame]
+        self.sec_al.setVisible(bool(frames))
+        if frames:
+            f0 = frames[0]
+            self.al_mode.setCurrentIndex(self.al_mode.findData(f0.layout))
+            auto = f0.layout != "none"
+            grid = f0.layout == "grid"
+            for w in (self.al_gap, self.al_main, self.al_cross, *self.al_pads.values()):
+                w.setEnabled(auto)
+            self.al_row_gap.setVisible(grid)
+            self.al_row_gap_label.setVisible(grid)
+            self.al_cols.setVisible(grid)
+            self.al_cols_label.setVisible(grid)
+            self.al_main.setEnabled(auto and not grid)
+            self.al_gap.setValue(f0.gap)
+            self.al_row_gap.setValue(f0.row_gap)
+            self.al_cols.setValue(f0.grid_columns)
+            for k, s in self.al_pads.items():
+                s.setValue(getattr(f0, k))
+            self.al_main.setCurrentIndex(self.al_main.findData(f0.main_align))
+            self.al_cross.setCurrentIndex(self.al_cross.findData(f0.cross_align))
+            self.al_clip.setChecked(f0.clip)
+        self.sec_size.setVisible(bool(geo))
+        self.sec_cons.setVisible(False)
+        if geo:
+            g0 = geo[0]
+            self.sz_h.setCurrentIndex(self.sz_h.findData(g0.sizing_h))
+            self.sz_v.setCurrentIndex(self.sz_v.findData(g0.sizing_v))
+            for k, s in self.sz_limits.items():
+                s.setValue(getattr(g0, k))
+            parents_auto = [ed.auto_layout_parent(n.id) is not None for n in geo]
+            self.sec_cons.setVisible(not any(parents_auto))
+            self.cons_h.setCurrentIndex(self.cons_h.findData(g0.constraint_h))
+            self.cons_v.setCurrentIndex(self.cons_v.findData(g0.constraint_v))
+
+    def _commit_frames(self, prop: str, value, label_: str) -> None:
+        if self._loading:
+            return
+        frames = [n for n in self.editor.selected_leaves() if n.is_frame]
+        changes = {n.id: {prop: value} for n in frames if getattr(n, prop) != value}
+        if changes and not self.editor.set_props(changes, label_):
+            self.refresh()
+
+    def _commit_geo_nodes(self, prop: str, value, label_: str) -> None:
+        if self._loading:
+            return
+        nodes = self.editor.selected_leaves()
+        changes = {n.id: {prop: value} for n in nodes if getattr(n, prop) != value}
+        if changes and not self.editor.set_props(changes, label_):
+            self.refresh()
 
     # --- экран и проект
     def _build_screen(self) -> None:
@@ -419,9 +593,9 @@ class Inspector(QScrollArea):
             nodes = ed.selected_nodes()
             leaves = ed.selected_leaves()
             has = bool(nodes)
-            for w in (self.sec_layer, self.sec_geom):
+            for w in (self.sec_layer, self.sec_geom, self.sec_al, self.sec_size, self.sec_cons):
                 w.setVisible(has)
-            self.sec_style.setVisible(any(n.type != "text" or True for n in leaves) and has)
+            self.sec_style.setVisible(has)
             texts = [n for n in leaves if n.type == "text"]
             self.sec_text.setVisible(bool(texts))
             for w in (self.sec_screen, self.sec_guides, self.sec_project):
@@ -435,6 +609,7 @@ class Inspector(QScrollArea):
                 self.visible.setChecked(all(n.visible for n in nodes))
                 self.locked.setChecked(all(n.locked for n in nodes))
                 self._refresh_geometry()
+                self._refresh_layout(nodes)
                 if leaves:
                     l0 = leaves[0]
                     self.fill.set_value(l0.fill)
