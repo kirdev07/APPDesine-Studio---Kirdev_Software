@@ -148,4 +148,4 @@ def test_future_sections_are_disabled_and_labelled(win):
     from PySide6.QtWidgets import QToolButton
     future = [b for b in win.findChildren(QToolButton) if b.objectName() == "NavButton" and not b.isEnabled()
               and "этапе" in b.toolTip()]
-    assert len(future) == 6  # после этапа 4 остаются разделы этапов 5–7
+    assert len(future) == 4  # после этапа 5 остаются разделы этапов 6–7

@@ -17,6 +17,24 @@ def _clear_clipboard_at_exit():
         app.processEvents()
 
 
+@pytest.fixture(autouse=True)
+def _delete_leftover_windows():
+    # qtbot закрывает окна, но не удаляет их: без этого окна всех тестов копятся вместе с таймерами,
+    # и общий прогон с каждым тестом становится медленнее (вплоть до «зависания»).
+    yield
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in app.topLevelWidgets():  # без close(): он мог бы показать модальный вопрос о сохранении
+        w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+    import gc
+    gc.collect()
+
+
 @pytest.fixture
 def paths(tmp_path):
     return AppPaths(tmp_path / "Данные программы").ensure()

@@ -143,6 +143,13 @@ def load_project(path: str | os.PathLike, limits: Limits = DEFAULT_LIMITS) -> Pr
                     raise ProjectFormatError("Файл стилей повреждён")
                 raw["text_styles"] = styles.get("text_styles", [])
                 raw["colors"] = styles.get("colors", [])
+            if version >= 5:
+                raw["animations"] = _read_json(zf, "animations/animations.json", limits)
+                logic = _read_json(zf, "interactions/logic.json", limits)
+                if not isinstance(logic, dict):
+                    raise ProjectFormatError("Файл логики повреждён")
+                raw["variables"] = logic.get("variables", [])
+                raw["interactions"] = logic.get("interactions", [])
             raw = migrate(raw, version)
             asset_bytes = _read_assets(zf, raw.get("assets", []), limits)
     except zipfile.BadZipFile:
@@ -152,7 +159,8 @@ def load_project(path: str | os.PathLike, limits: Limits = DEFAULT_LIMITS) -> Pr
     except ValueError as exc:
         raise ProjectFormatError(f"Не удалось обновить схему проекта: {exc}") from None
     try:
-        for key in ("components", "assets", "text_styles", "colors"):
+        from app.core.document.behavior import Animation, Interaction, Variable
+        for key in ("components", "assets", "text_styles", "colors", "animations", "variables", "interactions"):
             if not isinstance(raw.get(key, []), list):
                 raise ModelError(f"«{key}» должно быть списком")
         doc = ProjectDocument(
@@ -162,6 +170,9 @@ def load_project(path: str | os.PathLike, limits: Limits = DEFAULT_LIMITS) -> Pr
             assets=[Asset.from_dict(a) for a in raw.get("assets", [])],
             text_styles=[TextStyle.from_dict(t) for t in raw.get("text_styles", [])],
             colors=[ColorToken.from_dict(c) for c in raw.get("colors", [])],
+            animations=[Animation.from_dict(a) for a in raw.get("animations", [])],
+            variables=[Variable.from_dict(v) for v in raw.get("variables", [])],
+            interactions=[Interaction.from_dict(i) for i in raw.get("interactions", [])],
         )
         doc.validate()
     except ModelError as exc:
@@ -218,6 +229,9 @@ def write_archive(doc: ProjectDocument, target: Path) -> None:
         zf.writestr("styles/styles.json", _dump({"text_styles": [t.to_dict() for t in doc.text_styles],
                                                  "colors": [c.to_dict() for c in doc.colors]}))
         zf.writestr("assets/assets.json", _dump([a.to_dict() for a in doc.assets]))
+        zf.writestr("animations/animations.json", _dump([a.to_dict() for a in doc.animations]))
+        zf.writestr("interactions/logic.json", _dump({"variables": [v.to_dict() for v in doc.variables],
+                                                      "interactions": [i.to_dict() for i in doc.interactions]}))
         written = set()
         for a in doc.assets:
             data = doc.asset_data.get(a.id)

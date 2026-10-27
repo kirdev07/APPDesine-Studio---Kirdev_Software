@@ -141,6 +141,77 @@ def _stage4(win, ed, app, out):
     win.show_page(PAGE_PROJECT)
 
 
+def _stage5(win, ed, app, out):
+    from app.core.document.behavior import Animation, Interaction, Keyframe, Track, Variable, check_action
+    from app.ui.shell.main_window import PAGE_ANIMATIONS, PAGE_LOGIC, PAGE_PROJECT
+    chats, profile = ed.doc.screens[0], ed.doc.screens[2]
+    row = next(n for n in chats.nodes if n.name == "Строка чата 1")
+    card = next(n for n in profile.nodes if n.name == "Карточка")
+    bar = next(n for n in profile.nodes if n.name == "Верхняя панель")
+    title = next(n for n in chats.nodes if n.name == "Заголовок")
+    v = Variable("Открытий", "number", 0)
+    fade = Animation(name="Появление карточки", screen_id=profile.id, duration=600, tracks=[
+        Track(card.id, "opacity", [Keyframe(0, 0.0, "ease_out"), Keyframe(600, 1.0)]),
+        Track(card.id, "y", [Keyframe(0, card.y + 120, "ease_out"), Keyframe(600, card.y)])])
+    its = [
+        Interaction(chats.id, "tap", row.id, actions=[check_action(a) for a in (
+            {"type": "set_variable", "var_id": v.id, "mode": "increment", "value": 1},
+            {"type": "navigate", "screen_id": profile.id, "transition": "slide_left", "duration": 300,
+             "easing": "ease_out"})]),
+        Interaction(chats.id, "screen_open", "", actions=[check_action(
+            {"type": "set_text", "node_id": title.id, "text": "KiroX · {Открытий}"})]),
+        Interaction(profile.id, "screen_open", "", actions=[check_action(
+            {"type": "play_animation", "animation_id": fade.id})]),
+        Interaction(profile.id, "tap", bar.id, actions=[check_action(
+            {"type": "back", "transition": "slide_right", "duration": 250, "easing": "ease_out"})]),
+    ]
+
+    def mutate(doc):
+        doc.variables.append(Variable.from_dict(v.to_dict()))
+        doc.animations.append(Animation.from_dict(fade.to_dict()))
+        doc.interactions.extend(its)
+    ed.patch("Демо: логика и анимация", mutate)
+    ed.set_screen(profile.id)
+    win.show_page(PAGE_ANIMATIONS)
+    page = win.animations
+    page.refresh()
+    page.list.setCurrentRow(0)
+    page._select_key(0, 0)
+    page.timeline.playhead = 240
+    page.preview()
+    app.processEvents()
+    win.grab().save(str(out / "stage5_01_animation_studio.png"))
+    ed.set_screen(chats.id)
+    win.show_page(PAGE_LOGIC)
+    win.logic.refresh()
+    win.logic.list.setCurrentRow(0)
+    app.processEvents()
+    win.grab().save(str(out / "stage5_02_logic_flow_map.png"))
+    win.show_page(PAGE_PROJECT)
+    win.run_prototype()
+    proto = win.prototype
+    p = proto.player
+    p._timer.stop()
+    proto.resize(1300, 860)
+    app.processEvents()
+    p.fit()
+    p.dispatch("tap", row.id)
+    p.advance(150)
+    app.processEvents()
+    proto.grab().save(str(out / "stage5_03_prototype_transition.png"))
+    p.advance(1000)
+    p.dispatch("tap", bar.id)
+    p.advance(1000)
+    p.dispatch("tap", row.id)
+    p.advance(1000)
+    proto.remember()
+    proto.replay()
+    proto.refresh()
+    app.processEvents()
+    proto.grab().save(str(out / "stage5_04_prototype_replay.png"))
+    proto.close()
+
+
 def tree_find(ed, node_id):
     from app.core.document import tree
     return tree.find(ed.screen(), node_id)[0]
@@ -294,6 +365,7 @@ def main(out_dir: str) -> int:
 
         # ---- этап 4: компоненты, SVG, типографика
         _stage4(win, ed, app, out)
+        _stage5(win, ed, app, out)
         win.save_project()
         win.show_page(PAGE_SETTINGS)
         app.processEvents()

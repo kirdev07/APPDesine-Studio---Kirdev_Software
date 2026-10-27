@@ -112,8 +112,11 @@ class Editor(QObject):
             self.diagnostics = []
             return
         _, layout_diags = self.engine.layout_screen(s)  # проверочный прогон: документ не меняется
+        from app.engines.animation.engine import validate as validate_animations
+        from app.engines.logic.engine import validate as validate_logic
         self.diagnostics = layout_diags + resource_diagnostics(self.doc, s, REGISTRY.available,
                                                                REGISTRY.missing_chars)
+        self.diagnostics += validate_animations(self.doc) + validate_logic(self.doc)
 
     def undo(self) -> None:
         if self.stack is not None:

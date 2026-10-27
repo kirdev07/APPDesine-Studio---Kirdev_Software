@@ -3,7 +3,8 @@
 Локальная студия дизайна интерфейсов Android (Jetpack Compose / Material 3) и Windows (Python / PySide6).
 Спецификация — файлы `00_START_HERE.md` … `08_OPEN_DECISIONS.md` и `assets/mockups/`.
 
-**Состояние:** этапы 1–4 из 8 (Foundation & Project Hub, Fusion Workspace, Auto Layout, компоненты/SVG/типографика).
+**Состояние:** этапы 1–5 из 8 (Foundation & Project Hub, Fusion Workspace, Auto Layout, компоненты/SVG/типографика,
+анимации и визуальная логика).
 
 ## Запуск (Windows 10/11, Python 3.12)
 
@@ -35,11 +36,13 @@ app/core/persistence  контейнер .adsproj, миграции, восст�
 app/engines/layout    движок раскладки: Auto Layout, привязки, диагностика (без Qt)
 app/engines/components мастер-компоненты, экземпляры, состояния, личная библиотека (без Qt)
 app/engines/assets    SVG: санитизация, импорт в векторы, экспорт (без Qt)
+app/engines/animation ключевые кадры, плавности, выборка по времени (без Qt)
+app/engines/logic     интерпретатор взаимодействий без eval, повтор сценариев (без Qt)
 app/core/project      индекс SQLite и операции над проектами
 app/libraries         профили устройств, шаблоны проектов, базовые компоненты Android/Windows
 app/ui                тема Fusion AMOLED, оболочка, Project Hub, мастер, настройки
 app/ui/workspace      холст, слои, инспектор, полоса экранов
-app/ui/studio         Component Builder, SVG-редактор, типографика, цвета, ресурсы
+app/ui/studio         Component Builder, SVG-редактор, типографика, цвета, ресурсы, анимации, логика, прототип
 tests/                pytest + pytest-qt
 ```
 

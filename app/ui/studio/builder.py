@@ -281,17 +281,102 @@ class ComponentBuilderPage(QWidget):
         dl.addWidget(ai)
         self.tabs.addTab(design, "Дизайн")
         self.tabs.addTab(self._build_states(), "Состояния")
-        for title, stage, text in (("Анимация", 5, "Анимации состояний и переходы — Animation Studio, этап 5."),
-                                   ("Действия", 5, "Действия по событиям (нажатие, переключение…) — "
-                                                   "Visual Logic, этап 5.")):
-            t = QWidget()
-            tl = QVBoxLayout(t)
-            tl.addWidget(stage_badge(stage))
-            tl.addWidget(label(text, "Muted", wrap=True))
-            tl.addStretch()
-            self.tabs.addTab(t, title)
+        self.tabs.addTab(self._build_anim_tab(), "Анимация")
+        self.tabs.addTab(self._build_actions_tab(), "Действия")
         self.tabs.setMinimumWidth(340)
         return self.tabs
+
+    def _build_anim_tab(self) -> QWidget:
+        from PySide6.QtWidgets import QSpinBox
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.addWidget(label("Переход между состояниями", "H2"))
+        v.addWidget(label("Как экземпляр в прототипе меняет внешний вид при смене состояния: числовые свойства "
+                          "и цвета плавно переходят от старых значений к новым.", "Muted", wrap=True))
+        form = QFormLayout()
+        self.tr_duration = QSpinBox()
+        self.tr_duration.setRange(0, 5000)
+        self.tr_duration.setSuffix(" мс")
+        self.tr_duration.setValue(150)
+        self.tr_easing = QComboBox()
+        for key, text in (("linear", "Линейная"), ("ease_in", "Разгон"), ("ease_out", "Торможение"),
+                          ("ease_in_out", "Разгон и торможение"), ("step", "Скачок")):
+            self.tr_easing.addItem(text, key)
+        self.tr_easing.setCurrentIndex(3)
+        self.tr_duration.valueChanged.connect(self._mark_meta_dirty)
+        self.tr_easing.currentIndexChanged.connect(self._mark_meta_dirty)
+        form.addRow("Длительность", self.tr_duration)
+        form.addRow("Плавность", self.tr_easing)
+        v.addLayout(form)
+        v.addWidget(label("0 мс — смена без анимации. Анимации экранов (ключевые кадры) — раздел «Анимации».",
+                          "Muted", wrap=True))
+        v.addStretch()
+        return w
+
+    def _build_actions_tab(self) -> QWidget:
+        from PySide6.QtWidgets import QCheckBox
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.addWidget(label("Встроенное поведение в прототипе", "H2"))
+        v.addWidget(label("Работает у каждого экземпляра без отдельной настройки логики. Если взаимодействие "
+                          "в «Логике» само задаёт состояние этого экземпляра, встроенное поведение не срабатывает.",
+                          "Muted", wrap=True))
+        self.bh_hover = QCheckBox("Наведение мышью → состояние «hover»")
+        self.bh_press = QCheckBox("Пока нажато → состояние «pressed»")
+        self.bh_toggle = QCheckBox("Нажатие переключает между двумя состояниями")
+        for cb in (self.bh_hover, self.bh_press, self.bh_toggle):
+            cb.toggled.connect(self._mark_meta_dirty)
+            v.addWidget(cb)
+        row = QHBoxLayout()
+        self.bh_a, self.bh_b = QComboBox(), QComboBox()
+        for c in (self.bh_a, self.bh_b):
+            c.setEditable(False)
+            c.currentIndexChanged.connect(self._mark_meta_dirty)
+            row.addWidget(c)
+        v.addLayout(row)
+        self.bh_note = label("", "Muted", wrap=True)
+        v.addWidget(self.bh_note)
+        v.addStretch()
+        return w
+
+    def _fill_behavior(self, defn) -> None:
+        widgets = (self.tr_duration, self.tr_easing, self.bh_hover, self.bh_press, self.bh_toggle, self.bh_a,
+                   self.bh_b)
+        for wdg in widgets:
+            wdg.blockSignals(True)
+        self.tr_duration.setValue(defn.transition.get("duration", 150))
+        self.tr_easing.setCurrentIndex(max(0, self.tr_easing.findData(defn.transition.get("easing", "ease_in_out"))))
+        b = defn.behavior
+        self.bh_hover.setChecked(b.get("hover", False))
+        self.bh_press.setChecked(b.get("press", False))
+        self.bh_toggle.setChecked(len(b.get("toggle", [])) == 2)
+        self._fill_state_combos(b.get("toggle", []))
+        for wdg in widgets:
+            wdg.blockSignals(False)
+
+    def _fill_state_combos(self, toggle: list) -> None:
+        names = ["default"] + list(self.states)
+        for c, cur in ((self.bh_a, toggle[0] if toggle else "default"),
+                       (self.bh_b, toggle[1] if len(toggle) == 2 else (names[1] if len(names) > 1 else "default"))):
+            c.blockSignals(True)
+            c.clear()
+            for n in names:
+                c.addItem(STATE_RU.get(n, n), n)
+            c.setCurrentIndex(max(0, c.findData(cur)))
+            c.blockSignals(False)
+        missing = [s for s, cb in (("hover", self.bh_hover), ("pressed", self.bh_press)) if cb.isChecked()
+                   and s not in self.states]
+        self.bh_note.setText(("Нет состояний: " + ", ".join(missing) + " — добавьте их на вкладке «Состояния».")
+                             if missing else "")
+
+    def _behavior(self) -> tuple[dict, dict]:
+        toggle = []
+        if self.bh_toggle.isChecked() and self.bh_a.currentData() != self.bh_b.currentData():
+            toggle = [self.bh_a.currentData(), self.bh_b.currentData()]
+        return ({"duration": self.tr_duration.value(), "easing": self.tr_easing.currentData()},
+                {"hover": self.bh_hover.isChecked(), "press": self.bh_press.isChecked(), "toggle": toggle})
 
     def _build_states(self) -> QWidget:
         w = QWidget()
@@ -390,6 +475,7 @@ class ComponentBuilderPage(QWidget):
         self.f_desc.blockSignals(True)
         self.f_desc.setPlainText(defn.description)
         self.f_desc.blockSignals(False)
+        self._fill_behavior(defn)
         self.tabs.setEnabled(True)
         names = [doc.component(c).name if doc.component(c) else "?" for c in self.breadcrumb]
         self.crumbs.setText("  ›  ".join(names) + ("   (двойной клик по вложенному компоненту — изолировать)"
@@ -414,7 +500,8 @@ class ComponentBuilderPage(QWidget):
             return None
         old = self.main.doc.component(self.current_id)
         root = Node.from_dict(s.nodes[0].to_dict())
-        return ComponentDef(name=self.f_name.text().strip() or (old.name if old else "Компонент"), root=root,
+        transition, behavior = self._behavior()
+        return ComponentDef(transition=transition, behavior=behavior, name=self.f_name.text().strip() or (old.name if old else "Компонент"), root=root,
                             category=self.f_category.text().strip() or "Мои компоненты",
                             platform=old.platform if old else "", description=self.f_desc.toPlainText(),
                             states=json.loads(json.dumps(self.states)), version=old.version if old else 1,
@@ -538,6 +625,7 @@ class ComponentBuilderPage(QWidget):
     def _changed_states(self, keep: str | None = None) -> None:
         self._states_dirty = True
         self.refresh_states()
+        self._fill_state_combos(self._behavior()[1]["toggle"])
         if keep:
             for i in range(self.state_list.count()):
                 if self.state_list.item(i).data(ROLE) == keep:

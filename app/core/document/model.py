@@ -9,8 +9,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 # 1 — этап 1 (экраны без содержимого); 2 — узлы и направляющие; 3 — фреймы, Auto Layout и привязки;
-# 4 — векторы, изображения, компоненты и экземпляры, ресурсы, стили текста и цвета.
-SCHEMA_VERSION = 4
+# 4 — векторы, изображения, компоненты и экземпляры, ресурсы, стили текста и цвета;
+# 5 — анимации, переменные, взаимодействия, переходы и поведение состояний компонентов.
+SCHEMA_VERSION = 5
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -572,12 +573,16 @@ class ComponentDef:
     description: str = ""
     states: dict = field(default_factory=dict)  # {состояние: {ref: {свойство: значение}}}
     version: int = 1
+    transition: dict = field(default_factory=lambda: {"duration": 150, "easing": "ease_in_out"})
+    behavior: dict = field(default_factory=lambda: {"hover": False, "press": False, "toggle": []})
     id: str = field(default_factory=new_id)
 
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "category": self.category, "platform": self.platform,
                 "description": self.description, "version": self.version,
                 "states": {k: {r: dict(p) for r, p in v.items()} for k, v in self.states.items()},
+                "transition": dict(self.transition),
+                "behavior": {**self.behavior, "toggle": list(self.behavior.get("toggle", []))},
                 "root": self.root.to_dict()}
 
     @classmethod
@@ -606,8 +611,11 @@ class ComponentDef:
         name = _str(d, "name", limit=200).strip()
         if not name:
             raise ModelError("Пустое имя компонента")
+        from app.core.document.behavior import check_behavior, check_transition
         return cls(name=name, root=root, category=_str(d, "category", "Мои компоненты", 200), platform=platform,
-                   description=_str(d, "description", limit=5000), states=clean, version=version, id=cid)
+                   description=_str(d, "description", limit=5000), states=clean, version=version,
+                   transition=check_transition(d.get("transition", {})),
+                   behavior=check_behavior(d.get("behavior", {})), id=cid)
 
 
 @dataclass
@@ -618,6 +626,9 @@ class ProjectDocument:
     assets: list[Asset] = field(default_factory=list)
     text_styles: list[TextStyle] = field(default_factory=list)
     colors: list[ColorToken] = field(default_factory=list)
+    animations: list = field(default_factory=list)    # behavior.Animation
+    variables: list = field(default_factory=list)     # behavior.Variable
+    interactions: list = field(default_factory=list)  # behavior.Interaction
     # содержимое файлов ресурсов в памяти: {asset_id: bytes}. Не сериализуется в JSON.
     asset_data: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -629,7 +640,10 @@ class ProjectDocument:
                 "components": [c.to_dict() for c in self.components],
                 "assets": [a.to_dict() for a in self.assets],
                 "text_styles": [t.to_dict() for t in self.text_styles],
-                "colors": [c.to_dict() for c in self.colors]}
+                "colors": [c.to_dict() for c in self.colors],
+                "animations": [a.to_dict() for a in self.animations],
+                "variables": [v.to_dict() for v in self.variables],
+                "interactions": [i.to_dict() for i in self.interactions]}
 
     def validate(self) -> None:
         ids = [s.id for s in self.screens]
@@ -638,7 +652,9 @@ class ProjectDocument:
         for s in self.screens:
             s.validate()
         for group, items in (("компонентов", self.components), ("ресурсов", self.assets),
-                             ("стилей", self.text_styles), ("цветов", self.colors)):
+                             ("стилей", self.text_styles), ("цветов", self.colors),
+                             ("анимаций", self.animations), ("переменных", self.variables),
+                             ("взаимодействий", self.interactions)):
             if len({i.id for i in items}) != len(items):
                 raise ModelError(f"Повторяющиеся идентификаторы {group}")
 
@@ -647,6 +663,12 @@ class ProjectDocument:
 
     def asset(self, asset_id: str) -> Asset | None:
         return next((a for a in self.assets if a.id == asset_id), None)
+
+    def animation(self, anim_id: str):
+        return next((a for a in self.animations if a.id == anim_id), None)
+
+    def variable(self, var_id: str):
+        return next((v for v in self.variables if v.id == var_id), None)
 
     def text_style(self, style_id: str) -> TextStyle | None:
         return next((t for t in self.text_styles if t.id == style_id), None)
