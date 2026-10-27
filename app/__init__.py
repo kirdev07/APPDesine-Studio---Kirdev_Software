@@ -2,3 +2,5 @@
 
 APP_NAME = "App Design Studio"
 APP_VERSION = "1.0.0-dev.stage1"
+
+COPYRIGHT = "© 2026 Kirdev Software. Все права защищены."

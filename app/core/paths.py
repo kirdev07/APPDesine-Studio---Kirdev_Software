@@ -32,6 +32,14 @@ class AppPaths:
         return self.base / "recovery"
 
     @property
+    def library(self) -> Path:
+        return self.base / "library"
+
+    @property
+    def templates(self) -> Path:
+        return self.base / "templates"
+
+    @property
     def index_db(self) -> Path:
         return self.base / "projects.sqlite3"
 
@@ -40,7 +48,7 @@ class AppPaths:
         return self.base / "settings.ini"
 
     def ensure(self) -> AppPaths:
-        for p in (self.base, self.logs, self.backups, self.recovery):
+        for p in (self.base, self.logs, self.backups, self.recovery, self.library, self.templates):
             p.mkdir(parents=True, exist_ok=True)
         return self
 

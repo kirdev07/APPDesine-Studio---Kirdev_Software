@@ -173,8 +173,8 @@ class ProjectHubPage(QWidget):
 
         tpl, tlay = panel()
         tlay.addWidget(label("Шаблоны проектов", "H2"))
-        tlay.addWidget(label("Пустые стартовые шаблоны. Готовые UI-шаблоны появятся с библиотекой компонентов (этап 4).",
-                             "Muted", wrap=True))
+        tlay.addWidget(label("Пустые стартовые шаблоны и ваши шаблоны (Проект → Сохранить как шаблон). "
+                             "Шаблон удаляется через контекстное меню.", "Muted", wrap=True))
         self.templates = QListWidget()
         self.templates.setObjectName("Cards")
         self.templates.setViewMode(QListView.ViewMode.IconMode)
@@ -184,13 +184,9 @@ class ProjectHubPage(QWidget):
         self.templates.setGridSize(QSize(236, 140))
         self.templates.setFixedHeight(156)
         self.templates.setMovement(QListView.Movement.Static)
-        for t in TEMPLATES:
-            item = QListWidgetItem(pixmap_icon(thumbnail(list(t.platforms), t.name, 140, 84)), t.name)
-            item.setData(ROLE_ID, t.id)
-            item.setToolTip(t.description)
-            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-            self.templates.addItem(item)
         self.templates.itemClicked.connect(lambda it: self.new_requested.emit(it.data(ROLE_ID)))
+        self.templates.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.templates.customContextMenuRequested.connect(self._template_menu)
         tlay.addWidget(self.templates)
         lay.addWidget(tpl)
 
@@ -270,7 +266,38 @@ class ProjectHubPage(QWidget):
         return scroll
 
     # ---------- данные ----------
+    def refresh_templates(self) -> None:
+        from app.core.project.templates import TemplateStore
+        self.templates.clear()
+        for t in TEMPLATES:
+            item = QListWidgetItem(pixmap_icon(thumbnail(list(t.platforms), t.name, 140, 84)), t.name)
+            item.setData(ROLE_ID, t.id)
+            item.setToolTip(t.description)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            self.templates.addItem(item)
+        for ut in TemplateStore(self.ctx.paths.templates).items():
+            item = QListWidgetItem(pixmap_icon(thumbnail(ut.platforms, ut.title, 140, 84)), f"★ {ut.title}")
+            item.setData(ROLE_ID, f"user:{ut.id}")
+            item.setToolTip(f"Мой шаблон · экранов: {ut.screens}\n{ut.description}")
+            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            self.templates.addItem(item)
+
+    def _template_menu(self, pos) -> None:
+        from app.core.project.templates import TemplateStore
+        item = self.templates.itemAt(pos)
+        tid = item.data(ROLE_ID) if item else ""
+        if not tid.startswith("user:"):
+            return
+        menu = QMenu(self)
+        act = menu.addAction("Удалить шаблон…")
+        if menu.exec(self.templates.mapToGlobal(pos)) == act and QMessageBox.question(
+                self, "Шаблон", f"Удалить шаблон «{item.text()[2:]}»? Проекты, созданные из него, не изменятся.") \
+                == QMessageBox.StandardButton.Yes:
+            TemplateStore(self.ctx.paths.templates).remove(tid[5:])
+            self.refresh_templates()
+
     def refresh(self) -> None:
+        self.refresh_templates()
         self.ctx.service.refresh_missing()
         self.refresh_sidebar()
         self.refresh_projects()

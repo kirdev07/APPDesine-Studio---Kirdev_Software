@@ -110,6 +110,60 @@ class Batch(Command):
             c.undo(doc)
 
 
+class DocPatch(Command):
+    """Изменение документа функцией с сохранением снимков «до» и «после».
+
+    Для операций, затрагивающих сразу компоненты, все их экземпляры, ресурсы и стили. Повтор применяет
+    сохранённый снимок «после», поэтому результат детерминирован; если функция упала, документ
+    возвращается в состояние «до».
+    """
+
+    def __init__(self, label: str, mutate: Callable[[ProjectDocument], None]):
+        self.label, self.mutate = label, mutate
+        self.before: dict | None = None
+        self.after: dict | None = None
+
+    @staticmethod
+    def capture(doc: ProjectDocument) -> dict:
+        return {"screens": [s.to_dict() for s in doc.screens],
+                "components": [c.to_dict() for c in doc.components],
+                "assets": [a.to_dict() for a in doc.assets],
+                "text_styles": [t.to_dict() for t in doc.text_styles],
+                "colors": [c.to_dict() for c in doc.colors],
+                "asset_data": dict(doc.asset_data),
+                "meta": doc.meta.to_dict()}
+
+    @staticmethod
+    def restore(doc: ProjectDocument, snap: dict) -> None:
+        from app.core.document.model import Asset, ColorToken, ComponentDef, ProjectMeta, TextStyle
+        doc.screens[:] = [Screen.from_dict(s) for s in snap["screens"]]
+        doc.components[:] = [ComponentDef.from_dict(c) for c in snap["components"]]
+        doc.assets[:] = [Asset.from_dict(a) for a in snap["assets"]]
+        doc.text_styles[:] = [TextStyle.from_dict(t) for t in snap["text_styles"]]
+        doc.colors[:] = [ColorToken.from_dict(c) for c in snap["colors"]]
+        doc.asset_data.clear()
+        doc.asset_data.update(snap["asset_data"])
+        meta = ProjectMeta.from_dict(snap["meta"])
+        doc.meta.title, doc.meta.description = meta.title, meta.description
+
+    def redo(self, doc):
+        if self.after is not None:
+            self.restore(doc, self.after)
+            return
+        self.before = self.capture(doc)
+        try:
+            self.mutate(doc)
+            doc.validate()
+        except Exception:
+            self.restore(doc, self.before)
+            raise
+        self.after = self.capture(doc)
+
+    def undo(self, doc):
+        if self.before is not None:
+            self.restore(doc, self.before)
+
+
 # ---------------- узлы ----------------
 
 class AddNodes(Command):

@@ -8,8 +8,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-# 1 — этап 1 (экраны без содержимого); 2 — узлы и направляющие; 3 — фреймы, Auto Layout и привязки.
-SCHEMA_VERSION = 3
+# 1 — этап 1 (экраны без содержимого); 2 — узлы и направляющие; 3 — фреймы, Auto Layout и привязки;
+# 4 — векторы, изображения, компоненты и экземпляры, ресурсы, стили текста и цвета.
+SCHEMA_VERSION = 4
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -69,22 +70,34 @@ class Appearance:
         )
 
 
-NODE_TYPES = ("rect", "ellipse", "text", "group", "frame")
+NODE_TYPES = ("rect", "ellipse", "text", "group", "frame", "vector", "image", "instance")
 GEOMETRY_PROPS = ("x", "y", "w", "h")
 STYLE_PROPS = ("fill", "stroke", "stroke_width", "radius", "opacity")
-TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align")
-COMMON_PROPS = ("name", "visible", "locked")
+TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style")
+# ref — идентификатор узла мастер-компонента, из которого получен узел экземпляра.
+COMMON_PROPS = ("name", "visible", "locked", "ref")
 # Поведение узла внутри родителя: размер в Auto Layout и привязки в обычном контейнере.
 CHILD_PROPS = ("sizing_h", "sizing_v", "min_w", "max_w", "min_h", "max_h", "constraint_h", "constraint_v")
 # Свойства контейнера-фрейма.
 FRAME_PROPS = ("layout", "gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "main_align", "cross_align",
                "grid_columns", "clip")
+VECTOR_PROPS = ("path", "vb_w", "vb_h", "fill_rule")
+INSTANCE_PROPS = ("component_id", "overrides", "state")
 LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + TEXT_PROPS + CHILD_PROPS
 ALLOWED_PROPS = {
     "group": COMMON_PROPS,
     "frame": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + FRAME_PROPS,
+    "instance": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + FRAME_PROPS + INSTANCE_PROPS,
+    "vector": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + VECTOR_PROPS,
+    "image": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + ("asset_id",),
 }
+# Свойства, которые экземпляр может переопределить у узлов мастера (и состояния компонента).
+OVERRIDABLE = ("visible", "fill", "stroke", "stroke_width", "opacity", "radius", "text", "text_color", "font_family",
+               "font_size", "font_weight", "align", "asset_id", "path")
+ROOT_REF = "__root__"  # ключ переопределений самого корня компонента
+STATE_NAMES = ("default", "hover", "focus", "pressed", "disabled", "loading", "empty", "error")
 ALIGNMENTS = ("left", "center", "right")
+_ID = re.compile(r"^[0-9A-Za-z_:./-]{0,512}$")
 ENUMS = {
     "align": ALIGNMENTS,
     "sizing_h": ("fixed", "fill", "hug"),
@@ -94,6 +107,7 @@ ENUMS = {
     "layout": ("none", "vertical", "horizontal", "grid"),
     "main_align": ("start", "center", "end", "space_between"),
     "cross_align": ("start", "center", "end", "stretch"),
+    "fill_rule": ("nonzero", "evenodd"),
 }
 MAX_DEPTH = 32
 MAX_COORD = 1_000_000.0
@@ -117,6 +131,22 @@ def check_prop(name: str, value, node_type: str = "rect"):
         if not isinstance(value, bool):
             raise ModelError(f"«{name}» должно быть логическим")
         return value
+    if name in ("ref", "asset_id", "component_id", "text_style"):
+        if not isinstance(value, str) or not _ID.match(value):
+            raise ModelError(f"Неверный идентификатор «{name}»")
+        return value
+    if name == "state":
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9A-Za-zА-Яа-яЁё _-]{1,64}", value):
+            raise ModelError("Неверное имя состояния")
+        return value
+    if name == "path":
+        from app.core.document.pathdata import PathError, normalize
+        try:
+            return normalize(value)
+        except PathError as exc:
+            raise ModelError(f"Неверный путь: {exc}") from None
+    if name == "overrides":
+        return check_overrides(value)
     if name in ("name", "text", "font_family"):
         if not isinstance(value, str) or len(value) > 100_000:
             raise ModelError(f"«{name}» должно быть строкой")
@@ -136,10 +166,30 @@ def check_prop(name: str, value, node_type: str = "rect"):
               "opacity": (0, 1), "font_size": (1, 1000), "font_weight": (100, 900)}
     for k in ("gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "min_w", "max_w", "min_h", "max_h"):
         limits[k] = (0, MAX_COORD)  # для max_* ноль означает «без ограничения»
+    limits["vb_w"] = limits["vb_h"] = (0.001, MAX_COORD)
     lo, hi = limits.get(name, (-MAX_COORD, MAX_COORD))
     if not lo <= value <= hi:
         raise ModelError(f"«{name}» вне диапазона {lo}…{hi}")
     return int(round(value / 100) * 100) if name == "font_weight" else value
+
+
+def check_overrides(value) -> dict:
+    """{ref: {свойство: значение}} — только переопределяемые свойства, каждое проверяется."""
+    if not isinstance(value, dict) or len(value) > 10_000:
+        raise ModelError("Переопределения должны быть объектом")
+    out = {}
+    for ref, props in value.items():
+        if not isinstance(ref, str) or not _ID.match(ref) or not isinstance(props, dict):
+            raise ModelError("Неверное переопределение")
+        clean = {}
+        for k, v in props.items():
+            if k not in OVERRIDABLE:
+                raise ModelError(f"Свойство «{k}» нельзя переопределять")
+            node_type = "vector" if k == "path" else "image" if k == "asset_id" else "text"
+            clean[k] = check_prop(k, v, node_type)
+        if clean:
+            out[ref] = clean
+    return out
 
 
 @dataclass
@@ -184,6 +234,17 @@ class Node:
     cross_align: str = "start"
     grid_columns: int = 2
     clip: bool = True
+    # текстовый стиль (токен), вектор, изображение, экземпляр компонента
+    text_style: str = ""
+    path: str = ""
+    vb_w: float = 24.0
+    vb_h: float = 24.0
+    fill_rule: str = "nonzero"
+    asset_id: str = ""
+    component_id: str = ""
+    overrides: dict = field(default_factory=dict)
+    state: str = "default"
+    ref: str = ""
     children: list[Node] = field(default_factory=list)
     id: str = field(default_factory=new_id)
 
@@ -193,29 +254,45 @@ class Node:
 
     @property
     def is_frame(self) -> bool:
-        return self.type == "frame"
+        """Фрейм или экземпляр компонента (экземпляр — фрейм с содержимым из мастера)."""
+        return self.type in ("frame", "instance")
+
+    @property
+    def is_instance(self) -> bool:
+        return self.type == "instance"
 
     @property
     def is_container(self) -> bool:
-        return self.type in ("group", "frame")
+        return self.type in ("group", "frame", "instance")
 
     @property
     def auto_layout(self) -> bool:
         return self.is_frame and self.layout != "none"
 
-    def to_dict(self) -> dict:
-        d = {"id": self.id, "type": self.type, "name": self.name, "visible": self.visible, "locked": self.locked}
-        if self.is_group:
-            d["children"] = [c.to_dict() for c in self.children]
-            return d
-        for k in GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS:
-            d[k] = getattr(self, k)
+    def _props(self) -> tuple[str, ...]:
+        props = COMMON_PROPS
+        if not self.is_group:
+            props += GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS
         if self.type == "text":
-            for k in TEXT_PROPS:
-                d[k] = getattr(self, k)
+            props += TEXT_PROPS
         if self.is_frame:
-            for k in FRAME_PROPS:
-                d[k] = getattr(self, k)
+            props += FRAME_PROPS
+        if self.is_instance:
+            props += INSTANCE_PROPS
+        if self.type == "vector":
+            props += VECTOR_PROPS
+        if self.type == "image":
+            props += ("asset_id",)
+        return props
+
+    def to_dict(self) -> dict:
+        d = {"id": self.id, "type": self.type}
+        for k in self._props():
+            if k == "ref" and not self.ref:
+                continue
+            v = getattr(self, k)
+            d[k] = dict(v) if isinstance(v, dict) else v
+        if self.is_container:
             d["children"] = [c.to_dict() for c in self.children]
         return d
 
@@ -229,16 +306,9 @@ class Node:
         if node_type not in NODE_TYPES:
             raise ModelError(f"Неизвестный тип узла: {node_type!r}")
         node = cls(type=node_type, id=_req(d, "id", str))
-        if node_type == "text":
+        if node_type in ("text", "image"):
             node.fill = ""
-        props = COMMON_PROPS
-        if not node.is_group:
-            props += GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS
-        if node_type == "text":
-            props += TEXT_PROPS
-        if node.is_frame:
-            props += FRAME_PROPS
-        for k in props:
+        for k in node._props():
             if k in d:
                 setattr(node, k, check_prop(k, d[k], node_type))
         if node.is_container:
@@ -387,16 +457,179 @@ class ProjectMeta:
         )
 
 
+ASSET_KINDS = {"icon": ("svg",), "font": ("ttf", "otf"), "image": ("png", "jpg", "jpeg", "webp", "svg")}
+REDISTRIBUTION = ("allowed", "forbidden", "unknown")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _str(d: dict, key: str, default: str = "", limit: int = 2000) -> str:
+    v = d.get(key, default)
+    if not isinstance(v, str) or len(v) > limit:
+        raise ModelError(f"Поле «{key}» должно быть строкой")
+    return v
+
+
+@dataclass
+class Asset:
+    """Ресурс проекта. Файл хранится в контейнере по пути assets/<kind>s/<sha256>.<ext>."""
+    kind: str
+    name: str
+    ext: str
+    sha256: str
+    size: int = 0
+    license: str = ""
+    source: str = ""
+    author: str = ""
+    redistribution: str = "unknown"
+    family: str = ""  # для шрифтов: семейство, прочитанное из файла
+    id: str = field(default_factory=new_id)
+
+    @property
+    def archive_path(self) -> str:
+        return f"assets/{self.kind}s/{self.sha256}.{self.ext}"
+
+    def to_dict(self) -> dict:
+        return {k: getattr(self, k) for k in ("id", "kind", "name", "ext", "sha256", "size", "license", "source",
+                                               "author", "redistribution", "family")}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Asset:
+        if not isinstance(d, dict):
+            raise ModelError("Ресурс должен быть объектом")
+        kind, ext = _str(d, "kind"), _str(d, "ext").lower()
+        if kind not in ASSET_KINDS or ext not in ASSET_KINDS[kind]:
+            raise ModelError(f"Недопустимый тип ресурса: {kind}/{ext}")
+        sha = _str(d, "sha256")
+        if not _HEX64.match(sha):
+            raise ModelError("Неверный SHA-256 ресурса")
+        red = _str(d, "redistribution", "unknown")
+        if red not in REDISTRIBUTION:
+            raise ModelError("Неверный статус распространения")
+        size = d.get("size", 0)
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ModelError("Неверный размер ресурса")
+        aid = _str(d, "id")
+        if not _ID.match(aid) or not aid:
+            raise ModelError("Неверный идентификатор ресурса")
+        return cls(kind=kind, name=_str(d, "name", limit=300), ext=ext, sha256=sha, size=size,
+                   license=_str(d, "license"), source=_str(d, "source"), author=_str(d, "author"),
+                   redistribution=red, family=_str(d, "family", limit=300), id=aid)
+
+
+@dataclass
+class TextStyle:
+    name: str
+    font_family: str = "Segoe UI"
+    font_size: float = 16.0
+    font_weight: int = 400
+    text_color: str = ""  # пусто — цвет не задаётся стилем
+    id: str = field(default_factory=new_id)
+
+    def to_dict(self) -> dict:
+        return {k: getattr(self, k) for k in ("id", "name", "font_family", "font_size", "font_weight", "text_color")}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> TextStyle:
+        if not isinstance(d, dict):
+            raise ModelError("Стиль текста должен быть объектом")
+        name = _str(d, "name", limit=200).strip()
+        if not name:
+            raise ModelError("Пустое имя стиля")
+        return cls(name=name, font_family=check_prop("font_family", d.get("font_family", "Segoe UI"), "text"),
+                   font_size=check_prop("font_size", d.get("font_size", 16), "text"),
+                   font_weight=check_prop("font_weight", d.get("font_weight", 400), "text"),
+                   text_color=check_prop("text_color", d.get("text_color", ""), "text"),
+                   id=check_prop("text_style", _str(d, "id"), "text"))
+
+
+@dataclass
+class ColorToken:
+    name: str
+    value: str
+    id: str = field(default_factory=new_id)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "value": self.value}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ColorToken:
+        if not isinstance(d, dict):
+            raise ModelError("Цвет должен быть объектом")
+        name = _str(d, "name", limit=200).strip()
+        value = check_prop("fill", d.get("value", ""), "rect")
+        if not name or not value:
+            raise ModelError("У цвета должны быть имя и значение")
+        return cls(name=name, value=value, id=check_prop("ref", _str(d, "id"), "rect"))
+
+
+@dataclass
+class ComponentDef:
+    """Мастер-компонент: корневой фрейм и состояния (переопределения поверх мастера)."""
+    name: str
+    root: Node
+    category: str = "Мои компоненты"
+    platform: str = ""
+    description: str = ""
+    states: dict = field(default_factory=dict)  # {состояние: {ref: {свойство: значение}}}
+    version: int = 1
+    id: str = field(default_factory=new_id)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "category": self.category, "platform": self.platform,
+                "description": self.description, "version": self.version,
+                "states": {k: {r: dict(p) for r, p in v.items()} for k, v in self.states.items()},
+                "root": self.root.to_dict()}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ComponentDef:
+        if not isinstance(d, dict):
+            raise ModelError("Компонент должен быть объектом")
+        root = Node.from_dict(d.get("root"))
+        if not root.is_frame or root.is_instance:
+            raise ModelError("Корень компонента должен быть фреймом")
+        states = d.get("states", {})
+        if not isinstance(states, dict) or len(states) > 64:
+            raise ModelError("Неверные состояния компонента")
+        clean = {}
+        for k, v in states.items():
+            check_prop("state", k, "instance")
+            clean[k] = check_overrides(v)
+        version = d.get("version", 1)
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise ModelError("Неверная версия компонента")
+        platform = _str(d, "platform")
+        if platform and platform not in PLATFORMS:
+            raise ModelError("Неверная платформа компонента")
+        cid = _str(d, "id")
+        if not cid or not _ID.match(cid):
+            raise ModelError("Неверный идентификатор компонента")
+        name = _str(d, "name", limit=200).strip()
+        if not name:
+            raise ModelError("Пустое имя компонента")
+        return cls(name=name, root=root, category=_str(d, "category", "Мои компоненты", 200), platform=platform,
+                   description=_str(d, "description", limit=5000), states=clean, version=version, id=cid)
+
+
 @dataclass
 class ProjectDocument:
     meta: ProjectMeta
     screens: list[Screen] = field(default_factory=list)
+    components: list[ComponentDef] = field(default_factory=list)
+    assets: list[Asset] = field(default_factory=list)
+    text_styles: list[TextStyle] = field(default_factory=list)
+    colors: list[ColorToken] = field(default_factory=list)
+    # содержимое файлов ресурсов в памяти: {asset_id: bytes}. Не сериализуется в JSON.
+    asset_data: dict = field(default_factory=dict, repr=False, compare=False)
 
     def touch(self) -> None:
         self.meta.modified_at = now_iso()
 
     def to_dict(self) -> dict:
-        return {"meta": self.meta.to_dict(), "screens": [s.to_dict() for s in self.screens]}
+        return {"meta": self.meta.to_dict(), "screens": [s.to_dict() for s in self.screens],
+                "components": [c.to_dict() for c in self.components],
+                "assets": [a.to_dict() for a in self.assets],
+                "text_styles": [t.to_dict() for t in self.text_styles],
+                "colors": [c.to_dict() for c in self.colors]}
 
     def validate(self) -> None:
         ids = [s.id for s in self.screens]
@@ -404,6 +637,19 @@ class ProjectDocument:
             raise ModelError("Повторяющиеся идентификаторы экранов")
         for s in self.screens:
             s.validate()
+        for group, items in (("компонентов", self.components), ("ресурсов", self.assets),
+                             ("стилей", self.text_styles), ("цветов", self.colors)):
+            if len({i.id for i in items}) != len(items):
+                raise ModelError(f"Повторяющиеся идентификаторы {group}")
+
+    def component(self, component_id: str) -> ComponentDef | None:
+        return next((c for c in self.components if c.id == component_id), None)
+
+    def asset(self, asset_id: str) -> Asset | None:
+        return next((a for a in self.assets if a.id == asset_id), None)
+
+    def text_style(self, style_id: str) -> TextStyle | None:
+        return next((t for t in self.text_styles if t.id == style_id), None)
 
     def screen(self, screen_id: str) -> Screen:
         for s in self.screens:

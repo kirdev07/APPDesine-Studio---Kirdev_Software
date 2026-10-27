@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QMainWindow, QMessageBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
-from app import APP_NAME, APP_VERSION
+from app import APP_NAME, APP_VERSION, COPYRIGHT
 from app.context import AppContext
 from app.core.document.model import ProjectDocument
 from app.core.persistence.container import ProjectFormatError
@@ -26,18 +26,22 @@ log = logging.getLogger(__name__)
 
 # (подпись, иконка, этап) — разделы, которые ещё не реализованы, неактивны и подписаны этапом.
 NAV_FUTURE = [
-    ("Компоненты", "components", 4), ("Иконки", "icons", 4), ("Шрифты", "fonts", 4), ("Цвета", "colors", 4),
     ("Анимации", "animations", 5), ("Логика", "logic", 5), ("Устройства", "devices", 6),
-    ("Ресурсы", "resources", 4), ("Проверка", "validate", 7), ("Экспорт", "export", 7), ("ИИ-задание", "ai", 7),
+    ("Проверка", "validate", 7), ("Экспорт", "export", 7), ("ИИ-задание", "ai", 7),
 ]
 MENU_FUTURE = {
-    "Инструменты": [("Конструктор компонентов", 4), ("SVG-редактор", 4), ("Типографика", 4),
-                    ("Анимации", 5), ("Визуальная логика", 5)],
+    "Инструменты": [("Анимации", 5), ("Визуальная логика", 5)],
     "Экспорт": [("Проверка проекта", 7), ("AI-экспорт для Claude Code", 7)],
     "Устройства": [("Интерактивный предпросмотр", 6)],
 }
 
-PAGE_HUB, PAGE_PROJECT, PAGE_SETTINGS = 0, 1, 2
+PAGE_HUB, PAGE_PROJECT, PAGE_SETTINGS, PAGE_BUILDER, PAGE_ICONS, PAGE_FONTS, PAGE_COLORS, PAGE_RESOURCES = range(8)
+# студии, которым нужен открытый проект: (страница, подпись, иконка, сочетание клавиш)
+STUDIOS = [(PAGE_BUILDER, "Компоненты", "components", "Ctrl+Alt+1"), (PAGE_ICONS, "Иконки", "icons", "Ctrl+Alt+2"),
+           (PAGE_FONTS, "Шрифты", "fonts", "Ctrl+Alt+3"), (PAGE_COLORS, "Цвета", "colors", "Ctrl+Alt+4"),
+           (PAGE_RESOURCES, "Ресурсы", "resources", "Ctrl+Alt+5")]
+STUDIO_TITLES = {PAGE_BUILDER: "Component Builder", PAGE_ICONS: "SVG-редактор и иконки",
+                 PAGE_FONTS: "Typography Studio", PAGE_COLORS: "Цвета", PAGE_RESOURCES: "Ресурсы"}
 
 
 class MainWindow(QMainWindow):
@@ -60,8 +64,23 @@ class MainWindow(QMainWindow):
         self.hub = ProjectHubPage(ctx)
         self.project_page = WorkspacePage(ctx)
         self.settings_page = SettingsPage(ctx)
-        for p in (self.hub, self.project_page, self.settings_page):
+        from app.ui.studio.builder import ComponentBuilderPage
+        from app.ui.studio.icons import IconsPage
+        from app.ui.studio.resources import ColorsPage, ResourcesPage
+        from app.ui.studio.typography import TypographyPage
+        self.builder = ComponentBuilderPage(self.project_page)
+        self.icons = IconsPage(self.project_page)
+        self.fonts_page = TypographyPage(self.project_page)
+        self.colors = ColorsPage(self.project_page)
+        self.resources = ResourcesPage(self.project_page)
+        for p in (self.hub, self.project_page, self.settings_page, self.builder, self.icons, self.fonts_page,
+                  self.colors, self.resources):
             self.pages.addWidget(p)
+        for page in (self.builder, self.icons, self.resources):
+            page.insert_requested.connect(lambda: self.show_page(PAGE_PROJECT))
+        ed = self.project_page.editor
+        ed.message.connect(lambda text: self.statusBar().showMessage(text, 8000))
+        ed.open_component.connect(self.open_in_builder)
         lay.addWidget(self.pages, 1)
         self.setCentralWidget(central)
 
@@ -110,6 +129,14 @@ class MainWindow(QMainWindow):
         self.nav_layers.setToolTip("Панель слоёв открытого проекта")
         self.nav_layers.clicked.connect(self._show_layers)
         v.addWidget(self.nav_layers)
+        self.nav_studios = {}
+        for page, text, icon, _ in STUDIOS:
+            b = self._nav_button(text, icon)
+            b.setCheckable(True)
+            b.clicked.connect(lambda _=False, pg=page: self.show_page(pg))
+            self.nav_group.addButton(b)
+            self.nav_studios[page] = b
+            v.addWidget(b)
         for text, icon, stage in NAV_FUTURE:
             b = self._nav_button(text, icon)
             b.setEnabled(False)
@@ -128,6 +155,8 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         self.act_save = self._act(m, "Сохранить", QKeySequence.StandardKey.Save, self.save_project)
         self.act_close = self._act(m, "Закрыть проект", QKeySequence("Ctrl+W"), self.close_project)
+        m.addSeparator()
+        self.act_template = self._act(m, "Сохранить как шаблон…", None, self.save_as_template)
         m.addSeparator()
         self._act(m, "Project Hub", QKeySequence("Ctrl+H"), lambda: self.show_page(PAGE_HUB))
         self._act(m, "Настройки", QKeySequence("Ctrl+,"), lambda: self.show_page(PAGE_SETTINGS))
@@ -148,6 +177,12 @@ class MainWindow(QMainWindow):
                 for a in ws.tools_actions:
                     sub.addSeparator() if a is None else sub.addAction(a)
                 sub.addSeparator()
+                self.studio_actions = []
+                for page, _, _, sc in STUDIOS:
+                    a = self._act(sub, STUDIO_TITLES[page], QKeySequence(sc),
+                                  lambda _=False, pg=page: self.show_page(pg))
+                    self.studio_actions.append(a)
+                sub.addSeparator()
             for text, stage in items:
                 a = sub.addAction(f"{text}  —  этап {stage}")
                 a.setEnabled(False)
@@ -155,7 +190,9 @@ class MainWindow(QMainWindow):
         self._act(h, "Открыть папку журнала", None,
                   lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.ctx.paths.logs))))
         self._act(h, "О программе", None, lambda: QMessageBox.about(
-            self, APP_NAME, f"{APP_NAME} {APP_VERSION}\nЛокальная студия дизайна интерфейсов Android и Windows."))
+            self, APP_NAME, f"{APP_NAME} {APP_VERSION}\nЛокальная студия дизайна интерфейсов Android и Windows.\n\n"
+                            f"{COPYRIGHT}\nИспользование без письменного разрешения правообладателя запрещено.\n"
+                            "Использует PySide6 / Qt (LGPLv3) — см. THIRD_PARTY_NOTICES."))
 
     def _act(self, menu, text, shortcut, slot) -> QAction:
         a = QAction(text, self)
@@ -167,12 +204,19 @@ class MainWindow(QMainWindow):
 
     # ---------- состояние ----------
     def show_page(self, page: int) -> None:
-        if page == PAGE_PROJECT and self.doc is None:
+        if (page == PAGE_PROJECT or page in STUDIO_TITLES) and self.doc is None:
             page = PAGE_HUB
+        current = self.pages.currentWidget()
+        if current in (self.builder, self.icons) and self.pages.widget(page) is not current \
+                and not current.confirm_leave():
+            return
         if page == PAGE_HUB:
             self.hub.refresh()
         self.pages.setCurrentIndex(page)
-        {PAGE_HUB: self.nav_hub, PAGE_PROJECT: self.nav_project, PAGE_SETTINGS: self.nav_settings}[page].setChecked(True)
+        {PAGE_HUB: self.nav_hub, PAGE_PROJECT: self.nav_project, PAGE_SETTINGS: self.nav_settings,
+         **self.nav_studios}[page].setChecked(True)
+        if page in (PAGE_COLORS, PAGE_RESOURCES, PAGE_FONTS):
+            self.pages.widget(page).refresh()
 
     def _update_state(self) -> None:
         has = self.doc is not None
@@ -180,6 +224,12 @@ class MainWindow(QMainWindow):
         self.act_close.setEnabled(has)
         self.nav_project.setEnabled(has)
         self.nav_layers.setEnabled(has)
+        for b in self.nav_studios.values():
+            b.setEnabled(has)
+            b.setToolTip("" if has else "Откройте или создайте проект")
+        for a in getattr(self, "studio_actions", []):
+            a.setEnabled(has)
+        self.act_template.setEnabled(has)
         self.nav_project.setToolTip("" if has else "Откройте или создайте проект")
         title = APP_NAME
         if has:
@@ -214,7 +264,9 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             return
         location = self.ctx.settings.projects_dir
-        wiz = NewProjectWizard(location, template_id, self)
+        from app.core.project.templates import TemplateStore
+        wiz = NewProjectWizard(location, template_id, self,
+                               user_templates=TemplateStore(self.ctx.paths.templates).items())
         if wiz.exec() != NewProjectWizard.DialogCode.Accepted or wiz.result_spec is None:
             return
         try:
@@ -247,7 +299,14 @@ class MainWindow(QMainWindow):
 
     def _set_document(self, doc: ProjectDocument | None, path: Path | None, dirty: bool = False) -> None:
         self.doc, self.doc_path = doc, path
+        if doc is not None:
+            from app.ui.fonts import REGISTRY
+            problems = REGISTRY.register_document(doc)
+            if problems:
+                self.statusBar().showMessage("Шрифты проекта: " + "; ".join(problems), 10000)
         self.project_page.set_document(doc, dirty)
+        self.builder.reset_for_document()
+        self.icons.reset_for_document()
         self.dirty = dirty
         self._update_state()
 
@@ -283,6 +342,9 @@ class MainWindow(QMainWindow):
         return True
 
     def _confirm_discard(self) -> bool:
+        for studio in (self.builder, self.icons):  # несохранённый мастер или иконка ещё не в документе
+            if not studio.confirm_leave():
+                return False
         if not self.doc or not self.dirty:
             return True
         box = QMessageBox(QMessageBox.Icon.Question, "Несохранённые изменения",
@@ -298,6 +360,29 @@ class MainWindow(QMainWindow):
             self.dirty = False
             return True
         return False
+
+    def open_in_builder(self, component_id: str) -> None:
+        self.show_page(PAGE_BUILDER)
+        if self.pages.currentWidget() is self.builder:
+            self.builder.open_component(component_id)
+
+    def save_as_template(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        from app.core.project.templates import TemplateStore
+        if self.doc is None:
+            return
+        title, ok = QInputDialog.getText(self, "Сохранить как шаблон", "Название шаблона:", text=self.doc.meta.title)
+        if not ok or not title.strip():
+            return
+        try:
+            TemplateStore(self.ctx.paths.templates).save(self.doc, title.strip())
+        except (OSError, ProjectFormatError) as exc:
+            self._err("Не удалось сохранить шаблон", exc)
+            return
+        self.statusBar().showMessage(f"Шаблон «{title.strip()}» сохранён — он доступен в мастере нового проекта",
+                                     8000)
+        self.hub.refresh()
 
     def check_recovery(self) -> None:
         for entry in self.ctx.recovery.entries():

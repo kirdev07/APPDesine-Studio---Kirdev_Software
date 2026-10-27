@@ -14,16 +14,22 @@ from app.core.commands import (
 from app.core.document import tree
 from app.core.document.model import Guide, ModelError, Node, ProjectDocument, Screen, new_id
 from app.core.document.tree import Rect
+from app.core.commands import DocPatch
+from app.core.document.model import OVERRIDABLE, ROOT_REF, Asset, ColorToken, ComponentDef, TextStyle
+from app.engines.components import engine as comp_engine
+from app.engines.components.checks import resource_diagnostics
 from app.engines.layout import Diagnostic, LayoutEngine
 from app.libraries import components
+from app.ui.fonts import REGISTRY
 from app.ui.workspace.text_measure import QtTextMeasurer
 
 log = logging.getLogger(__name__)
 
-TOOL_SELECT, TOOL_HAND, TOOL_RECT, TOOL_ELLIPSE, TOOL_TEXT, TOOL_FRAME = (
-    "select", "hand", "rect", "ellipse", "text", "frame")
+TOOL_SELECT, TOOL_HAND, TOOL_RECT, TOOL_ELLIPSE, TOOL_TEXT, TOOL_FRAME, TOOL_PEN = (
+    "select", "hand", "rect", "ellipse", "text", "frame", "pen")
 CLIPBOARD_MIME = "application/x-ads-nodes"
-TYPE_NAMES = {"rect": "Прямоугольник", "ellipse": "Эллипс", "text": "Текст", "group": "Группа", "frame": "Фрейм"}
+TYPE_NAMES = {"rect": "Прямоугольник", "ellipse": "Эллипс", "text": "Текст", "group": "Группа", "frame": "Фрейм",
+              "vector": "Вектор", "image": "Изображение", "instance": "Экземпляр"}
 ARTBOARD_COLORS = {"amoled": "#000000", "dark": "#121212", "gray": "#2B2B2B", "light": "#FFFFFF"}
 
 
@@ -33,6 +39,8 @@ class Editor(QObject):
     screen_changed = Signal()
     view_changed = Signal()       # сетка, привязки, инструмент
     preview_changed = Signal()    # временная геометрия при перетаскивании
+    message = Signal(str)         # сообщение пользователю (строка состояния)
+    open_component = Signal(str)  # двойной клик по экземпляру в режиме изоляции
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -51,6 +59,7 @@ class Editor(QObject):
         self.engine = LayoutEngine(QtTextMeasurer())
         self.diagnostics: list[Diagnostic] = []
         self._preview_base: dict[str, Rect] | None = None
+        self.isolate_instances = False  # Component Builder: двойной клик по экземпляру открывает его мастер
 
     # ---------- документ ----------
     def set_document(self, doc: ProjectDocument | None) -> None:
@@ -82,6 +91,7 @@ class Editor(QObject):
             cmd.redo(self.doc)
         except ModelError as exc:
             log.warning("Команда «%s» отклонена: %s", cmd.label, exc)
+            self.message.emit(f"{cmd.label}: {exc}")
             return False
         parts = [cmd]
         for s in self.doc.screens:
@@ -101,12 +111,9 @@ class Editor(QObject):
         if s is None:
             self.diagnostics = []
             return
-        snapshot = tree.geometry(s)
-        _, self.diagnostics = self.engine.layout_screen(s)
-        m = tree.node_map(s)  # проверочный прогон не должен менять документ
-        for nid, (x, y, w, h) in snapshot.items():
-            n = m[nid]
-            n.x, n.y, n.w, n.h = x, y, w, h
+        _, layout_diags = self.engine.layout_screen(s)  # проверочный прогон: документ не меняется
+        self.diagnostics = layout_diags + resource_diagnostics(self.doc, s, REGISTRY.available,
+                                                               REGISTRY.missing_chars)
 
     def undo(self) -> None:
         if self.stack is not None:
@@ -433,12 +440,64 @@ class Editor(QObject):
     def delete_selection(self) -> None:
         s = self.screen()
         if s and self.selection:
+            if any(self.inside_instance(i) for i in self.selection):
+                self.message.emit("Содержимое экземпляра нельзя удалить — скройте элемент или отсоедините экземпляр")
+                return
             self.execute(DeleteNodes(s.id, self.selection))
             self.select([])
 
-    def set_props(self, changes: dict[str, dict], label: str = "Изменить свойства") -> bool:
+    def inside_instance(self, node_id: str) -> bool:
+        """Узел — часть содержимого экземпляра (не сам экземпляр верхнего уровня)."""
         s = self.screen()
-        return bool(s and changes and self.execute(SetProps(s.id, changes, label)))
+        return bool(s) and any(a.is_instance for a in tree.ancestors(s, node_id))
+
+    def set_props(self, changes: dict[str, dict], label: str = "Изменить свойства") -> bool:
+        """Изменение свойств. Внутри экземпляров содержимое и стиль становятся переопределениями,
+        структура и геометрия содержимого экземпляра не меняются."""
+        s = self.screen()
+        if not (s and changes):
+            return False
+        m = tree.node_map(s)
+        plain, overrides = {}, {}
+        for nid, props in changes.items():
+            node = m.get(nid)
+            in_inst = self.inside_instance(nid)
+            if node is not None and (in_inst or node.is_instance):
+                ov = {k: v for k, v in props.items() if k in OVERRIDABLE}
+                rest = {k: v for k, v in props.items() if k not in OVERRIDABLE}
+                if ov:
+                    overrides[nid] = ov
+                if rest and in_inst:
+                    if set(rest) - {"x", "y", "w", "h", "name", "locked"}:
+                        self.message.emit("В экземпляре меняются только содержимое и стиль — "
+                                          "структуру правьте в мастер-компоненте")
+                    continue  # геометрию содержимого задаёт мастер и раскладка
+                if rest:
+                    plain[nid] = rest
+            else:
+                plain[nid] = props
+        ok = True
+        if overrides:
+            sid = s.id
+
+            def mutate(doc):
+                comp_engine.set_overrides(doc, doc.screen(sid), overrides, self.engine)
+            cmds: list[Command] = [DocPatch(label, mutate)]
+            if plain:
+                cmds.append(SetProps(s.id, plain, label))
+            return self.execute(Batch(cmds, label) if len(cmds) > 1 else cmds[0])
+        if plain:
+            ok = self.execute(SetProps(s.id, plain, label))
+        return ok
+
+    def patch(self, label: str, mutate) -> bool:
+        """Операция над документом целиком (компоненты, ресурсы, стили) одной записью истории."""
+        try:
+            return self.execute(DocPatch(label, mutate))
+        except Exception as exc:  # noqa: BLE001 — сообщение пользователю, детали в журнал
+            log.exception("Операция «%s» не выполнена", label)
+            self.message.emit(f"{label}: {exc}")
+            return False
 
     def set_props_for_selection(self, props: dict, label: str = "Изменить свойства") -> bool:
         leaves = self.selected_leaves()
@@ -504,6 +563,251 @@ class Editor(QObject):
         cmds += [MoveToIndex(s.id, n.id, i) for i, n in enumerate(ordered)]
         if self.execute(Batch(cmds, "Обернуть в Auto Layout")):
             self.select([frame.id], entered_group=self.entered_group)
+
+    # ---------- мастер-компоненты ----------
+    def create_component(self, name: str, category: str = "Мои компоненты") -> str | None:
+        s = self.screen()
+        if not s or not self.selection:
+            return None
+        sid, ids, result = s.id, list(self.selection), {}
+
+        def mutate(doc):
+            defn, inst = comp_engine.create_component(doc, doc.screen(sid), ids, name, self.engine, category)
+            result["id"], result["inst"] = defn.id, inst.id
+        if self.patch("Создать компонент", mutate):
+            self.select([result["inst"]], entered_group=self.entered_group)
+            return result["id"]
+        return None
+
+    def insert_instance(self, component_id: str, pos: tuple[float, float] | None = None) -> Node | None:
+        s = self.screen()
+        defn = self.doc.component(component_id) if self.doc else None
+        if not s or defn is None:
+            return None
+        x, y = pos or (round((s.width - defn.root.w) / 2), round((s.height - defn.root.h) / 2))
+        inst = comp_engine.make_instance(defn, x, y, self.engine)
+        if self.execute(AddNodes(s.id, [inst], self._container_id(), label=f"Вставить: {defn.name}")):
+            self.select([inst.id])
+            return inst
+        return None
+
+    def selected_instances(self) -> list[Node]:
+        return [n for n in self.selected_nodes() if n.is_instance]
+
+    def detach_selection(self) -> None:
+        s = self.screen()
+        ids = [n.id for n in self.selected_instances()]
+        if s and ids:
+            sid = s.id
+            self.patch("Отсоединить экземпляр",
+                       lambda doc: [comp_engine.detach(tree.find(doc.screen(sid), i)[0]) for i in ids])
+
+    def reset_overrides_selection(self) -> None:
+        s = self.screen()
+        ids = [n.id for n in self.selected_instances()]
+        if s and ids:
+            sid = s.id
+            self.patch("Сбросить переопределения", lambda doc: [
+                comp_engine.reset_overrides(doc, tree.find(doc.screen(sid), i)[0], self.engine) for i in ids])
+
+    def set_instance_state(self, state: str) -> None:
+        s = self.screen()
+        ids = [n.id for n in self.selected_instances()]
+        if not s or not ids:
+            return
+        sid = s.id
+
+        def mutate(doc):
+            for i in ids:
+                inst = tree.find(doc.screen(sid), i)[0]
+                inst.state = state
+                dep = doc.component(inst.component_id)
+                if dep is not None:
+                    comp_engine.materialize(dep, inst, self.engine)
+        self.patch(f"Состояние: {state}", mutate)
+
+    def update_component(self, defn: ComponentDef) -> bool:
+        data = defn.to_dict()
+
+        def mutate(doc):
+            new = ComponentDef.from_dict(data)
+            old = doc.component(new.id)
+            if old is None:
+                doc.components.append(new)
+            else:
+                new.version = old.version + 1
+                doc.components[doc.components.index(old)] = new
+            comp_engine.sync_instances(doc, self.engine)
+        return self.patch(f"Изменить компонент «{defn.name}»", mutate)
+
+    def component_usage(self, component_id: str) -> int:
+        if not self.doc:
+            return 0
+        roots = [n for s in self.doc.screens for n in s.nodes] + [c.root for c in self.doc.components]
+        return sum(1 for n, _, _ in tree.walk(roots) if n.is_instance and n.component_id == component_id)
+
+    def delete_component(self, component_id: str) -> bool:
+        if self.component_usage(component_id):
+            self.message.emit("Компонент используется — сначала удалите или отсоедините его экземпляры")
+            return False
+        return self.patch("Удалить компонент",
+                          lambda doc: doc.components.remove(doc.component(component_id)))
+
+    def install_bundle(self, bundle: dict, files: dict) -> list[str]:
+        from app.engines.components.library import install_bundle
+        out: list[str] = []
+
+        def mutate(doc):
+            out.extend(install_bundle(doc, bundle, files, self.engine))
+        self.patch("Вставить компонент из библиотеки", mutate)
+        for a in self.doc.assets if self.doc else []:
+            if a.kind == "font" and a.id in self.doc.asset_data:
+                try:
+                    REGISTRY.register(a.id, self.doc.asset_data[a.id])
+                except ValueError as exc:
+                    out.append(f"Шрифт «{a.name}»: {exc}")
+        return out
+
+    # ---------- ресурсы ----------
+    def add_asset(self, asset: Asset, data: bytes) -> bool:
+        payload = asset.to_dict()
+
+        def mutate(doc):
+            a = Asset.from_dict(payload)
+            same = next((x for x in doc.assets if x.sha256 == a.sha256 and x.kind == a.kind), None)
+            if same is not None:
+                raise ModelError(f"Такой файл уже есть в проекте: «{same.name}»")
+            doc.assets.append(a)
+            doc.asset_data[a.id] = data
+        return self.patch(f"Добавить ресурс «{asset.name}»", mutate)
+
+    def update_asset(self, asset_id: str, data: bytes | None = None, **meta) -> bool:
+        import hashlib
+
+        def mutate(doc):
+            a = doc.asset(asset_id)
+            if a is None:
+                raise ModelError("Ресурс не найден")
+            d = a.to_dict()
+            d.update(meta)
+            if data is not None:
+                d["sha256"], d["size"] = hashlib.sha256(data).hexdigest(), len(data)
+                doc.asset_data[asset_id] = data
+            doc.assets[doc.assets.index(a)] = Asset.from_dict(d)
+            comp_engine.sync_instances(doc, self.engine)
+        return self.patch("Изменить ресурс", mutate)
+
+    def asset_usage(self, asset_id: str) -> int:
+        if not self.doc:
+            return 0
+        roots = [n for s in self.doc.screens for n in s.nodes] + [c.root for c in self.doc.components]
+        n_nodes = sum(1 for n, _, _ in tree.walk(roots) if n.asset_id == asset_id)
+        a = self.doc.asset(asset_id)
+        if a is not None and a.kind == "font":
+            n_nodes += sum(1 for n, _, _ in tree.walk(roots) if n.type == "text" and n.font_family == a.family)
+        return n_nodes
+
+    def remove_asset(self, asset_id: str) -> bool:
+        if self.asset_usage(asset_id):
+            self.message.emit("Ресурс используется — удалить можно только неиспользуемый ресурс")
+            return False
+
+        def mutate(doc):
+            doc.assets.remove(doc.asset(asset_id))
+            doc.asset_data.pop(asset_id, None)
+        return self.patch("Удалить ресурс", mutate)
+
+    def insert_image(self, asset_id: str, size: tuple[float, float] | None = None) -> Node | None:
+        s = self.screen()
+        a = self.doc.asset(asset_id) if self.doc else None
+        if not s or a is None:
+            return None
+        w, h = size or (96, 96)
+        n = Node(type="image", name=a.name, asset_id=a.id, fill="", x=round((s.width - w) / 2),
+                 y=round((s.height - h) / 2), w=w, h=h)
+        if self.execute(AddNodes(s.id, [n], self._container_id(), label=f"Вставить: {a.name}")):
+            self.select([n.id])
+            return n
+        return None
+
+    def add_vector(self, points: list[tuple[float, float]], closed: bool) -> Node | None:
+        from app.core.document import pathdata
+        s = self.screen()
+        if not s or len(points) < 2:
+            return None
+        xs, ys = [p[0] for p in points], [p[1] for p in points]
+        x, y = min(xs), min(ys)
+        w, h = max(max(xs) - x, 0.01), max(max(ys) - y, 0.01)
+        segs = [("M", points[0][0] - x, points[0][1] - y)] + [("L", px - x, py - y) for px, py in points[1:]]
+        if closed:
+            segs.append(("Z",))
+        n = Node(type="vector", name="Контур", x=x, y=y, w=w, h=h, vb_w=w, vb_h=h,
+                 path=pathdata.to_string(segs), fill="#9A9A9A" if closed else "",
+                 stroke="#F2F2F2" if not closed else "", stroke_width=0 if closed else 2.0)
+        if self.execute(AddNodes(s.id, [n], self._container_id(), label="Нарисовать контур")):
+            self.select([n.id])
+            return n
+        return None
+
+    # ---------- стили текста и цвета ----------
+    def save_text_style(self, style: TextStyle) -> bool:
+        data = style.to_dict()
+
+        def mutate(doc):
+            st = TextStyle.from_dict(data)
+            old = doc.text_style(st.id)
+            if old is None:
+                doc.text_styles.append(st)
+            else:
+                doc.text_styles[doc.text_styles.index(old)] = st
+            comp_engine.apply_text_style(doc, st.id, self.engine)
+        return self.patch(f"Стиль текста «{style.name}»", mutate)
+
+    def delete_text_style(self, style_id: str) -> bool:
+        def mutate(doc):
+            st = doc.text_style(style_id)
+            doc.text_styles.remove(st)
+            roots = [n for s in doc.screens for n in s.nodes] + [c.root for c in doc.components]
+            for n, _, _ in tree.walk(roots):
+                if n.text_style == style_id:
+                    n.text_style = ""  # тексты сохраняют свои свойства, связь со стилем снимается
+            comp_engine.sync_instances(doc, self.engine)
+        return self.patch("Удалить стиль текста", mutate)
+
+    def apply_text_style_to_selection(self, style_id: str) -> bool:
+        st = self.doc.text_style(style_id) if self.doc else None
+        texts = [n for n in self.selected_leaves() if n.type == "text"] + [
+            n for sel in self.selected_nodes() for n in tree.descendants(sel) if n.type == "text" and sel.is_frame]
+        if st is None or not texts:
+            return False
+        props = {"text_style": st.id, "font_family": st.font_family, "font_size": st.font_size,
+                 "font_weight": st.font_weight}
+        if st.text_color:
+            props["text_color"] = st.text_color
+        return self.set_props({n.id: dict(props) for n in texts}, f"Применить стиль «{st.name}»")
+
+    def save_color(self, token: ColorToken) -> bool:
+        data = token.to_dict()
+
+        def mutate(doc):
+            t = ColorToken.from_dict(data)
+            old = next((c for c in doc.colors if c.id == t.id), None)
+            if old is None:
+                doc.colors.append(t)
+            else:
+                doc.colors[doc.colors.index(old)] = t
+        return self.patch(f"Цвет «{token.name}»", mutate)
+
+    def delete_color(self, token_id: str) -> bool:
+        return self.patch("Удалить цвет", lambda doc: doc.colors.remove(
+            next(c for c in doc.colors if c.id == token_id)))
+
+    def apply_color(self, value: str, prop: str = "fill") -> bool:
+        nodes = self.selected_leaves()
+        if prop == "text_color":
+            nodes = [n for n in nodes if n.type == "text"] + [
+                d for sel in self.selected_nodes() for d in tree.descendants(sel) if d.type == "text" and sel.is_frame]
+        return bool(nodes) and self.set_props({n.id: {prop: value} for n in nodes}, "Применить цвет")
 
     def insert_component(self, kind: str) -> Node | None:
         s = self.screen()

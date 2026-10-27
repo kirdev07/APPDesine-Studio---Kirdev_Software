@@ -69,6 +69,78 @@ def _demo_screen(ed) -> None:
     ed.select(ids[:2])
 
 
+ICON_SVG = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 12 L12 4 L20 12 L17 12 '
+            b'L17 20 L7 20 L7 12 Z" fill="#F2F2F2"/><rect x="10" y="14" width="4" height="6" fill="#2F7BFF"/>'
+            b'<script>alert(1)</script></svg>')
+
+
+def _stage4(win, ed, app, out):
+    import hashlib
+
+    from app.core.document.model import Asset, ColorToken, TextStyle
+    from app.engines.assets.svg import sanitize
+    from app.ui.shell.main_window import PAGE_COLORS, PAGE_FONTS, PAGE_ICONS, PAGE_PROJECT, PAGE_RESOURCES
+    ed.set_screen(ed.doc.screens[0].id)
+    clean, _ = sanitize(ICON_SVG)
+    icon = Asset(kind="icon", name="Дом", ext="svg", sha256=hashlib.sha256(clean).hexdigest(), size=len(clean),
+                 license="MIT", source="собственная отрисовка", redistribution="allowed")
+    ed.add_asset(icon, clean)
+    ed.save_text_style(TextStyle(name="Кнопка", font_family="Segoe UI", font_size=42, font_weight=600,
+                                 text_color="#FFFFFF", id="style_btn"))
+    ed.save_color(ColorToken(name="Акцент", value="#2F7BFF"))
+    ed.save_color(ColorToken(name="Поверхность", value="#141414"))
+    btn = ed.insert_component("m3_button_filled")
+    ed.select([], entered_group=btn.id)
+    ed.insert_image(icon.id, (54, 54))
+    ed.reorder("bottom")
+    ed.select([btn.children[0].id] if btn.children else [])
+    ed.select_any([n.id for n in tree_find(ed, btn.id).children if n.type == "text"])
+    ed.apply_text_style_to_selection("style_btn")
+    ed.select([btn.id], entered_group=None)
+    cid = ed.create_component("Кнопка с иконкой", "Кнопки")
+    inst = ed.selection[0]
+    ed.set_props({inst: {"x": 64, "y": 1950}})
+    second = ed.insert_instance(cid, (64, 1750))
+    label = next(n for n in second.children if n.type == "text")
+    ed.set_props({label.id: {"text": "Оформить заказ"}})
+    win.show_page(PAGE_PROJECT)
+    ed.select([second.id])
+    win.project_page.canvas.fit()
+    app.processEvents()
+    win.grab().save(str(out / "stage4_01_instances_overrides.png"))
+    win.open_in_builder(cid)
+    b = win.builder
+    b.preset_states()
+    b.save()
+    b.canvas.fit()
+    app.processEvents()
+    win.grab().save(str(out / "stage4_02_component_builder.png"))
+    b.tabs.setCurrentIndex(1)
+    b.state_list.setCurrentRow(1)
+    app.processEvents()
+    win.grab().save(str(out / "stage4_03_builder_states.png"))
+    b.tabs.setCurrentIndex(0)
+    win.show_page(PAGE_ICONS)
+    win.icons.refresh_list()
+    win.icons.open_icon(icon.id)
+    win.icons.editor.add_vector([(3, 21), (21, 21)], closed=False)
+    app.processEvents()
+    win.grab().save(str(out / "stage4_04_svg_editor.png"))
+    win.icons.save_icon()
+    win.show_page(PAGE_FONTS)
+    win.fonts_page.show_family("Segoe UI")
+    win.fonts_page.style_list.setCurrentRow(0)
+    app.processEvents()
+    win.grab().save(str(out / "stage4_05_typography.png"))
+    win.show_page(PAGE_RESOURCES)
+    app.processEvents()
+    win.grab().save(str(out / "stage4_06_resources.png"))
+    win.show_page(PAGE_COLORS)
+    app.processEvents()
+    win.grab().save(str(out / "stage4_07_colors.png"))
+    win.show_page(PAGE_PROJECT)
+
+
 def tree_find(ed, node_id):
     from app.core.document import tree
     return tree.find(ed.screen(), node_id)[0]
@@ -219,6 +291,9 @@ def main(out_dir: str) -> int:
         ws.canvas.fit()
         app.processEvents()
         win.grab().save(str(out / "stage3_04_windows_components.png"))
+
+        # ---- этап 4: компоненты, SVG, типографика
+        _stage4(win, ed, app, out)
         win.save_project()
         win.show_page(PAGE_SETTINGS)
         app.processEvents()

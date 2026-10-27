@@ -3,7 +3,7 @@
 Локальная студия дизайна интерфейсов Android (Jetpack Compose / Material 3) и Windows (Python / PySide6).
 Спецификация — файлы `00_START_HERE.md` … `08_OPEN_DECISIONS.md` и `assets/mockups/`.
 
-**Состояние:** этапы 1–3 из 8 (Foundation & Project Hub, Fusion Workspace, Auto Layout и базовые компоненты).
+**Состояние:** этапы 1–4 из 8 (Foundation & Project Hub, Fusion Workspace, Auto Layout, компоненты/SVG/типографика).
 
 ## Запуск (Windows 10/11, Python 3.12)
 
@@ -20,7 +20,8 @@ py -3.12 -m venv .venv
 
 - Проекты: `Документы\App Design Studio\*.adsproj` (папку можно сменить в настройках).
 - Служебные данные: `%LOCALAPPDATA%\AppDesignStudio` — журнал, резервные копии, снимки восстановления,
-  индекс проектов (SQLite, его можно удалить — он перестроится при открытии проектов), `settings.ini`.
+  индекс проектов (SQLite, его можно удалить — он перестроится при открытии проектов), `settings.ini`,
+  личная библиотека компонентов (`library\*.adscomp`) и пользовательские шаблоны (`templates\*.adsproj`).
 - Переменная `ADS_DATA_DIR` переопределяет папку служебных данных (для тестов).
 
 Программа работает офлайн: без учётной записи, облака, телеметрии и ключей API.
@@ -32,9 +33,17 @@ app/core/document     модель проекта и дерево узлов (б
 app/core/commands     команды изменения документа и стек undo/redo (без Qt)
 app/core/persistence  контейнер .adsproj, миграции, восстановление
 app/engines/layout    движок раскладки: Auto Layout, привязки, диагностика (без Qt)
+app/engines/components мастер-компоненты, экземпляры, состояния, личная библиотека (без Qt)
+app/engines/assets    SVG: санитизация, импорт в векторы, экспорт (без Qt)
 app/core/project      индекс SQLite и операции над проектами
 app/libraries         профили устройств, шаблоны проектов, базовые компоненты Android/Windows
 app/ui                тема Fusion AMOLED, оболочка, Project Hub, мастер, настройки
 app/ui/workspace      холст, слои, инспектор, полоса экранов
+app/ui/studio         Component Builder, SVG-редактор, типографика, цвета, ресурсы
 tests/                pytest + pytest-qt
 ```
+
+## Лицензия
+
+© 2026 Kirdev Software. Все права защищены — см. `LICENSE`. Использование без письменного разрешения
+правообладателя запрещено. Сторонние компоненты (PySide6/Qt, LGPLv3) — см. `THIRD_PARTY_NOTICES`.

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from app import APP_NAME, APP_VERSION
+from app import APP_NAME, APP_VERSION, COPYRIGHT
 from app.context import AppContext
 from app.libraries.catalog import DEVICES
 from app.ui.widgets import label, panel
@@ -140,7 +140,9 @@ class SettingsPage(QWidget):
         w, lay, _ = self._section(APP_NAME, f"Версия {APP_VERSION}")
         lay.addWidget(label("Локальная студия дизайна интерфейсов для Android (Jetpack Compose / Material 3) и "
                             "Windows (Python / PySide6) с передачей структурированного пакета в Claude Code.\n\n"
-                            "Это не компилятор Android и не гарантирует точную отрисовку Compose.", wrap=True))
+                            "Это не компилятор Android и не гарантирует точную отрисовку Compose.\n\n"
+                            f"{COPYRIGHT}\nИспользование без письменного разрешения правообладателя запрещено. "
+                            "Использует PySide6 / Qt (LGPLv3) — см. THIRD_PARTY_NOTICES.", wrap=True))
         lay.addStretch()
         return w
 

@@ -73,7 +73,7 @@ class ResponsiveDialog(QDialog):
             self.results.append((name, w, h, clone, diags))
             pic = QLabel()
             pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            pic.setPixmap(render_thumbnail(clone, editor.artboard_color(), 290, 420))
+            pic.setPixmap(render_thumbnail(clone, editor.artboard_color(), 290, 420, editor.doc))
             grid.addWidget(label(f"{name}\n{w} × {h}", "H2"), 0, col)
             grid.addWidget(pic, 1, col)
             lst = QListWidget()

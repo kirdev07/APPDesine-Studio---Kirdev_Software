@@ -35,7 +35,8 @@ STRUCTURE_INFO = {
 
 
 class NewProjectWizard(QDialog):
-    def __init__(self, default_location: Path, template_id: str = "", parent: QWidget | None = None):
+    def __init__(self, default_location: Path, template_id: str = "", parent: QWidget | None = None,
+                 user_templates: list | None = None):
         super().__init__(parent)
         self.setWindowTitle("Создание нового проекта")
         self.resize(960, 640)
@@ -43,6 +44,8 @@ class NewProjectWizard(QDialog):
         self.open_after = True
         self._platforms: tuple[str, ...] = (PLATFORM_ANDROID,)
         self._template_id = template_id
+        # пользовательские шаблоны: id вида «user:<id>» → UserTemplate (копия сохранённого проекта)
+        self._user = {f"user:{t.id}": t for t in user_templates or []}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
@@ -84,7 +87,13 @@ class NewProjectWizard(QDialog):
         root.addLayout(nav)
 
         self.location.setText(str(default_location))
-        if template_id:
+        if template_id in self._user:
+            plats = tuple(self._user[template_id].platforms)
+            idx = next((i for i, c in enumerate(PLATFORM_CHOICES) if set(c[0]) == set(plats)), 0)
+            self.platform_group.button(idx).setChecked(True)
+            self._platforms = PLATFORM_CHOICES[idx][0]
+            self._sync_devices(reset=True)
+        elif template_id:
             self._apply_template(template(template_id))
         self.go(0)
 
@@ -127,7 +136,8 @@ class NewProjectWizard(QDialog):
     def _page_template(self) -> QWidget:
         w, lay = panel()
         lay.addWidget(label("2. Выбор шаблона", "H2"))
-        lay.addWidget(label("Начните с пустого проекта. Готовые UI-шаблоны и «Мои шаблоны» — этап 4.", "Muted"))
+        lay.addWidget(label("Пустой проект или «Мой шаблон» — проект, сохранённый как шаблон "
+                            "(Проект → Сохранить как шаблон).", "Muted"))
         self.template_list = QListWidget()
         self.template_list.setObjectName("Cards")
         self.template_list.setViewMode(QListWidget.ViewMode.IconMode)
@@ -306,8 +316,16 @@ class NewProjectWizard(QDialog):
             item = QListWidgetItem(pixmap_icon(thumbnail(list(t.platforms), t.name)), f"{t.name}\n{t.description}")
             item.setData(Qt.ItemDataRole.UserRole, t.id)
             self.template_list.addItem(item)
+        for uid, ut in self._user.items():
+            if set(ut.platforms) != set(self._platforms):
+                continue
+            item = QListWidgetItem(pixmap_icon(thumbnail(list(ut.platforms), ut.title)),
+                                   f"{ut.title}\nМой шаблон · экранов: {ut.screens}")
+            item.setData(Qt.ItemDataRole.UserRole, uid)
+            self.template_list.addItem(item)
+            options.append(ut)
         self.template_list.blockSignals(False)
-        ids = [t.id for t in options]
+        ids = [self.template_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.template_list.count())]
         if self._template_id not in ids:
             self._template_id = ids[0] if ids else ""
         if ids:
@@ -319,7 +337,8 @@ class NewProjectWizard(QDialog):
             self._sync_devices(reset=True)
 
     def _sync_devices(self, reset: bool = False) -> None:
-        defaults = set(template(self._template_id).default_devices) if self._template_id else set()
+        defaults = (set(template(self._template_id).default_devices)
+                    if self._template_id and self._template_id not in self._user else set())
         if not defaults:
             ts = templates_for(self._platforms)
             defaults = set(ts[0].default_devices) if ts else set()
@@ -352,12 +371,17 @@ class NewProjectWizard(QDialog):
     def _update_summary(self) -> None:
         target = self._target_path()
         rows = [("Платформы", platforms_text(list(self._platforms))),
-                ("Шаблон", template(self._template_id).name if self._template_id else "—"),
+                ("Шаблон", self._template_name()),
                 ("Экранов", str(len(self._selected_devices()))),
                 ("Файл", str(target) if target else "укажите название")]
         self.summary.setText("<table>" + "".join(
             f"<tr><td style='padding-right:12px'>{k}</td><td style='color:#F2F2F2'>{v}</td></tr>" for k, v in rows)
             + "</table>")
+
+    def _template_name(self) -> str:
+        if self._template_id in self._user:
+            return f"{self._user[self._template_id].title} (мой шаблон — экраны берутся из шаблона)"
+        return template(self._template_id).name if self._template_id else "—"
 
     def _finish(self) -> None:
         try:
@@ -387,6 +411,9 @@ class NewProjectWizard(QDialog):
                                   font_family=self.font_combo.currentText(),
                                   corner_radius=self.radius_combo.currentData(),
                                   density=self.density_combo.currentData()))
+        if self._template_id in self._user:
+            self.result_spec.template_path = self._user[self._template_id].path
+            self.result_spec.template_id = ""
         self.open_after = self.open_after_cb.isChecked()
         self.accept()
 

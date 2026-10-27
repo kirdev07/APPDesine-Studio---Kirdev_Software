@@ -22,8 +22,15 @@ def _v2_to_v3(raw: dict) -> dict:
     return raw
 
 
+def _v3_to_v4(raw: dict) -> dict:
+    # Схема 4 добавила компоненты, ресурсы, стили текста и цвета — в старых проектах их нет.
+    for key in ("components", "assets", "text_styles", "colors"):
+        raw.setdefault(key, [])
+    return raw
+
+
 # {исходная_версия: функция(raw) -> raw}
-MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2, 2: _v2_to_v3}
+MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4}
 
 
 def migrate(raw: dict, version: int) -> dict:

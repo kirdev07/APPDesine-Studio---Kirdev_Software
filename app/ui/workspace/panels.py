@@ -20,7 +20,8 @@ from app.ui.workspace.canvas import qcolor, render_thumbnail
 from app.ui.workspace.editor import TYPE_NAMES, Editor
 
 ROLE_ID = Qt.ItemDataRole.UserRole
-TYPE_GLYPH = {"rect": "▭", "ellipse": "◯", "text": "T", "group": "▣", "frame": "#"}
+TYPE_GLYPH = {"rect": "▭", "ellipse": "◯", "text": "T", "group": "▣", "frame": "#", "vector": "✎", "image": "▨",
+              "instance": "◈"}
 SIZING = [("fixed", "Фиксированный"), ("fill", "Заполнить"), ("hug", "По содержимому")]
 LAYOUTS = [("none", "Нет (свободно)"), ("vertical", "Вертикально ↓"), ("horizontal", "Горизонтально →"),
            ("grid", "Сетка ▦")]
@@ -63,7 +64,8 @@ class LayersPanel(QWidget):
         self.components.setFixedHeight(170)
         self.components.itemClicked.connect(self._insert_component)
         lay.addWidget(self.components)
-        lay.addWidget(label("Заготовки из фреймов с Auto Layout. Мастер-компоненты — этап 4.", "Muted", wrap=True))
+        lay.addWidget(label("Заготовки из фреймов с Auto Layout. Свои мастер-компоненты — раздел «Компоненты» "
+                            "и «Создать компонент» (Ctrl+Alt+K).", "Muted", wrap=True))
         lay.addWidget(separator())
         head = QHBoxLayout()
         head.addWidget(label("Слои", "H2"))
@@ -265,9 +267,10 @@ def _spin(lo=-100000.0, hi=100000.0, decimals=0, suffix="") -> QDoubleSpinBox:
 
 
 class Inspector(QScrollArea):
-    def __init__(self, editor: Editor, parent=None):
+    def __init__(self, editor: Editor, parent=None, show_document: bool = True):
         super().__init__(parent)
         self.editor = editor
+        self.show_document = show_document  # в изолированных редакторах свойства экрана/проекта скрыты
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         body = QWidget()
@@ -349,6 +352,7 @@ class Inspector(QScrollArea):
         f.addRow(al)
 
         self._build_layout()
+        self._build_extra()
 
         self.sec_style, f = self._section("Заливка и обводка")
         self.fill = ColorField()
@@ -476,10 +480,84 @@ class Inspector(QScrollArea):
         f.addRow("По вертикали", self.cons_v)
         f.addRow(label("Как элемент ведёт себя при изменении размера экрана или фрейма.", "Muted", wrap=True))
 
+    # --- вектор и экземпляр
+    def _build_extra(self) -> None:
+        self.sec_vec, f = self._section("Вектор")
+        self.vec_path = QPlainTextEdit()
+        self.vec_path.setFixedHeight(80)
+        self.vec_path.setToolTip("Данные пути в системе координат viewBox узла (M, L, C, Q, A, Z…)")
+        f.addRow(self.vec_path)
+        row = QHBoxLayout()
+        apply = QPushButton("Применить путь")
+        apply.clicked.connect(self._commit_path)
+        row.addWidget(apply)
+        self.vec_rule = _combo([("nonzero", "Заливка: ненулевая"), ("evenodd", "Заливка: чёт-нечёт")])
+        self.vec_rule.currentIndexChanged.connect(
+            lambda: self._commit_type("vector", "fill_rule", self.vec_rule.currentData(), "Правило заливки"))
+        row.addWidget(self.vec_rule)
+        f.addRow(row)
+        self.vec_info = label("", "Muted")
+        f.addRow(self.vec_info)
+
+        self.sec_inst, f = self._section("Экземпляр компонента")
+        self.inst_info = label("", "Muted", wrap=True)
+        f.addRow(self.inst_info)
+        self.inst_state = QComboBox()
+        self.inst_state.activated.connect(lambda: self.editor.set_instance_state(self.inst_state.currentData()))
+        f.addRow("Состояние", self.inst_state)
+        row = QHBoxLayout()
+        for text, slot in (("Сбросить переопределения", self.editor.reset_overrides_selection),
+                           ("Отсоединить", self.editor.detach_selection)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        f.addRow(row)
+        self.inst_open = QPushButton("Открыть мастер в Component Builder")
+        self.inst_open.clicked.connect(lambda: self.editor.selected_instances() and self.editor.open_component.emit(
+            self.editor.selected_instances()[0].component_id))
+        f.addRow(self.inst_open)
+
+    def _refresh_extra(self, nodes) -> None:
+        vecs = [n for n in self.editor.selected_leaves() if n.type == "vector"]
+        self.sec_vec.setVisible(bool(vecs))
+        if vecs:
+            v = vecs[0]
+            if not self.vec_path.hasFocus():
+                self.vec_path.setPlainText(v.path)
+            self.vec_rule.setCurrentIndex(self.vec_rule.findData(v.fill_rule))
+            self.vec_info.setText(f"viewBox {v.vb_w:g} × {v.vb_h:g}")
+        insts = self.editor.selected_instances()
+        self.sec_inst.setVisible(bool(insts))
+        if insts:
+            inst = insts[0]
+            defn = self.editor.doc.component(inst.component_id)
+            n_over = sum(len(p) for p in inst.overrides.values())
+            self.inst_info.setText(f"Мастер: «{defn.name if defn else 'не найден'}». "
+                                   f"Переопределений: {n_over}. Содержимое меняется только в мастере; "
+                                   f"здесь — текст, цвета, видимость.")
+            self.inst_state.clear()
+            self.inst_state.addItem("По умолчанию", "default")
+            for st in (defn.states if defn else {}):
+                self.inst_state.addItem(st, st)
+            self.inst_state.setCurrentIndex(max(0, self.inst_state.findData(inst.state)))
+
+    def _commit_path(self) -> None:
+        vecs = [n for n in self.editor.selected_leaves() if n.type == "vector"]
+        if vecs and not self.editor.set_props({vecs[0].id: {"path": self.vec_path.toPlainText().strip()}},
+                                              "Изменить путь"):
+            self.refresh()
+
+    def _commit_type(self, node_type: str, prop: str, value, label_: str) -> None:
+        if self._loading:
+            return
+        nodes = [n for n in self.editor.selected_leaves() if n.type == node_type and getattr(n, prop) != value]
+        if nodes:
+            self.editor.set_props({n.id: {prop: value} for n in nodes}, label_)
+
     def _refresh_layout(self, nodes) -> None:
         ed = self.editor
         geo = [n for n in ed.selected_leaves()]
-        frames = [n for n in geo if n.is_frame]
+        frames = [n for n in geo if n.is_frame and not n.is_instance]  # раскладку экземпляра задаёт мастер
         self.sec_al.setVisible(bool(frames))
         if frames:
             f0 = frames[0]
@@ -593,13 +671,14 @@ class Inspector(QScrollArea):
             nodes = ed.selected_nodes()
             leaves = ed.selected_leaves()
             has = bool(nodes)
-            for w in (self.sec_layer, self.sec_geom, self.sec_al, self.sec_size, self.sec_cons):
+            for w in (self.sec_layer, self.sec_geom, self.sec_al, self.sec_size, self.sec_cons, self.sec_vec,
+                      self.sec_inst):
                 w.setVisible(has)
             self.sec_style.setVisible(has)
             texts = [n for n in leaves if n.type == "text"]
             self.sec_text.setVisible(bool(texts))
             for w in (self.sec_screen, self.sec_guides, self.sec_project):
-                w.setVisible(not has and ed.screen() is not None)
+                w.setVisible(not has and ed.screen() is not None and self.show_document)
             if has:
                 n0 = nodes[0]
                 kinds = {TYPE_NAMES[n.type] for n in nodes}
@@ -610,6 +689,7 @@ class Inspector(QScrollArea):
                 self.locked.setChecked(all(n.locked for n in nodes))
                 self._refresh_geometry()
                 self._refresh_layout(nodes)
+                self._refresh_extra(nodes)
                 if leaves:
                     l0 = leaves[0]
                     self.fill.set_value(l0.fill)
@@ -738,7 +818,7 @@ class ScreensStrip(QWidget):
         doc = self.editor.doc
         if doc:
             for s in doc.screens:
-                it = QListWidgetItem(pixmap_icon(render_thumbnail(s, self.editor.artboard_color(), 96, 96)),
+                it = QListWidgetItem(pixmap_icon(render_thumbnail(s, self.editor.artboard_color(), 96, 96, self.editor.doc)),
                                      f"{s.name}\n{s.width}×{s.height}")
                 it.setData(ROLE_ID, s.id)
                 it.setToolTip(s.name)

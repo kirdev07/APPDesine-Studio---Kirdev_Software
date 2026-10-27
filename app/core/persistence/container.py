@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -15,10 +16,14 @@ from pathlib import Path
 from app import APP_VERSION
 from app.core.document.model import (
     SCHEMA_VERSION,
+    Asset,
+    ColorToken,
+    ComponentDef,
     ModelError,
     ProjectDocument,
     ProjectMeta,
     Screen,
+    TextStyle,
 )
 from app.core.persistence.migrations import migrate
 
@@ -125,7 +130,21 @@ def load_project(path: str | os.PathLike, limits: Limits = DEFAULT_LIMITS) -> Pr
                 if not isinstance(sid, str) or not re.fullmatch(r"[0-9a-f]{32}", sid):
                     raise ProjectFormatError(f"Неверный идентификатор экрана: {sid!r}")
                 screens.append(_read_json(zf, f"screens/{sid}.json", limits))
-            raw = migrate({"meta": project, "screens": screens}, version)
+            raw = {"meta": project, "screens": screens}
+            if version >= 4:
+                raw["components"] = []
+                for cid in manifest.get("components", []):
+                    if not isinstance(cid, str) or not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", cid):
+                        raise ProjectFormatError(f"Неверный идентификатор компонента: {cid!r}")
+                    raw["components"].append(_read_json(zf, f"components/{cid}.json", limits))
+                raw["assets"] = _read_json(zf, "assets/assets.json", limits)
+                styles = _read_json(zf, "styles/styles.json", limits)
+                if not isinstance(styles, dict):
+                    raise ProjectFormatError("Файл стилей повреждён")
+                raw["text_styles"] = styles.get("text_styles", [])
+                raw["colors"] = styles.get("colors", [])
+            raw = migrate(raw, version)
+            asset_bytes = _read_assets(zf, raw.get("assets", []), limits)
     except zipfile.BadZipFile:
         raise ProjectFormatError("Файл повреждён или не является ZIP-архивом") from None
     except OSError as exc:
@@ -133,16 +152,44 @@ def load_project(path: str | os.PathLike, limits: Limits = DEFAULT_LIMITS) -> Pr
     except ValueError as exc:
         raise ProjectFormatError(f"Не удалось обновить схему проекта: {exc}") from None
     try:
+        for key in ("components", "assets", "text_styles", "colors"):
+            if not isinstance(raw.get(key, []), list):
+                raise ModelError(f"«{key}» должно быть списком")
         doc = ProjectDocument(
             meta=ProjectMeta.from_dict(raw["meta"]),
             screens=[Screen.from_dict(s) for s in raw["screens"]],
+            components=[ComponentDef.from_dict(c) for c in raw.get("components", [])],
+            assets=[Asset.from_dict(a) for a in raw.get("assets", [])],
+            text_styles=[TextStyle.from_dict(t) for t in raw.get("text_styles", [])],
+            colors=[ColorToken.from_dict(c) for c in raw.get("colors", [])],
         )
         doc.validate()
     except ModelError as exc:
         raise ProjectFormatError(f"Данные проекта повреждены: {exc}") from None
+    # отсутствующие или повреждённые файлы ресурсов не мешают открыть проект — о них предупреждает диагностика
+    for a in doc.assets:
+        data = asset_bytes.get(a.archive_path)
+        if data is not None and hashlib.sha256(data).hexdigest() == a.sha256:
+            doc.asset_data[a.id] = data
+        else:
+            log.warning("Ресурс «%s» отсутствует или повреждён в архиве (%s)", a.name, a.archive_path)
     if manifest.get("project_id") != doc.meta.id:
         raise ProjectFormatError("Манифест не соответствует данным проекта")
     return doc
+
+
+def _read_assets(zf: zipfile.ZipFile, assets: list, limits: Limits) -> dict[str, bytes]:
+    names = set(zf.namelist())
+    out = {}
+    for a in assets if isinstance(assets, list) else []:
+        if not isinstance(a, dict):
+            continue
+        p = f"assets/{a.get('kind')}s/{a.get('sha256')}.{str(a.get('ext', '')).lower()}"
+        if p in names:
+            info = zf.getinfo(p)
+            if info.file_size <= limits.max_entry_size:
+                out[p] = zf.read(info)
+    return out
 
 
 def _dump(obj) -> bytes:
@@ -156,6 +203,8 @@ def write_archive(doc: ProjectDocument, target: Path) -> None:
         "tool_version": APP_VERSION,
         "project_id": doc.meta.id,
         "screens": [s.id for s in doc.screens],
+        "components": [c.id for c in doc.components],
+        "assets": sorted({a.sha256: a.archive_path for a in doc.assets}.values()),
     }
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("manifest.json", _dump(manifest))
@@ -164,6 +213,19 @@ def write_archive(doc: ProjectDocument, target: Path) -> None:
             zf.writestr(d + "/", b"")
         for screen in doc.screens:
             zf.writestr(f"screens/{screen.id}.json", _dump(screen.to_dict()))
+        for comp in doc.components:
+            zf.writestr(f"components/{comp.id}.json", _dump(comp.to_dict()))
+        zf.writestr("styles/styles.json", _dump({"text_styles": [t.to_dict() for t in doc.text_styles],
+                                                 "colors": [c.to_dict() for c in doc.colors]}))
+        zf.writestr("assets/assets.json", _dump([a.to_dict() for a in doc.assets]))
+        written = set()
+        for a in doc.assets:
+            data = doc.asset_data.get(a.id)
+            if data is not None and a.archive_path not in written:
+                # одинаковые файлы (один SHA-256) хранятся один раз
+                zf.writestr(a.archive_path, data, compress_type=zipfile.ZIP_STORED if a.kind == "font"
+                            else zipfile.ZIP_DEFLATED)
+                written.add(a.archive_path)
 
 
 def save_project(doc: ProjectDocument, path: str | os.PathLike, backup_dir: Path | None = None, keep_backups: int = 5) -> Path:

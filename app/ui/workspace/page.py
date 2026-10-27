@@ -13,14 +13,14 @@ from app.core.document.model import ProjectDocument
 from app.ui.widgets import glyph_icon, label, stage_badge
 from app.ui.workspace.canvas import CanvasView
 from app.ui.workspace.editor import (
-    CLIPBOARD_MIME, TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor,
+    CLIPBOARD_MIME, TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_PEN, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor,
 )
 from app.ui.workspace.layout_tools import DiagnosticsPanel, ResponsiveDialog
 from app.ui.workspace.panels import Inspector, LayersPanel, ScreensStrip
 
 TOOLS = [(TOOL_SELECT, "➤", "Выделение", "V"), (TOOL_HAND, "✋", "Рука (или пробел)", "H"),
          (TOOL_FRAME, "#", "Фрейм", "F"), (TOOL_RECT, "▭", "Прямоугольник", "R"), (TOOL_ELLIPSE, "◯", "Эллипс", "O"),
-         (TOOL_TEXT, "T", "Текст", "T")]
+         (TOOL_TEXT, "T", "Текст", "T"), (TOOL_PEN, "✎", "Перо (щелчки — точки, двойной щелчок — готово)", "P")]
 ZOOMS = [25, 50, 75, 100, 150, 200, 400, 800]
 
 
@@ -147,7 +147,11 @@ class WorkspacePage(QMainWindow):
                                      "Ctrl+Shift+A")
         self.a_unwrap = self._action("Убрать фрейм / разгруппировать", ed.ungroup_selection)
         self.a_responsive = self._action("Проверка адаптивности…", self.show_responsive, "Ctrl+Alt+R")
-        self.tools_actions = [self.a_wrap_v, self.a_wrap_h, self.a_unwrap, None, self.a_responsive]
+        self.a_make_component = self._action("Создать компонент…", self.make_component, "Ctrl+Alt+K")
+        self.a_detach = self._action("Отсоединить экземпляр", ed.detach_selection)
+        self.a_reset_over = self._action("Сбросить переопределения", ed.reset_overrides_selection)
+        self.tools_actions = [self.a_wrap_v, self.a_wrap_h, self.a_unwrap, None, self.a_make_component,
+                              self.a_detach, self.a_reset_over, None, self.a_responsive]
 
     def _build_toolbar(self) -> QToolBar:
         bar = QToolBar("Инструменты", self)
@@ -239,6 +243,10 @@ class WorkspacePage(QMainWindow):
         self.a_wrap_v.setEnabled(sel)
         self.a_wrap_h.setEnabled(sel)
         self.a_responsive.setEnabled(has_doc)
+        self.a_make_component.setEnabled(sel)
+        has_inst = bool(ed.selected_instances()) if has_doc else False
+        self.a_detach.setEnabled(has_inst)
+        self.a_reset_over.setEnabled(has_inst)
         self.a_paste.setEnabled(has_doc)
         self.a_select_all.setEnabled(has_doc)
 
@@ -289,6 +297,16 @@ class WorkspacePage(QMainWindow):
             self.canvas.set_zoom(float(t) / 100)
         except ValueError:
             self.zoom_combo.setEditText(f"{round(self.canvas.zoom() * 100)}%")
+
+    def make_component(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        nodes = self.editor.selected_nodes()
+        if not nodes:
+            return
+        name, ok = QInputDialog.getText(self, "Создать компонент", "Имя компонента:",
+                                        text=nodes[0].name if len(nodes) == 1 else "Компонент")
+        if ok and name.strip():
+            self.editor.create_component(name.strip())
 
     def show_responsive(self) -> None:
         if self.editor.screen() is not None:

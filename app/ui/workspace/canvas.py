@@ -11,7 +11,9 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QInp
 from app.core.document import tree
 from app.core.document.model import Node, Screen
 from app.ui.themes.fusion_amoled import TOKENS
-from app.ui.workspace.editor import TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor
+from app.ui.workspace.editor import (
+    TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_PEN, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor,
+)
 
 ACCENT = QColor(TOKENS["accent"])
 HANDLE = 8  # px на экране
@@ -36,7 +38,80 @@ def qcolor(value: str) -> QColor:
     return QColor(r, g, b, a)
 
 
-def paint_node(p: QPainter, n: Node) -> None:
+_PATH_CACHE: dict[str, QPainterPath] = {}
+_RENDER_CACHE: dict[tuple[str, int], object] = {}
+MAX_IMAGE_SIDE = 8192
+
+
+def vector_path(n: Node) -> QPainterPath:
+    from app.core.document import pathdata
+    base = _PATH_CACHE.get(n.path)
+    if base is None:
+        base = QPainterPath()
+        try:
+            for s in pathdata.parse(n.path) if n.path else []:
+                if s[0] == "M":
+                    base.moveTo(s[1], s[2])
+                elif s[0] == "L":
+                    base.lineTo(s[1], s[2])
+                elif s[0] == "C":
+                    base.cubicTo(*s[1:])
+                else:
+                    base.closeSubpath()
+        except pathdata.PathError:
+            pass
+        if len(_PATH_CACHE) > 5000:
+            _PATH_CACHE.clear()
+        _PATH_CACHE[n.path] = base
+    path = QTransform().translate(n.x, n.y).scale(n.w / n.vb_w if n.vb_w else 1,
+                                                  n.h / n.vb_h if n.vb_h else 1).map(base)
+    path.setFillRule(Qt.FillRule.OddEvenFill if n.fill_rule == "evenodd" else Qt.FillRule.WindingFill)
+    return path
+
+
+def _renderer(asset, data: bytes):
+    """Рендерер ресурса: QSvgRenderer для SVG (уже очищенного при импорте) или QImage для растра."""
+    key = (asset.sha256, len(data))
+    r = _RENDER_CACHE.get(key)
+    if r is None:
+        from PySide6.QtCore import QByteArray
+        if asset.ext == "svg":
+            from PySide6.QtSvg import QSvgRenderer
+            r = QSvgRenderer(QByteArray(data))
+        else:
+            from PySide6.QtGui import QImageReader
+            from PySide6.QtCore import QBuffer, QIODevice
+            buf = QBuffer()
+            buf.setData(QByteArray(data))
+            buf.open(QIODevice.OpenModeFlag.ReadOnly)
+            reader = QImageReader(buf)
+            size = reader.size()
+            if size.width() > MAX_IMAGE_SIDE or size.height() > MAX_IMAGE_SIDE:
+                r = False  # защита от «бомб» распаковки изображения
+            else:
+                r = reader.read()
+        if len(_RENDER_CACHE) > 500:
+            _RENDER_CACHE.clear()
+        _RENDER_CACHE[key] = r
+    return r
+
+
+def _paint_missing(p: QPainter, rect: QRectF, text: str) -> None:
+    pen = QPen(QColor(TOKENS["danger"]), 1, Qt.PenStyle.DashLine)
+    pen.setCosmetic(True)
+    p.setPen(pen)
+    p.setBrush(QColor(229, 72, 77, 30))
+    p.drawRect(rect)
+    p.drawLine(rect.topLeft(), rect.bottomRight())
+    p.drawLine(rect.topRight(), rect.bottomLeft())
+    if rect.width() > 60:
+        f = QFont(TOKENS["font"])
+        f.setPixelSize(max(8, min(14, int(rect.height() / 6))))
+        p.setFont(f)
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+
+def paint_node(p: QPainter, n: Node, assets=None) -> None:
     rect = QRectF(n.x, n.y, n.w, n.h)
     p.save()
     p.setOpacity(p.opacity() * n.opacity)
@@ -47,7 +122,23 @@ def paint_node(p: QPainter, n: Node) -> None:
         p.setPen(pen)
     else:
         p.setPen(Qt.PenStyle.NoPen)
-    if n.type == "ellipse":
+    if n.type == "vector":
+        p.drawPath(vector_path(n))
+    elif n.type == "image":
+        found = assets(n.asset_id) if assets and n.asset_id else None
+        if found is None:
+            _paint_missing(p, rect, "нет ресурса")
+        else:
+            asset, data = found
+            r = _renderer(asset, data)
+            if r is False or r is None or (hasattr(r, "isNull") and r.isNull()) or \
+                    (hasattr(r, "isValid") and not r.isValid()):
+                _paint_missing(p, rect, "не читается")
+            elif asset.ext == "svg":
+                r.render(p, rect)
+            else:
+                p.drawImage(rect, r)
+    elif n.type == "ellipse":
         p.drawEllipse(rect)
     else:
         r = min(n.radius, n.w / 2, n.h / 2)
@@ -66,9 +157,10 @@ def paint_node(p: QPainter, n: Node) -> None:
 
 
 class NodeItem(QGraphicsItem):
-    def __init__(self, node: Node):
+    def __init__(self, node: Node, assets=None):
         super().__init__()
         self.node = node
+        self.assets = assets
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, False)
 
     def boundingRect(self) -> QRectF:
@@ -89,7 +181,7 @@ class NodeItem(QGraphicsItem):
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        paint_node(painter, self.node)
+        paint_node(painter, self.node, self.assets)
 
 
 class ArtboardItem(QGraphicsItem):
@@ -108,7 +200,19 @@ class ArtboardItem(QGraphicsItem):
         painter.drawRect(QRectF(0, 0, self.screen.width, self.screen.height))
 
 
-def build_scene(scene: QGraphicsScene, screen: Screen, artboard_color: str) -> dict[str, NodeItem]:
+def asset_lookup(doc):
+    """Функция id → (Asset, bytes) или None для отрисовки изображений документа."""
+    if doc is None:
+        return None
+
+    def lookup(asset_id):
+        a = doc.asset(asset_id)
+        data = doc.asset_data.get(asset_id) if a else None
+        return (a, data) if data is not None else None
+    return lookup
+
+
+def build_scene(scene: QGraphicsScene, screen: Screen, artboard_color: str, assets=None) -> dict[str, NodeItem]:
     scene.clear()
     scene.addItem(ArtboardItem(screen, artboard_color))
     items: dict[str, NodeItem] = {}
@@ -119,7 +223,7 @@ def build_scene(scene: QGraphicsScene, screen: Screen, artboard_color: str) -> d
             if n.is_group:
                 rec(n.children, v, parent_item)
             elif v:
-                item = NodeItem(n)
+                item = NodeItem(n, assets)
                 if parent_item is not None:
                     item.setParentItem(parent_item)
                 else:
@@ -257,6 +361,18 @@ class OverlayItem(QGraphicsItem):
             c.setAlpha(40)
             p.setBrush(c)
             p.drawRect(view.band_rect)
+        if view.pen_points:
+            p.setPen(self._pen(ACCENT, 1.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            pts = [QPointF(x, y) for x, y in view.pen_points]
+            if view.pen_hover:
+                pts.append(QPointF(*view.pen_hover))
+            for a, b in zip(pts, pts[1:]):
+                p.drawLine(a, b)
+            hs = 6 / scale
+            p.setBrush(QColor("#FFFFFF"))
+            for x, y in view.pen_points:
+                p.drawRect(QRectF(x - hs / 2, y - hs / 2, hs, hs))
         if view.create_rect is not None:
             p.setPen(self._pen(ACCENT, 1, Qt.PenStyle.DashLine))
             p.setBrush(Qt.BrushStyle.NoBrush)
@@ -299,6 +415,8 @@ class CanvasView(QGraphicsView):
         self._orig_bbox = None
         self._handle = -1
         self._reorder_id: str | None = None
+        self.pen_points: list[tuple[float, float]] = []
+        self.pen_hover: tuple[float, float] | None = None
         self._fitted_screen: str | None = None
 
         editor.document_changed.connect(self.rebuild)
@@ -314,7 +432,7 @@ class CanvasView(QGraphicsView):
             self.scene().clear()
             self.items_by_id, self.overlay = {}, None
             return
-        self.items_by_id = build_scene(self.scene(), s, self.editor.artboard_color())
+        self.items_by_id = build_scene(self.scene(), s, self.editor.artboard_color(), asset_lookup(self.editor.doc))
         self.overlay = OverlayItem(self)
         self.scene().addItem(self.overlay)
         margin = max(s.width, s.height) * 4 + 2000
@@ -376,7 +494,7 @@ class CanvasView(QGraphicsView):
     # ---------- ввод ----------
     def _tool_cursor(self):
         return {TOOL_HAND: Qt.CursorShape.OpenHandCursor, TOOL_RECT: Qt.CursorShape.CrossCursor,
-                TOOL_ELLIPSE: Qt.CursorShape.CrossCursor, TOOL_FRAME: Qt.CursorShape.CrossCursor, TOOL_TEXT: Qt.CursorShape.IBeamCursor,
+                TOOL_ELLIPSE: Qt.CursorShape.CrossCursor, TOOL_FRAME: Qt.CursorShape.CrossCursor, TOOL_PEN: Qt.CursorShape.CrossCursor, TOOL_TEXT: Qt.CursorShape.IBeamCursor,
                 }.get(self.editor.tool, Qt.CursorShape.ArrowCursor)
 
     def _scene_pos(self, event) -> QPointF:
@@ -424,6 +542,15 @@ class CanvasView(QGraphicsView):
         if event.button() != Qt.MouseButton.LeftButton or not ed.screen():
             return super().mousePressEvent(event)
         self._start = p
+        if ed.tool == TOOL_PEN:
+            q = self._snap_point(p)
+            pts = self.pen_points
+            if len(pts) >= 3 and math.hypot(q.x() - pts[0][0], q.y() - pts[0][1]) * self.zoom() <= 8:
+                self.finish_pen(closed=True)  # щелчок по первой точке замыкает контур
+            else:
+                pts.append((q.x(), q.y()))
+                self._refresh_overlay()
+            return
         if ed.tool in (TOOL_RECT, TOOL_ELLIPSE, TOOL_TEXT, TOOL_FRAME):
             self._mode = "create"
             self._start = self._snap_point(p)
@@ -501,6 +628,9 @@ class CanvasView(QGraphicsView):
             self.band_rect = QRectF(self._start, p).normalized()
             self._refresh_overlay()
             return
+        if ed.tool == TOOL_PEN and self.pen_points:
+            self.pen_hover = (p.x(), p.y())
+            self._refresh_overlay()
         if self._mode == "create":
             q = self._snap_point(p)
             self.create_rect = QRectF(self._start, q).normalized()
@@ -623,8 +753,18 @@ class CanvasView(QGraphicsView):
         self._refresh_overlay()
         del p
 
+    def finish_pen(self, closed: bool = False) -> None:
+        pts, self.pen_points, self.pen_hover = self.pen_points, [], None
+        pts = [pt for i, pt in enumerate(pts) if i == 0 or pt != pts[i - 1]]  # двойной клик даёт повтор точки
+        if len(pts) >= 2:
+            self.editor.add_vector(pts, closed)
+        self._refresh_overlay()
+
     def mouseDoubleClickEvent(self, event):
         ed = self.editor
+        if ed.tool == TOOL_PEN:
+            self.finish_pen(closed=False)
+            return
         if event.button() != Qt.MouseButton.LeftButton or ed.tool != TOOL_SELECT:
             return
         p = self._scene_pos(event)
@@ -632,6 +772,9 @@ class CanvasView(QGraphicsView):
         if not hit:
             return
         node = tree.node_map(ed.screen())[hit]
+        if node.is_instance and ed.isolate_instances:
+            ed.open_component.emit(node.component_id)  # Component Builder: изолировать вложенный компонент
+            return
         if node.is_container:
             ed.select([], entered_group=node.id)
             inner = ed.hit(p.x(), p.y())
@@ -666,6 +809,14 @@ class CanvasView(QGraphicsView):
         if key in arrows and ed.selection:
             ed.nudge(*arrows[key])
             return
+        if ed.tool == TOOL_PEN and self.pen_points and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter,
+                                                               Qt.Key.Key_Escape):
+            if key == Qt.Key.Key_Escape:
+                self.pen_points, self.pen_hover = [], None
+                self._refresh_overlay()
+            else:
+                self.finish_pen(closed=False)
+            return
         if key == Qt.Key.Key_Escape:
             if ed.selection:
                 ed.select([])
@@ -695,12 +846,12 @@ class CanvasView(QGraphicsView):
         super().leaveEvent(event)
 
 
-def render_thumbnail(screen: Screen, color: str, w: int, h: int):
+def render_thumbnail(screen: Screen, color: str, w: int, h: int, doc=None, bg: str | None = None):
     from PySide6.QtGui import QPixmap
     pm = QPixmap(w, h)
-    pm.fill(QColor(TOKENS["surface_2"]))
+    pm.fill(QColor(bg or TOKENS["surface_2"]))
     scene = QGraphicsScene()
-    build_scene(scene, screen, color)
+    build_scene(scene, screen, color, asset_lookup(doc))
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     scale = min((w - 8) / screen.width, (h - 8) / screen.height)

@@ -49,6 +49,7 @@ class NewProjectSpec:
     safe_areas: bool = True
     tags: list[str] = field(default_factory=list)
     appearance: Appearance = field(default_factory=Appearance)
+    template_path: Path | None = None  # пользовательский шаблон: проект создаётся как его копия
 
 
 def build_document(spec: NewProjectSpec) -> ProjectDocument:
@@ -85,7 +86,14 @@ class ProjectService:
         path = Path(spec.location) / f"{name}{EXTENSION}"
         if path.exists():
             raise ProjectError(f"Файл уже существует: {path}")
-        doc = build_document(spec)
+        if spec.template_path is not None:
+            from app.core.project.templates import fresh_copy
+            doc = fresh_copy(load_project(spec.template_path), spec.title.strip())
+            doc.meta.tags = list(spec.tags)
+            if spec.description:
+                doc.meta.description = spec.description
+        else:
+            doc = build_document(spec)
         try:
             save_project(doc, path)
         except OSError as exc:
