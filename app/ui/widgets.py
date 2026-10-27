@@ -97,7 +97,8 @@ def thumbnail(platforms: list[str], title: str, w: int = 200, h: int = 120, miss
 
 # Глифы системного шрифта значков Windows (Segoe Fluent Icons / Segoe MDL2 Assets). Шрифт не поставляется
 # с программой — используется установленный в системе; если его нет, рисуется первая буква подписи.
-GLYPHS = {
+GLYPHS_EXTRA = {"view": "", "hide": "", "lock": "", "unlock": ""}
+GLYPHS = {**GLYPHS_EXTRA,
     "projects": "", "project": "", "components": "", "icons": "", "fonts": "",
     "colors": "", "animations": "", "logic": "", "devices": "", "layers": "",
     "resources": "", "validate": "", "export": "", "ai": "", "settings": "",

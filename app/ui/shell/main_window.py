@@ -18,21 +18,19 @@ from app.core.persistence.container import ProjectFormatError
 from app.core.project.service import ProjectError
 from app.ui.dialogs.new_project_wizard import NewProjectWizard
 from app.ui.panels.project_hub import ProjectHubPage
-from app.ui.panels.project_page import ProjectPage
 from app.ui.panels.settings_page import SettingsPage
 from app.ui.widgets import glyph_icon
+from app.ui.workspace.page import WorkspacePage
 
 log = logging.getLogger(__name__)
 
 # (подпись, иконка, этап) — разделы, которые ещё не реализованы, неактивны и подписаны этапом.
 NAV_FUTURE = [
     ("Компоненты", "components", 4), ("Иконки", "icons", 4), ("Шрифты", "fonts", 4), ("Цвета", "colors", 4),
-    ("Анимации", "animations", 5), ("Логика", "logic", 5), ("Устройства", "devices", 6), ("Слои", "layers", 2),
+    ("Анимации", "animations", 5), ("Логика", "logic", 5), ("Устройства", "devices", 6),
     ("Ресурсы", "resources", 4), ("Проверка", "validate", 7), ("Экспорт", "export", 7), ("ИИ-задание", "ai", 7),
 ]
 MENU_FUTURE = {
-    "Правка": [("Отменить / Повторить", 2), ("Копировать / Вставить", 2), ("Группировать", 2)],
-    "Вид": [("Сетка и направляющие", 2), ("Масштаб", 2)],
     "Инструменты": [("Auto Layout", 3), ("Конструктор компонентов", 4), ("SVG-редактор", 4), ("Типографика", 4),
                     ("Анимации", 5), ("Визуальная логика", 5)],
     "Экспорт": [("Проверка проекта", 7), ("AI-экспорт для Claude Code", 7)],
@@ -60,7 +58,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._build_nav())
         self.pages = QStackedWidget()
         self.hub = ProjectHubPage(ctx)
-        self.project_page = ProjectPage()
+        self.project_page = WorkspacePage(ctx)
         self.settings_page = SettingsPage(ctx)
         for p in (self.hub, self.project_page, self.settings_page):
             self.pages.addWidget(p)
@@ -69,7 +67,7 @@ class MainWindow(QMainWindow):
 
         self.hub.open_requested.connect(self.open_project)
         self.hub.new_requested.connect(self.new_project)
-        self.project_page.edited.connect(self._mark_dirty)
+        self.project_page.changed.connect(self._mark_dirty)
         self.settings_page.changed.connect(self._settings_changed)
 
         self._build_menu()
@@ -108,6 +106,10 @@ class MainWindow(QMainWindow):
             self.nav_group.addButton(b)
         v.addWidget(self.nav_hub)
         v.addWidget(self.nav_project)
+        self.nav_layers = self._nav_button("Слои", "layers")
+        self.nav_layers.setToolTip("Панель слоёв открытого проекта")
+        self.nav_layers.clicked.connect(self._show_layers)
+        v.addWidget(self.nav_layers)
         for text, icon, stage in NAV_FUTURE:
             b = self._nav_button(text, icon)
             b.setEnabled(False)
@@ -131,6 +133,15 @@ class MainWindow(QMainWindow):
         self._act(m, "Настройки", QKeySequence("Ctrl+,"), lambda: self.show_page(PAGE_SETTINGS))
         m.addSeparator()
         self._act(m, "Выход", QKeySequence("Alt+F4"), self.close)
+        ws = self.project_page
+        self.menu_edit = mb.addMenu("Правка")
+        self.menu_view = mb.addMenu("Вид")
+        for menu, actions in ((self.menu_edit, ws.edit_actions), (self.menu_view, ws.view_actions)):
+            for a in actions:
+                menu.addSeparator() if a is None else menu.addAction(a)
+        self.menu_view.addSeparator()
+        for dock in (ws.dock_layers, ws.dock_inspector, ws.dock_screens):
+            self.menu_view.addAction(dock.toggleViewAction())
         for title, items in MENU_FUTURE.items():
             sub = mb.addMenu(title)
             for text, stage in items:
@@ -164,6 +175,7 @@ class MainWindow(QMainWindow):
         self.act_save.setEnabled(has)
         self.act_close.setEnabled(has)
         self.nav_project.setEnabled(has)
+        self.nav_layers.setEnabled(has)
         self.nav_project.setToolTip("" if has else "Откройте или создайте проект")
         title = APP_NAME
         if has:
@@ -172,8 +184,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(title)
 
     def _mark_dirty(self) -> None:
-        self.dirty = True
+        self.dirty = self.doc is not None and self.project_page.is_dirty()
         self._update_state()
+
+    def _show_layers(self) -> None:
+        if self.doc is None:
+            self.nav_layers.setChecked(False)
+            return
+        self.show_page(PAGE_PROJECT)
+        self.project_page.focus_layers()
 
     def _settings_changed(self) -> None:
         s = self.ctx.settings
@@ -223,9 +242,9 @@ class MainWindow(QMainWindow):
         self.show_page(PAGE_PROJECT)
 
     def _set_document(self, doc: ProjectDocument | None, path: Path | None, dirty: bool = False) -> None:
-        self.doc, self.doc_path, self.dirty = doc, path, dirty
-        if doc:
-            self.project_page.set_document(doc)
+        self.doc, self.doc_path = doc, path
+        self.project_page.set_document(doc, dirty)
+        self.dirty = dirty
         self._update_state()
 
     def save_project(self) -> bool:
@@ -237,6 +256,7 @@ class MainWindow(QMainWindow):
             self._err("Не удалось сохранить проект", exc)
             return False
         self.ctx.recovery.clear(self.doc.meta.id)
+        self.project_page.mark_clean()
         self.dirty = False
         self._update_state()
         self.statusBar().showMessage(f"Сохранено: {self.doc_path}", 5000)

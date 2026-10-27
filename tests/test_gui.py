@@ -23,10 +23,13 @@ def ctx(paths, projects_dir):
 def win(qtbot, ctx):
     apply_theme(QApplication.instance())
     w = MainWindow(ctx)
-    qtbot.addWidget(w)
+
+    def discard(win):  # pytest-qt закрывает окно до завершения фикстуры
+        win.project_page.mark_clean()
+        win.dirty = False
+    qtbot.addWidget(w, before_close_func=discard)
     w.show()
     yield w
-    w.dirty = False
 
 
 def _run_wizard(wiz: NewProjectWizard, name: str, platform_idx: int = 0):
@@ -78,7 +81,7 @@ def test_create_edit_save_reopen_via_ui(win, ctx, projects_dir, monkeypatch):  #
     path = projects_dir / "Ёжик в тумане.adsproj"
     assert path.exists() and win.doc_path == path
 
-    win.project_page.desc.setPlainText("Описание с кириллицей")
+    win.project_page.editor.set_meta({"description": "Описание с кириллицей"})
     assert win.dirty and "●" in win.windowTitle()
     assert win.save_project()
     assert not win.dirty
@@ -120,7 +123,7 @@ def test_autosave_and_recovery(qtbot, win, ctx, projects_dir, monkeypatch):  # S
     from tests.conftest import make_spec
     doc, path = ctx.service.create(make_spec(projects_dir, title="Авария"))
     win.open_project(str(path))
-    win.project_page.desc.setPlainText("несохранённый текст")
+    win.project_page.editor.set_meta({"description": "несохранённый текст"})
     win.autosave()
     assert len(ctx.recovery.entries()) == 1
     # имитация сбоя: новое окно, исходный файл не изменён

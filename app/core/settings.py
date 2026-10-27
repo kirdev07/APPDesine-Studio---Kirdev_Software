@@ -20,6 +20,10 @@ DEFAULTS = {
     "hub/sort": "modified",
     "devices/default_android": "android_phone",
     "devices/default_windows": "windows_window",
+    "workspace/grid_visible": True,
+    "workspace/grid_size": 8,
+    "workspace/snap": True,
+    "workspace/guides_visible": True,
 }
 
 

@@ -6,8 +6,18 @@ from collections.abc import Callable
 
 from app.core.document.model import SCHEMA_VERSION
 
-# {исходная_версия: функция(raw) -> raw}. Для схемы 1 миграций ещё нет.
-MIGRATIONS: dict[int, Callable[[dict], dict]] = {}
+
+def _v1_to_v2(raw: dict) -> dict:
+    # В схеме 1 экраны не имели содержимого: узлы обнуляются, добавляются пустые направляющие.
+    for screen in raw.get("screens", []):
+        if isinstance(screen, dict):
+            screen["nodes"] = []
+            screen.setdefault("guides", [])
+    return raw
+
+
+# {исходная_версия: функция(raw) -> raw}
+MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2}
 
 
 def migrate(raw: dict, version: int) -> dict:

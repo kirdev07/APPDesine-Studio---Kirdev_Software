@@ -101,6 +101,14 @@ QProgressBar {{ background: {surface_3}; border: none; border-radius: 3px; max-h
 QProgressBar::chunk {{ background: #D0D0D0; border-radius: 3px; }}
 QScrollArea {{ background: transparent; border: none; }}
 QMessageBox {{ background: {surface}; }}
+QDockWidget {{ color: {text_muted}; titlebar-close-icon: none; }}
+QDockWidget::title {{ background: {surface}; padding: 6px 10px; border-bottom: 1px solid {border}; }}
+QDockWidget > QWidget {{ background: {surface}; }}
+QMainWindow::separator {{ background: {border}; width: 1px; height: 1px; }}
+QTreeWidget {{ color: {text}; }}
+QDoubleSpinBox {{ background: {surface_2}; border: 1px solid {border}; border-radius: {radius}; padding: 4px 6px; }}
+QDoubleSpinBox:focus {{ border: 1px solid {accent}; }}
+QFontComboBox {{ min-width: 120px; }}
 """
 
 

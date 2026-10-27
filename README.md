@@ -3,7 +3,7 @@
 Локальная студия дизайна интерфейсов Android (Jetpack Compose / Material 3) и Windows (Python / PySide6).
 Спецификация — файлы `00_START_HERE.md` … `08_OPEN_DECISIONS.md` и `assets/mockups/`.
 
-**Состояние:** этап 1 из 8 (Foundation & Project Hub).
+**Состояние:** этапы 1–2 из 8 (Foundation & Project Hub, Fusion Workspace).
 
 ## Запуск (Windows 10/11, Python 3.12)
 
@@ -28,10 +28,12 @@ py -3.12 -m venv .venv
 ## Структура
 
 ```
-app/core/document     модель проекта (без Qt)
+app/core/document     модель проекта и дерево узлов (без Qt)
+app/core/commands     команды изменения документа и стек undo/redo (без Qt)
 app/core/persistence  контейнер .adsproj, миграции, восстановление
 app/core/project      индекс SQLite и операции над проектами
 app/libraries         встроенные профили устройств и шаблоны
 app/ui                тема Fusion AMOLED, оболочка, Project Hub, мастер, настройки
+app/ui/workspace      холст, слои, инспектор, полоса экранов
 tests/                pytest + pytest-qt
 ```
