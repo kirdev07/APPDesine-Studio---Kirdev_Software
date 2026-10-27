@@ -1,0 +1,91 @@
+{
+  "package": "App Design Studio Claude Code Handoff",
+  "version": "1.0",
+  "status": "spec approved; implementation not authorized",
+  "images": [
+    {
+      "id": "01_initial_workspace",
+      "file": "assets/mockups/01_initial_workspace.png",
+      "sha256": "10c6d0832825ba3a8bcc3f2371353cf89559e69993a07193752a29693af0b9a6",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "02_fusion_workspace",
+      "file": "assets/mockups/02_fusion_workspace.png",
+      "sha256": "35a2dfebd78a115352dbc3da54a125cc6f8ca35e7759b0319fed4bf12b6304ab",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "03_expanded_studio",
+      "file": "assets/mockups/03_expanded_studio.png",
+      "sha256": "b7f536368ed64aede3b1b5b5a6a32ace60ad860fe7892e0b5de77a0ae4f8c203",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "04_component_asset_studio",
+      "file": "assets/mockups/04_component_asset_studio.png",
+      "sha256": "e18c94baf3b933efd884034f1b576c8e1105d6813b186a54dfd9def172d6bbd9",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "05_interactive_preview",
+      "file": "assets/mockups/05_interactive_preview.png",
+      "sha256": "59f4388f684550290439c13b3b5ebbadc3af7a869d8adbd0245f050bc5f89fb9",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "06_animation_studio",
+      "file": "assets/mockups/06_animation_studio.png",
+      "sha256": "021054c7777193e871e2a8b361d133f5e733df87675a4f817d590e1c19735ef8",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "07_ai_export",
+      "file": "assets/mockups/07_ai_export.png",
+      "sha256": "a08c806816b9cfaddb3bd82e36d5a28f4bdf0f45d81fbb6c43eefab69d58da91",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "08_settings_libraries",
+      "file": "assets/mockups/08_settings_libraries.png",
+      "sha256": "e59cfcaabbf8bddc68605fdc33a1180234c34786dee0b53bb7726d54f0b98df3",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "09_project_hub_variant_1_NOT_FINAL",
+      "file": "assets/mockups/09_project_hub_variant_1_NOT_FINAL.png",
+      "sha256": "649acf470502ad56b89e24f83dfd85731b6b14847ae9e30a80880e1efcd61be9",
+      "note": "Alternative, not final"
+    },
+    {
+      "id": "09_project_hub_variant_2_APPROVED",
+      "file": "assets/mockups/09_project_hub_variant_2_APPROVED.png",
+      "sha256": "fe6d931abfd2ee8280bef8a604ffb57432c9c89530bef32845bf6187624dce86",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "10_svg_editor",
+      "file": "assets/mockups/10_svg_editor.png",
+      "sha256": "3462f3b2359c8d29e54825df1f9cffd36ecba4d9006a6f30b2040c3cbdd6b40f",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "11_typography_studio",
+      "file": "assets/mockups/11_typography_studio.png",
+      "sha256": "f07695e6c04f9ae30e9e1fbda519c669fef980db54f051e4cadf92767dcaad29",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "12_new_project_wizard",
+      "file": "assets/mockups/12_new_project_wizard.png",
+      "sha256": "8ffbec36ff5d00787e02846f80c5f28ed947e0f815c9f35c4a010f6c8cf95ac9",
+      "note": "Approved visual reference or earlier concept"
+    },
+    {
+      "id": "13_component_builder_OLD_REFERENCE_ONLY",
+      "file": "assets/mockups/13_component_builder_OLD_REFERENCE_ONLY.png",
+      "sha256": "ed51072560f6be31d9760d6c74cf1cc58d4d2bed6d69a520fe00406536f75b8c",
+      "note": "Earlier layout reference only; written Fusion 2.0 revision overrides"
+    }
+  ]
+}
