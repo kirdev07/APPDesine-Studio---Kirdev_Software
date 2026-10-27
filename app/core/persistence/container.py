@@ -150,6 +150,8 @@ def load_project(path: str | os.PathLike, limits: Limits = DEFAULT_LIMITS) -> Pr
                     raise ProjectFormatError("Файл логики повреждён")
                 raw["variables"] = logic.get("variables", [])
                 raw["interactions"] = logic.get("interactions", [])
+            if version >= 6:
+                raw["scenarios"] = _read_json(zf, "interactions/scenarios.json", limits)
             raw = migrate(raw, version)
             asset_bytes = _read_assets(zf, raw.get("assets", []), limits)
     except zipfile.BadZipFile:
@@ -159,8 +161,9 @@ def load_project(path: str | os.PathLike, limits: Limits = DEFAULT_LIMITS) -> Pr
     except ValueError as exc:
         raise ProjectFormatError(f"Не удалось обновить схему проекта: {exc}") from None
     try:
-        from app.core.document.behavior import Animation, Interaction, Variable
-        for key in ("components", "assets", "text_styles", "colors", "animations", "variables", "interactions"):
+        from app.core.document.behavior import Animation, Interaction, Scenario, Variable
+        for key in ("components", "assets", "text_styles", "colors", "animations", "variables", "interactions",
+                    "scenarios"):
             if not isinstance(raw.get(key, []), list):
                 raise ModelError(f"«{key}» должно быть списком")
         doc = ProjectDocument(
@@ -173,6 +176,7 @@ def load_project(path: str | os.PathLike, limits: Limits = DEFAULT_LIMITS) -> Pr
             animations=[Animation.from_dict(a) for a in raw.get("animations", [])],
             variables=[Variable.from_dict(v) for v in raw.get("variables", [])],
             interactions=[Interaction.from_dict(i) for i in raw.get("interactions", [])],
+            scenarios=[Scenario.from_dict(s) for s in raw.get("scenarios", [])],
         )
         doc.validate()
     except ModelError as exc:
@@ -232,6 +236,7 @@ def write_archive(doc: ProjectDocument, target: Path) -> None:
         zf.writestr("animations/animations.json", _dump([a.to_dict() for a in doc.animations]))
         zf.writestr("interactions/logic.json", _dump({"variables": [v.to_dict() for v in doc.variables],
                                                       "interactions": [i.to_dict() for i in doc.interactions]}))
+        zf.writestr("interactions/scenarios.json", _dump([s.to_dict() for s in doc.scenarios]))
         written = set()
         for a in doc.assets:
             data = doc.asset_data.get(a.id)

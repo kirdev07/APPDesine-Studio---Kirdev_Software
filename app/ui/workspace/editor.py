@@ -116,7 +116,8 @@ class Editor(QObject):
         from app.engines.logic.engine import validate as validate_logic
         self.diagnostics = layout_diags + resource_diagnostics(self.doc, s, REGISTRY.available,
                                                                REGISTRY.missing_chars)
-        self.diagnostics += validate_animations(self.doc) + validate_logic(self.doc)
+        from app.engines.preview.scenarios import validate as validate_scenarios
+        self.diagnostics += validate_animations(self.doc) + validate_logic(self.doc) + validate_scenarios(self.doc)
 
     def undo(self) -> None:
         if self.stack is not None:

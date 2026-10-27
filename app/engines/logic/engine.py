@@ -92,7 +92,7 @@ class Interpreter:
     def __init__(self, doc: ProjectDocument, start_screen_id: str | None = None):
         self.doc = doc
         self.start = start_screen_id or (doc.screens[0].id if doc.screens else "")
-        self.log: list[tuple[str, str]] = []      # (триггер, узел) — сценарий для повтора
+        self.log: list[tuple] = []                # (триггер, узел[, текст]) — сценарий для повтора
         self.effects: list[Effect] = []           # все эффекты по порядку
         self.reset()
 
@@ -112,12 +112,32 @@ class Interpreter:
         return self.state.visibility.get(node.id, node.visible)
 
     # ---------- события ----------
-    def dispatch(self, trigger: str, node_id: str = "") -> list[Effect]:
-        """Событие от пользователя. Срабатывает самое внутреннее взаимодействие по цепочке предков узла."""
-        self.log.append((trigger, node_id))
+    def dispatch(self, trigger: str, node_id: str = "", value: str | None = None) -> list[Effect]:
+        """Событие от пользователя. Срабатывает самое внутреннее взаимодействие по цепочке предков узла.
+
+        text_input — ввод в поле (value — весь текст поля): текст сохраняется в состоянии, связанная
+        переменная получает значение, затем срабатывает «Изменение текста» (text_changed) по цепочке.
+        """
+        self.log.append((trigger, node_id) if value is None else (trigger, node_id, value))
         out: list[Effect] = []
         s = self.screen()
         if s is None:
+            return out
+        if trigger == "text_input":
+            n = tree.node_map(s).get(node_id)
+            if n is None or n.type != "text" or not n.editable:
+                out = [Effect("error", {"message": "Ввод текста: поле не на текущем экране"})]
+                self.effects += out
+                return out
+            text = str(value or "")[:10_000]
+            self.state.texts[n.id] = text
+            out.append(Effect("text", {"node_id": n.id, "text": text}))
+            var = self.doc.variable(n.input_var) if n.input_var else None
+            if var is not None and var.type == "text":
+                self.state.variables[var.id] = text
+                out.append(Effect("variable", {"var_id": var.id, "value": text}))
+            out += self._dispatch_chain("text_changed", node_id, s)
+            self.effects += out
             return out
         if trigger == "system_back":  # системная кнопка «Назад»: закрыть окно или вернуться на экран
             if self.state.overlays:
@@ -127,27 +147,43 @@ class Interpreter:
                                  "easing": "ease_out"}, 0)
             self.effects += out
             return out
-        chain = []
-        if node_id:
-            try:
-                chain = [node_id] + [a.id for a in reversed(tree.ancestors(s, node_id))]
-            except Exception:
-                chain = [node_id]
-        handled = False
-        for nid in chain:
-            matches = [i for i in self.doc.interactions if i.screen_id == s.id and i.trigger == trigger
-                       and i.node_id == nid]
-            if matches:
-                for it in matches:
-                    out += self._run(it, 0)
-                handled = True
-                break
+        chain = self._chain(s, node_id)
+        handled = self.handles(trigger, node_id)
+        out += self._dispatch_chain(trigger, node_id, s)
         # встроенное поведение компонента срабатывает, если взаимодействие само не меняло состояние экземпляра
         changed_state = any(e.kind == "state" for e in out)
         if trigger in ("tap", "hover_enter", "hover_leave") and not changed_state and \
                 (not handled or self.state.screen_id == s.id):
             out += self._component_behavior(trigger, chain, s)
         self.effects += out
+        return out
+
+    @staticmethod
+    def _chain(s, node_id: str) -> list[str]:
+        if not node_id:
+            return []
+        try:
+            return [node_id] + [a.id for a in reversed(tree.ancestors(s, node_id))]
+        except Exception:
+            return [node_id]
+
+    def handles(self, trigger: str, node_id: str) -> bool:
+        """Есть ли взаимодействие с этим триггером у узла или его предков на текущем экране."""
+        s = self.screen()
+        if s is None:
+            return False
+        chain = set(self._chain(s, node_id))
+        return any(i.screen_id == s.id and i.trigger == trigger and i.node_id in chain for i in self.doc.interactions)
+
+    def _dispatch_chain(self, trigger: str, node_id: str, s) -> list[Effect]:
+        out: list[Effect] = []
+        for nid in self._chain(s, node_id):
+            matches = [i for i in self.doc.interactions if i.screen_id == s.id and i.trigger == trigger
+                       and i.node_id == nid]
+            if matches:
+                for it in matches:
+                    out += self._run(it, 0)
+                break
         return out
 
     def _component_behavior(self, trigger: str, chain: list[str], s) -> list[Effect]:
@@ -299,11 +335,11 @@ class Interpreter:
         return [Effect("error", {"message": f"Неизвестное действие {t}"})]
 
     # ---------- повтор ----------
-    def replay(self, script: list[tuple[str, str]]) -> tuple[str, list[dict]]:
+    def replay(self, script: list) -> tuple[str, list[dict]]:
         """Сценарий с начала: итоговый хэш состояния и все эффекты."""
         self.reset()
-        for trig, nid in script:
-            self.dispatch(trig, nid)
+        for step in script:
+            self.dispatch(*step)
         return self.state.digest(), [e.to_dict() for e in self.effects]
 
 

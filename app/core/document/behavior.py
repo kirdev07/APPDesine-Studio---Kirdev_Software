@@ -16,7 +16,11 @@ ANIMATABLE = ("x", "y", "w", "h", "opacity", "radius", "fill", "stroke", "text_c
 COLOR_PROPS = ("fill", "stroke", "text_color")
 EASINGS = ("linear", "ease_in", "ease_out", "ease_in_out", "step", "cubic")
 TRANSITIONS = ("none", "fade", "slide_left", "slide_right", "slide_up", "slide_down")
-TRIGGERS = ("tap", "long_press", "hover_enter", "hover_leave", "screen_open")
+TRIGGERS = ("tap", "long_press", "hover_enter", "hover_leave", "screen_open", "double_tap", "swipe_left",
+            "swipe_right", "swipe_up", "swipe_down", "text_changed")
+# События сценария: всё, что делает пользователь (screen_open происходит само), плюс системные.
+EVENTS = tuple(t for t in TRIGGERS if t not in ("screen_open", "text_changed")) + ("system_back", "text_input")
+MAX_STEPS = 10_000
 VAR_TYPES = ("bool", "number", "text")
 OPS = ("==", "!=", "<", ">", "<=", ">=")
 MAX_DURATION = 600_000  # 10 минут
@@ -290,3 +294,55 @@ def check_behavior(v) -> dict:
         raise ModelError("Переключение задаётся двумя состояниями")
     return {"hover": bool(v.get("hover", False)), "press": bool(v.get("press", False)),
             "toggle": [check_prop("state", s, "instance") for s in toggle]}
+
+
+@dataclass
+class Scenario:
+    """Записанный сценарий предпросмотра: события пользователя и ожидаемый итог (экран, переменные)."""
+    name: str
+    start_screen_id: str
+    steps: list = field(default_factory=list)       # [триггер, узел] или [«text_input», узел, текст]
+    expect_screen_id: str = ""
+    expect_vars: dict = field(default_factory=dict)  # var_id → значение
+    digest: str = ""                                 # хэш полного состояния на момент записи
+    id: str = field(default_factory=new_id)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "start_screen_id": self.start_screen_id,
+                "steps": [list(s) for s in self.steps], "expect_screen_id": self.expect_screen_id,
+                "expect_vars": dict(self.expect_vars), "digest": self.digest}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Scenario:
+        if not isinstance(d, dict):
+            raise ModelError("Сценарий должен быть объектом")
+        name = d.get("name")
+        if not isinstance(name, str) or not 1 <= len(name) <= 128:
+            raise ModelError("Неверное имя сценария")
+        steps = d.get("steps", [])
+        if not isinstance(steps, list) or len(steps) > MAX_STEPS:
+            raise ModelError(f"Неверный список шагов сценария (не больше {MAX_STEPS})")
+        out = []
+        for st in steps:
+            if not isinstance(st, list) or len(st) not in (2, 3) or st[0] not in EVENTS:
+                raise ModelError("Неверный шаг сценария")
+            node = st[1] if st[0] == "system_back" and not st[1] else _id(st[1], "элемент шага")
+            if st[0] == "text_input":
+                if len(st) != 3 or not isinstance(st[2], str) or len(st[2]) > 10_000:
+                    raise ModelError("Шаг ввода текста должен содержать строку")
+                out.append([st[0], node, st[2]])
+            elif len(st) == 2:
+                out.append([st[0], node])
+            else:
+                raise ModelError("Лишнее значение в шаге сценария")
+        ev = d.get("expect_vars", {})
+        if not isinstance(ev, dict) or not all(isinstance(v, (str, int, float, bool)) for v in ev.values()):
+            raise ModelError("Неверные ожидаемые значения переменных")
+        digest = d.get("digest", "")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{0,64}", digest):
+            raise ModelError("Неверный хэш сценария")
+        exp = d.get("expect_screen_id") or ""
+        return cls(name=name, start_screen_id=_id(d.get("start_screen_id"), "стартовый экран"), steps=out,
+                   expect_screen_id=_id(exp, "ожидаемый экран") if exp else "",
+                   expect_vars={_id(k, "переменная"): v for k, v in ev.items()}, digest=digest,
+                   id=_id(d.get("id"), "id"))

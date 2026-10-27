@@ -26,7 +26,9 @@ from app.ui.workspace.canvas import render_thumbnail
 
 ROLE = Qt.ItemDataRole.UserRole
 TRIGGER_RU = {"tap": "Нажатие", "long_press": "Долгое нажатие", "hover_enter": "Наведение (мышь)",
-              "hover_leave": "Уход курсора", "screen_open": "Открытие экрана"}
+              "hover_leave": "Уход курсора", "screen_open": "Открытие экрана", "double_tap": "Двойное нажатие",
+              "swipe_left": "Свайп влево", "swipe_right": "Свайп вправо", "swipe_up": "Свайп вверх",
+              "swipe_down": "Свайп вниз", "text_changed": "Изменение текста (поле ввода)"}
 TYPE_RU = {"bool": "Логическое", "number": "Число", "text": "Текст"}
 MODE_RU = {"set": "Присвоить", "toggle": "Переключить", "increment": "Увеличить на", "decrement": "Уменьшить на",
            "show": "Показать", "hide": "Скрыть"}
@@ -149,7 +151,7 @@ class LogicPage(QWidget):
         row.addWidget(button("+ Новое", self.new_interaction))
         row.addWidget(button("Удалить", self.delete_interaction, object_name="Danger"))
         lay.addLayout(row)
-        lay.addWidget(button("▶ Запустить прототип", self.run_requested.emit, "Проиграть с текущего экрана (F5)",
+        lay.addWidget(button("▶ Предпросмотр", self.run_requested.emit, "Интерактивный предпросмотр с текущего экрана (F5)",
                              "Primary"))
         lay.addWidget(label("Переменные проекта", "H2"))
         self.vars = QListWidget()

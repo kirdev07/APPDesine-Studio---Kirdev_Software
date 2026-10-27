@@ -133,6 +133,7 @@ class DocPatch(Command):
                 "animations": [a.to_dict() for a in doc.animations],
                 "variables": [v.to_dict() for v in doc.variables],
                 "interactions": [i.to_dict() for i in doc.interactions],
+                "scenarios": [s.to_dict() for s in doc.scenarios],
                 "asset_data": dict(doc.asset_data),
                 "meta": doc.meta.to_dict()}
 
@@ -144,7 +145,8 @@ class DocPatch(Command):
         doc.assets[:] = [Asset.from_dict(a) for a in snap["assets"]]
         doc.text_styles[:] = [TextStyle.from_dict(t) for t in snap["text_styles"]]
         doc.colors[:] = [ColorToken.from_dict(c) for c in snap["colors"]]
-        from app.core.document.behavior import Animation, Interaction, Variable
+        from app.core.document.behavior import Animation, Interaction, Scenario, Variable
+        doc.scenarios[:] = [Scenario.from_dict(s) for s in snap.get("scenarios", [])]
         doc.animations[:] = [Animation.from_dict(a) for a in snap.get("animations", [])]
         doc.variables[:] = [Variable.from_dict(v) for v in snap.get("variables", [])]
         doc.interactions[:] = [Interaction.from_dict(i) for i in snap.get("interactions", [])]

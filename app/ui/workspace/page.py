@@ -150,9 +150,9 @@ class WorkspacePage(QMainWindow):
         self.a_make_component = self._action("Создать компонент…", self.make_component, "Ctrl+Alt+K")
         self.a_detach = self._action("Отсоединить экземпляр", ed.detach_selection)
         self.a_reset_over = self._action("Сбросить переопределения", ed.reset_overrides_selection)
-        self.a_run = self._action("▶ Прототип", lambda: self.window().run_prototype()
+        self.a_run = self._action("▶ Просмотр", lambda: self.window().run_prototype()
                                   if hasattr(self.window(), "run_prototype") else None)
-        self.a_run.setToolTip("Запустить прототип с текущего экрана (F5)")
+        self.a_run.setToolTip("Интерактивный предпросмотр на устройстве с текущего экрана (F5)")
         self.tools_actions = [self.a_wrap_v, self.a_wrap_h, self.a_unwrap, None, self.a_make_component,
                               self.a_detach, self.a_reset_over, None, self.a_responsive]
 
@@ -170,11 +170,6 @@ class WorkspacePage(QMainWindow):
         design.setToolTip("Режим дизайна")
         bar.addWidget(design)
         bar.addAction(self.a_run)
-        b = QToolButton()
-        b.setText("Просмотр")
-        b.setEnabled(False)
-        b.setToolTip("Интерактивный предпросмотр на устройствах — этап 6. Простой прототип — кнопка «▶ Прототип» (F5)")
-        bar.addWidget(b)
         bar.addSeparator()
         for key, *_ in TOOLS:
             bar.addAction(self.tool_actions[key])

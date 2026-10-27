@@ -406,6 +406,15 @@ class Inspector(QScrollArea):
         self.align.currentIndexChanged.connect(
             lambda: self._commit_leaves("align", self.align.currentData(), "Выравнивание текста", "text"))
         f.addRow("Выравнивание", self.align)
+        self.editable = QCheckBox("Поле ввода в предпросмотре")
+        self.editable.setToolTip("В предпросмотре текст можно набирать; исходный текст — подсказка")
+        self.editable.clicked.connect(lambda v: self._commit_leaves("editable", v, "Поле ввода", "text"))
+        f.addRow(self.editable)
+        self.input_var = QComboBox()
+        self.input_var.setToolTip("Текстовая переменная, которая получает набранный текст")
+        self.input_var.currentIndexChanged.connect(
+            lambda: self._commit_leaves("input_var", self.input_var.currentData() or "", "Переменная поля", "text"))
+        f.addRow("Значение в", self.input_var)
 
     # --- раскладка
     def _build_layout(self) -> None:
@@ -449,6 +458,11 @@ class Inspector(QScrollArea):
         self.al_clip = QCheckBox("Обрезать содержимое по фрейму")
         self.al_clip.clicked.connect(lambda v: self._commit_frames("clip", v, "Обрезка"))
         f.addRow(self.al_clip)
+        self.al_scroll = _combo([("none", "Нет"), ("vertical", "Вертикальная"), ("horizontal", "Горизонтальная")])
+        self.al_scroll.setToolTip("Прокрутка содержимого в предпросмотре (колесо мыши или перетаскивание)")
+        self.al_scroll.currentIndexChanged.connect(
+            lambda: self._commit_frames("scroll", self.al_scroll.currentData(), "Прокрутка"))
+        f.addRow("Прокрутка", self.al_scroll)
 
         self.sec_size, f = self._section("Размер в раскладке")
         self.sz_h, self.sz_v = _combo(SIZING), _combo(SIZING)
@@ -579,6 +593,7 @@ class Inspector(QScrollArea):
             self.al_main.setCurrentIndex(self.al_main.findData(f0.main_align))
             self.al_cross.setCurrentIndex(self.al_cross.findData(f0.cross_align))
             self.al_clip.setChecked(f0.clip)
+            self.al_scroll.setCurrentIndex(max(0, self.al_scroll.findData(f0.scroll)))
         self.sec_size.setVisible(bool(geo))
         self.sec_cons.setVisible(False)
         if geo:
@@ -706,6 +721,16 @@ class Inspector(QScrollArea):
                     self.weight.setCurrentIndex(max(0, self.weight.findData(t0.font_weight)))
                     self.text_color.set_value(t0.text_color)
                     self.align.setCurrentIndex(max(0, self.align.findData(t0.align)))
+                    own = all(not t.ref for t in texts)  # поле экземпляра задаёт мастер-компонент
+                    self.editable.setEnabled(own)
+                    self.editable.setChecked(t0.editable)
+                    self.input_var.clear()
+                    self.input_var.addItem("— не связано —", "")
+                    for v in (ed.doc.variables if ed.doc else []):
+                        if v.type == "text":
+                            self.input_var.addItem(v.name, v.id)
+                    self.input_var.setCurrentIndex(max(0, self.input_var.findData(t0.input_var)))
+                    self.input_var.setEnabled(own and t0.editable)
             s = ed.screen()
             if s and not has:
                 self.s_name.setText(s.name)

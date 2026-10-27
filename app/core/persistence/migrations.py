@@ -36,8 +36,15 @@ def _v4_to_v5(raw: dict) -> dict:
     return raw
 
 
+def _v5_to_v6(raw: dict) -> dict:
+    # Схема 6 добавила тестовые сценарии предпросмотра; прокрутка фреймов и поля ввода — по умолчанию выключены.
+    raw.setdefault("scenarios", [])
+    return raw
+
+
 # {исходная_версия: функция(raw) -> raw}
-MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5}
+MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5,
+                                                 5: _v5_to_v6}
 
 
 def migrate(raw: dict, version: int) -> dict:

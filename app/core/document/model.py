@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 # 1 — этап 1 (экраны без содержимого); 2 — узлы и направляющие; 3 — фреймы, Auto Layout и привязки;
 # 4 — векторы, изображения, компоненты и экземпляры, ресурсы, стили текста и цвета;
 # 5 — анимации, переменные, взаимодействия, переходы и поведение состояний компонентов.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -81,10 +81,12 @@ COMMON_PROPS = ("name", "visible", "locked", "ref")
 CHILD_PROPS = ("sizing_h", "sizing_v", "min_w", "max_w", "min_h", "max_h", "constraint_h", "constraint_v")
 # Свойства контейнера-фрейма.
 FRAME_PROPS = ("layout", "gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "main_align", "cross_align",
-               "grid_columns", "clip")
+               "grid_columns", "clip", "scroll")
+# Текстовое поле ввода в предпросмотре: текст можно набирать, значение можно связать с текстовой переменной.
+INPUT_PROPS = ("editable", "input_var")
 VECTOR_PROPS = ("path", "vb_w", "vb_h", "fill_rule")
 INSTANCE_PROPS = ("component_id", "overrides", "state")
-LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + TEXT_PROPS + CHILD_PROPS
+LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + TEXT_PROPS + CHILD_PROPS + INPUT_PROPS
 ALLOWED_PROPS = {
     "group": COMMON_PROPS,
     "frame": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + FRAME_PROPS,
@@ -109,6 +111,7 @@ ENUMS = {
     "main_align": ("start", "center", "end", "space_between"),
     "cross_align": ("start", "center", "end", "stretch"),
     "fill_rule": ("nonzero", "evenodd"),
+    "scroll": ("none", "vertical", "horizontal"),
 }
 MAX_DEPTH = 32
 MAX_COORD = 1_000_000.0
@@ -120,6 +123,8 @@ def check_prop(name: str, value, node_type: str = "rect"):
     allowed = ALLOWED_PROPS.get(node_type, LEAF_PROPS)
     if name not in allowed:
         raise ModelError(f"Свойство «{name}» недоступно для типа {node_type}")
+    if name in INPUT_PROPS and node_type != "text":
+        raise ModelError(f"Свойство «{name}» есть только у текста")
     if name in ENUMS:
         if value not in ENUMS[name]:
             raise ModelError(f"Недопустимое значение «{name}»: {value!r}")
@@ -128,11 +133,11 @@ def check_prop(name: str, value, node_type: str = "rect"):
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 64:
             raise ModelError("Число колонок должно быть от 1 до 64")
         return value
-    if name in ("visible", "locked", "clip"):
+    if name in ("visible", "locked", "clip", "editable"):
         if not isinstance(value, bool):
             raise ModelError(f"«{name}» должно быть логическим")
         return value
-    if name in ("ref", "asset_id", "component_id", "text_style"):
+    if name in ("ref", "asset_id", "component_id", "text_style", "input_var"):
         if not isinstance(value, str) or not _ID.match(value):
             raise ModelError(f"Неверный идентификатор «{name}»")
         return value
@@ -235,6 +240,10 @@ class Node:
     cross_align: str = "start"
     grid_columns: int = 2
     clip: bool = True
+    scroll: str = "none"          # прокрутка содержимого фрейма в предпросмотре
+    # поле ввода (текст)
+    editable: bool = False
+    input_var: str = ""
     # текстовый стиль (токен), вектор, изображение, экземпляр компонента
     text_style: str = ""
     path: str = ""
@@ -275,7 +284,7 @@ class Node:
         if not self.is_group:
             props += GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS
         if self.type == "text":
-            props += TEXT_PROPS
+            props += TEXT_PROPS + INPUT_PROPS
         if self.is_frame:
             props += FRAME_PROPS
         if self.is_instance:
@@ -629,6 +638,7 @@ class ProjectDocument:
     animations: list = field(default_factory=list)    # behavior.Animation
     variables: list = field(default_factory=list)     # behavior.Variable
     interactions: list = field(default_factory=list)  # behavior.Interaction
+    scenarios: list = field(default_factory=list)     # behavior.Scenario — тестовые сценарии предпросмотра
     # содержимое файлов ресурсов в памяти: {asset_id: bytes}. Не сериализуется в JSON.
     asset_data: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -643,7 +653,8 @@ class ProjectDocument:
                 "colors": [c.to_dict() for c in self.colors],
                 "animations": [a.to_dict() for a in self.animations],
                 "variables": [v.to_dict() for v in self.variables],
-                "interactions": [i.to_dict() for i in self.interactions]}
+                "interactions": [i.to_dict() for i in self.interactions],
+                "scenarios": [s.to_dict() for s in self.scenarios]}
 
     def validate(self) -> None:
         ids = [s.id for s in self.screens]
@@ -654,7 +665,7 @@ class ProjectDocument:
         for group, items in (("компонентов", self.components), ("ресурсов", self.assets),
                              ("стилей", self.text_styles), ("цветов", self.colors),
                              ("анимаций", self.animations), ("переменных", self.variables),
-                             ("взаимодействий", self.interactions)):
+                             ("взаимодействий", self.interactions), ("сценариев", self.scenarios)):
             if len({i.id for i in items}) != len(items):
                 raise ModelError(f"Повторяющиеся идентификаторы {group}")
 
@@ -669,6 +680,9 @@ class ProjectDocument:
 
     def variable(self, var_id: str):
         return next((v for v in self.variables if v.id == var_id), None)
+
+    def scenario(self, scenario_id: str):
+        return next((s for s in self.scenarios if s.id == scenario_id), None)
 
     def text_style(self, style_id: str) -> TextStyle | None:
         return next((t for t in self.text_styles if t.id == style_id), None)

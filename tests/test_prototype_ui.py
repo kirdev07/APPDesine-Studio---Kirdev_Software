@@ -13,7 +13,7 @@ from app.core.document.behavior import Animation, Keyframe, Track, Variable
 from app.core.document.model import Screen
 from app.core.persistence.container import load_project
 from app.ui.shell.main_window import PAGE_ANIMATIONS, PAGE_LOGIC, MainWindow
-from app.ui.studio.prototype import PrototypeWindow
+from app.ui.studio.preview import PreviewPage
 from app.ui.themes.fusion_amoled import apply_theme
 from tests.conftest import make_spec
 
@@ -41,8 +41,6 @@ def app_win(qtbot, paths, projects_dir, monkeypatch):
     _, path = ctx.service.create(make_spec(projects_dir, title="Прототип"))
     w.open_project(str(path))
     yield w, w.project_page.editor, path
-    if getattr(w, "prototype", None):
-        w.prototype.close()
     ctx.close()
 
 
@@ -143,7 +141,7 @@ def test_interactive_multiscreen_prototype_with_replay(qtbot, app_win):  # кр�
     ids = build(win, ed)
     configure_logic(win, ed, ids)
     win.run_prototype()
-    proto: PrototypeWindow = win.prototype
+    proto: PreviewPage = win.preview
     p = proto.player
     p._timer.stop()  # время ведём вручную — детерминированно
     qtbot.waitExposed(proto)
@@ -201,9 +199,9 @@ def test_reduced_motion_skips_transitions_and_animations(qtbot, app_win):
     ids = build(win, ed)
     configure_logic(win, ed, ids)
     win.run_prototype()
-    p = win.prototype.player
+    p = win.preview.player
     p._timer.stop()
-    win.prototype.reduced.setChecked(True)
+    win.preview.reduced.setChecked(True)
     p.dispatch("tap", ids["agree"])
     p.dispatch("tap", ids["btn"])
     assert p.interp.state.screen_id == ids["home"] and p.transition is None
@@ -217,7 +215,7 @@ def test_hover_behavior_in_player(qtbot, app_win):
     win, ed, _ = app_win
     ids = build(win, ed)
     win.run_prototype()
-    p = win.prototype.player
+    p = win.preview.player
     p._timer.stop()
     n = tree.node_map(p.screen)[ids["agree"]]
     p.hover(QPointF(n.x + 5, n.y + 5))

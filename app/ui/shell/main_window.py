@@ -26,25 +26,26 @@ log = logging.getLogger(__name__)
 
 # (подпись, иконка, этап) — разделы, которые ещё не реализованы, неактивны и подписаны этапом.
 NAV_FUTURE = [
-    ("Устройства", "devices", 6),
     ("Проверка", "validate", 7), ("Экспорт", "export", 7), ("ИИ-задание", "ai", 7),
 ]
 MENU_FUTURE = {
     "Инструменты": [],
     "Экспорт": [("Проверка проекта", 7), ("AI-экспорт для Claude Code", 7)],
-    "Устройства": [("Интерактивный предпросмотр", 6)],
+    "Устройства": [],
 }
 
 (PAGE_HUB, PAGE_PROJECT, PAGE_SETTINGS, PAGE_BUILDER, PAGE_ICONS, PAGE_FONTS, PAGE_COLORS, PAGE_RESOURCES,
- PAGE_ANIMATIONS, PAGE_LOGIC) = range(10)
+ PAGE_ANIMATIONS, PAGE_LOGIC, PAGE_PREVIEW) = range(11)
 # студии, которым нужен открытый проект: (страница, подпись, иконка, сочетание клавиш)
 STUDIOS = [(PAGE_BUILDER, "Компоненты", "components", "Ctrl+Alt+1"), (PAGE_ICONS, "Иконки", "icons", "Ctrl+Alt+2"),
            (PAGE_FONTS, "Шрифты", "fonts", "Ctrl+Alt+3"), (PAGE_COLORS, "Цвета", "colors", "Ctrl+Alt+4"),
            (PAGE_RESOURCES, "Ресурсы", "resources", "Ctrl+Alt+5"),
-           (PAGE_ANIMATIONS, "Анимации", "animations", "Ctrl+Alt+6"), (PAGE_LOGIC, "Логика", "logic", "Ctrl+Alt+7")]
+           (PAGE_ANIMATIONS, "Анимации", "animations", "Ctrl+Alt+6"), (PAGE_LOGIC, "Логика", "logic", "Ctrl+Alt+7"),
+           (PAGE_PREVIEW, "Просмотр", "devices", "Ctrl+Alt+8")]
 STUDIO_TITLES = {PAGE_BUILDER: "Component Builder", PAGE_ICONS: "SVG-редактор и иконки",
                  PAGE_FONTS: "Typography Studio", PAGE_COLORS: "Цвета", PAGE_RESOURCES: "Ресурсы",
-                 PAGE_ANIMATIONS: "Animation Studio", PAGE_LOGIC: "Визуальная логика"}
+                 PAGE_ANIMATIONS: "Animation Studio", PAGE_LOGIC: "Визуальная логика",
+                 PAGE_PREVIEW: "Интерактивный предпросмотр"}
 
 
 class MainWindow(QMainWindow):
@@ -81,8 +82,10 @@ class MainWindow(QMainWindow):
         self.animations = AnimationPage(self.project_page)
         self.logic = LogicPage(self.project_page)
         self.logic.run_requested.connect(self.run_prototype)
+        from app.ui.studio.preview import PreviewPage
+        self.preview = PreviewPage(self.project_page)
         for p in (self.hub, self.project_page, self.settings_page, self.builder, self.icons, self.fonts_page,
-                  self.colors, self.resources, self.animations, self.logic):
+                  self.colors, self.resources, self.animations, self.logic, self.preview):
             self.pages.addWidget(p)
         for page in (self.builder, self.icons, self.resources):
             page.insert_requested.connect(lambda: self.show_page(PAGE_PROJECT))
@@ -186,14 +189,15 @@ class MainWindow(QMainWindow):
                     sub.addSeparator() if a is None else sub.addAction(a)
                 sub.addSeparator()
                 self.studio_actions = []
-                self.act_run = self._act(sub, "▶ Запустить прототип", QKeySequence("F5"), self.run_prototype)
-                self.studio_actions.append(self.act_run)
-                sub.addSeparator()
                 for page, _, _, sc in STUDIOS:
                     a = self._act(sub, STUDIO_TITLES[page], QKeySequence(sc),
                                   lambda _=False, pg=page: self.show_page(pg))
                     self.studio_actions.append(a)
                 sub.addSeparator()
+            if title == "Устройства":
+                self.act_run = self._act(sub, "▶ Интерактивный предпросмотр", QKeySequence("F5"),
+                                         self.run_prototype)
+                self.studio_actions.append(self.act_run)
             for text, stage in items:
                 a = sub.addAction(f"{text}  —  этап {stage}")
                 a.setEnabled(False)
@@ -230,6 +234,10 @@ class MainWindow(QMainWindow):
             self.pages.widget(page).refresh()
         if page != PAGE_ANIMATIONS and hasattr(self, "animations"):
             self.animations.stop(keep_position=True)
+        if page == PAGE_PREVIEW:
+            self.preview.activate()
+        elif hasattr(self, "preview"):
+            self.preview.deactivate()
 
     def _update_state(self) -> None:
         has = self.doc is not None
@@ -377,9 +385,8 @@ class MainWindow(QMainWindow):
     def run_prototype(self) -> None:
         if self.doc is None:
             return
-        from app.ui.studio.prototype import PrototypeWindow
-        self.prototype = PrototypeWindow(self.project_page.editor, self)
-        self.prototype.show()
+        self.preview.start(self.project_page.editor.screen_id)  # новый сеанс с текущего экрана
+        self.show_page(PAGE_PREVIEW)
 
     def open_in_builder(self, component_id: str) -> None:
         self.show_page(PAGE_BUILDER)
