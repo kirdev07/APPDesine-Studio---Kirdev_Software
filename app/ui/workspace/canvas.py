@@ -346,7 +346,7 @@ def _paint_text(p: QPainter, n: Node, rect: QRectF) -> None:
     align = ALIGN_FLAGS.get(n.align, Qt.AlignmentFlag.AlignLeft)
     look = text_look(n)
     p.setPen(qcolor(n.text_color))
-    p.setClipRect(rect)
+    p.setClipRect(rect, Qt.ClipOperation.IntersectClip)  # не сбрасывать обрезку родителя (прокрутка, скругление)
     if look == PLAIN_LOOK and n.decoration == "none":
         f = QFont(n.font_family)
         f.setPixelSize(max(1, int(round(n.font_size))))
@@ -795,11 +795,12 @@ class CanvasView(QGraphicsView):
         s = self.editor.screen()
         if not s:
             return
-        pad = 0.04 * max(s.width, s.height)  # экран крупнее: поля вокруг небольшие
-        self.fitInView(QRectF(-pad, -pad, s.width + 2 * pad, s.height + 2 * pad), Qt.AspectRatioMode.KeepAspectRatio)
-        z = max(ZOOM_MIN, min(ZOOM_MAX, self.zoom()))
+        vp = self.viewport().rect()
+        side, top = 16, 60  # сверху — место для плавающей панели выделенного, чтобы она не закрывала экран
+        z = min((vp.width() - 2 * side) / s.width, (vp.height() - top - side) / s.height)
+        z = max(ZOOM_MIN, min(ZOOM_MAX, z))
         self.setTransform(QTransform.fromScale(z, z))
-        self.centerOn(s.width / 2, s.height / 2)
+        self.centerOn(s.width / 2, s.height / 2 - (top - side) / 2 / z)
         self._auto_fit = True
         self.zoom_changed.emit(z)
 

@@ -67,7 +67,8 @@ def map_screen(s: Screen, ap) -> list[Node]:
                for i, y in enumerate((70, 190, 300))]
     streets += [c.rect(f"Проезд {i + 1}", 10, 380, c.s["surfaceContainerHighest"], x=c.d(x), y=0)
                 for i, x in enumerate((60, 200, 300))]
-    park = c.rect("Парк", 110, 90, "#B7E1B0", radius=24, x=c.d(210), y=c.d(85))
+    park = c.rect("Парк", 110, 90, "#B7E1B0" if ap.theme == "light" else "#2D4A31", radius=24, x=c.d(210),
+                  y=c.d(85))
     pins = []
     for i, (x, y, color) in enumerate(((120, 140, c.s["primary"]), (250, 230, c.s["tertiary"]),
                                        (40, 250, c.s["primary"]))):

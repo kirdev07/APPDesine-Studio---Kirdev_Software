@@ -6,3 +6,6 @@ build/
 dist/
 *.tmp-*
 docs/screenshots/_raw/
+
+# временные проверки Claude Code (хуки, агент-тестировщик)
+.claude/

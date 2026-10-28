@@ -66,6 +66,7 @@ def home(s: Screen, ap) -> list[Node]:
                              gap=0, sizing_h="fill", sizing_v="hug"), _b(s, ap, "m3_avatar")],
                     cross_align="center", sizing_h="fill", sizing_v="hug")
     search = _fill(_b(s, ap, "m3_search_bar"))
+    _set_text(search, "Плейсхолдер", "Поиск")
 
     def tile(glyph, t, v, bg, fg):
         return c.frame(f"Плитка «{t}»", "vertical",
@@ -195,6 +196,10 @@ def wallet(s: Screen, ap) -> list[Node]:
                    pad_l=20, pad_r=20, pad_t=20, pad_b=20, gap=6, radius=24, fill=c.s["primary"], sizing_h="fill",
                    sizing_v="hug")
     card.gradient, card.fill2, card.grad_angle, card.elevation = "linear", c.s["tertiary"], 135, 2
+    if ap.theme != "light":  # в тёмной теме primary и tertiary светлые — карточка в тёмных контейнерах
+        card.fill, card.fill2 = c.s["primaryContainer"], c.s["tertiaryContainer"]
+        for t in card.children:
+            t.text_color = c.s["onPrimaryContainer"]
 
     def action(glyph, t):
         return c.frame(f"Действие «{t}»", "vertical",
@@ -251,6 +256,9 @@ def tracking(s: Screen, ap) -> list[Node]:
         _set_text(steps, "Подпись", t, i)
     courier = _fill(_b(s, ap, "m3_profile_header"))
     courier.pad_l = courier.pad_r = 0
+    from app.libraries import symbols
+    icon = courier.children[-1]  # у курьера — телефон, а не «редактировать»
+    icon.name, icon.path, icon.vb_w, icon.vb_h = "Позвонить", symbols.path("call"), symbols.VIEWBOX, symbols.VIEWBOX
     _set_text(courier, "Имя", "Курьер Максим")
     _set_text(courier, "Почта", "Электросамокат · ★ 4,9")
     call = _fill(_b(s, ap, "m3_button_tonal"))

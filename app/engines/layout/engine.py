@@ -123,6 +123,9 @@ def _constrain(mode: str, x: float, w: float, opos: float, osize: float, npos: f
     return npos + (x - opos) * s, w * s
 
 
+MAX_PASSES = 4
+
+
 class LayoutEngine:
     def __init__(self, measurer: TextMeasurer | None = None):
         self.measurer = measurer or SimpleMeasurer()
@@ -130,6 +133,40 @@ class LayoutEngine:
     # ---------- публичный вход ----------
     def layout_screen(self, screen: Screen, before: dict[str, Rect] | None = None,
                       before_size: tuple[int, int] | None = None) -> tuple[dict[str, dict], list[Diagnostic]]:
+        """Раскладка до устойчивого состояния: высота «по содержимому» зависит от ширины, которую родитель
+        назначает в этом же проходе, поэтому иногда нужен повтор (не больше MAX_PASSES). Экран не меняется —
+        возвращаются изменения относительно исходной геометрии."""
+        changes, diags = self._layout_pass(screen, before, before_size)
+        if not changes:
+            return changes, diags
+        nodes = [n for n in self._all(screen.nodes) if not n.is_group]
+        original = {n.id: (n.x, n.y, n.w, n.h) for n in nodes}
+        by_id = {n.id: n for n in nodes}
+        try:
+            cur = changes
+            for _ in range(MAX_PASSES - 1):
+                for nid, props in cur.items():
+                    for k, v in props.items():
+                        setattr(by_id[nid], k, v)
+                snap = {n.id: (n.x, n.y, n.w, n.h) for n in nodes}
+                cur, diags = self._layout_pass(screen, snap, (screen.width, screen.height))
+                if not cur:
+                    break
+            for nid, props in cur.items():
+                for k, v in props.items():
+                    setattr(by_id[nid], k, v)
+            final = {n.id: (n.x, n.y, n.w, n.h) for n in nodes}
+        finally:
+            for n in nodes:
+                n.x, n.y, n.w, n.h = original[n.id]
+        out = {}
+        for nid, g in final.items():
+            props = {k: round(v, 2) for k, v, old in zip("xywh", g, original[nid]) if abs(v - old) > EPS}
+            if props:
+                out[nid] = props
+        return out, diags
+
+    def _layout_pass(self, screen: Screen, before, before_size) -> tuple[dict[str, dict], list[Diagnostic]]:
         self.screen = screen
         self.start: dict[str, list[float]] = {}
         for n in self._all(screen.nodes):
