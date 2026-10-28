@@ -242,6 +242,9 @@ class MainWindow(QMainWindow):
         self.act_save = self._act(m, "Сохранить", QKeySequence.StandardKey.Save, self.save_project)
         self.act_close = self._act(m, "Закрыть проект", QKeySequence("Ctrl+W"), self.close_project)
         m.addSeparator()
+        self.act_version = self._act(m, "Сохранить версию…", QKeySequence("Ctrl+Alt+S"), self.save_version)
+        self.act_history = self._act(m, "История версий…", None, self.show_versions)
+        m.addSeparator()
         self.act_template = self._act(m, "Сохранить как шаблон…", None, self.save_as_template)
         m.addSeparator()
         self._act(m, "Project Hub", QKeySequence("Ctrl+H"), lambda: self.show_page(PAGE_HUB))
@@ -608,6 +611,79 @@ class MainWindow(QMainWindow):
         self._presentation.showFullScreen()
         self._presentation.setFocus()
         return self._presentation
+
+    # ---------- версии ----------
+    def save_version(self, label: str | None = None):
+        from PySide6.QtWidgets import QInputDialog
+        from app.core.project.versions import save_version
+        if self.doc is None:
+            return None
+        if label is None:
+            label, ok = QInputDialog.getText(self, "Сохранить версию", "Подпись (что сделано):",
+                                             text="Перед правками")
+            if not ok:
+                return None
+        path = save_version(self.doc, self.ctx.paths.base, label)
+        self.statusBar().showMessage(f"Версия «{label}» сохранена — Проект → История версий", 6000)
+        return path
+
+    def versions(self):
+        from app.core.project.versions import list_versions
+        return list_versions(self.doc.meta.id, self.ctx.paths.base, self.ctx.paths.backups) if self.doc else []
+
+    def restore_version(self, version) -> bool:
+        from app.core.project.versions import load_version
+        try:
+            other = load_version(version.path)
+        except Exception as exc:  # noqa: BLE001 — повреждённая копия: сообщение пользователю
+            self._err("Не удалось открыть версию", exc)
+            return False
+        self.save_version("Перед откатом")  # текущее состояние не теряется
+        ok = self.project_page.editor.restore_document(other, f"Вернуть версию {version.when:%d.%m %H:%M}")
+        if ok:
+            self.statusBar().showMessage(f"Возвращена версия {version.title} — Ctrl+Z отменит", 8000)
+        return ok
+
+    def show_versions(self) -> None:
+        from PySide6.QtWidgets import QDialog, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout
+        if self.doc is None:
+            return
+        d = QDialog(self)
+        d.setWindowTitle("История версий")
+        d.resize(520, 480)
+        v = QVBoxLayout(d)
+        v.addWidget(QLabel("Свои точки сохранения (Ctrl+Alt+S) и автокопии перед каждым сохранением. "
+                           "Возврат можно отменить (Ctrl+Z); текущее состояние перед ним сохраняется версией."))
+        lst = QListWidget()
+        for ver in self.versions():
+            it = QListWidgetItem(("🕘 " if ver.auto else "★ ") + ver.title)
+            it.setData(Qt.ItemDataRole.UserRole, ver)
+            lst.addItem(it)
+        v.addWidget(lst, 1)
+        row = QHBoxLayout()
+        b_new = QPushButton("Сохранить версию сейчас")
+        b_back = QPushButton("Вернуть выбранную")
+        b_back.setObjectName("Primary")
+        row.addWidget(b_new)
+        row.addStretch()
+        row.addWidget(b_back)
+        v.addLayout(row)
+
+        def back():
+            it = lst.currentItem()
+            if it and QMessageBox.question(d, "История версий", f"Вернуть версию {it.text()[2:]}?") == \
+                    QMessageBox.StandardButton.Yes and self.restore_version(it.data(Qt.ItemDataRole.UserRole)):
+                d.accept()
+
+        def new():
+            if self.save_version():
+                d.accept()
+                self.show_versions()
+        b_back.clicked.connect(back)
+        b_new.clicked.connect(new)
+        lst.itemDoubleClicked.connect(lambda _: back())
+        self._versions_dialog = d
+        d.show()
 
     def make_app_icon(self) -> bool:
         ed = self.project_page.editor

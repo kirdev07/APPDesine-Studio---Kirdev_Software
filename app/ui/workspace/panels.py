@@ -1041,6 +1041,13 @@ class Inspector(QScrollArea):
         row.addWidget(self.s_auto, 1)
         row.addWidget(self.s_auto_ms)
         f.addRow("Автопереход", row)
+        self.s_comments = QListWidget()
+        self.s_comments.setMaximumHeight(120)
+        self.s_comments.setToolTip("Двойной щелчок — открыть; новый — правый клик по холсту")
+        self.s_comments.itemDoubleClicked.connect(
+            lambda it: self.window().project_page.edit_comment(it.data(ROLE_ID))
+            if hasattr(self.window(), "project_page") else None)
+        f.addRow("Комментарии", self.s_comments)
 
         self.sec_guides, f = self._section("Направляющие")
         self.guides = QListWidget()
@@ -1167,6 +1174,14 @@ class Inspector(QScrollArea):
                 k = _dp_factor(s)
                 self.s_info.setText(f"Android · {orient} · {s.width / k:.0f} × {s.height / k:.0f} dp" if k
                                     else "Windows · окно")
+                self.s_comments.clear()
+                for i, c in enumerate(s.comments, 1):
+                    it = QListWidgetItem(f"{'✓' if c.resolved else '●'} {i}. {c.text.splitlines()[0][:40]}")
+                    it.setData(ROLE_ID, c.id)
+                    if c.resolved:
+                        it.setForeground(QColor("#6B6B6B"))
+                    self.s_comments.addItem(it)
+                self._row_visible(self.s_comments, bool(s.comments))
                 auto = ed.auto_advance()
                 self.s_auto.clear()
                 if auto == "custom":
@@ -1178,7 +1193,7 @@ class Inspector(QScrollArea):
                             self.s_auto.addItem(f"→ {x.name}", x.id)
                     if auto:
                         self.s_auto.setCurrentIndex(max(0, self.s_auto.findData(auto[0])))
-                        self.s_auto_ms.setValue(auto[1] / 1000)
+                    self.s_auto_ms.setValue(auto[1] / 1000 if auto else 2.0)  # пауза по умолчанию — 2 с
                 self.s_auto.setEnabled(auto != "custom")
                 self.s_auto_ms.setEnabled(bool(auto) and auto != "custom")
                 self.guides.clear()

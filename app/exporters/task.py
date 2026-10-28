@@ -180,6 +180,11 @@ def build_task(doc: ProjectDocument, opts, screens: list, files: dict[str, str],
         L += ["## Дополнительные указания", ""]
         for name, text in prompts:
             L += [f"### {name}", "", text.strip(), ""]
+    notes = [(s, c) for s in screens for c in getattr(s, "comments", []) if not c.resolved]
+    if notes:  # открытые комментарии дизайнера — пожелания к реализации
+        L += ["## Комментарии дизайнера", ""]
+        L += [f"- «{s.name}» (x {c.x:g}, y {c.y:g}): {c.text.strip()}" for s, c in notes[:60]]
+        L += [""]
     warn = [i for i in issues if i.severity != "info"]
     if warn:
         L += ["## Замечания проверки дизайна", ""]

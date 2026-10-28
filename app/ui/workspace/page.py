@@ -44,6 +44,7 @@ class WorkspacePage(QMainWindow):
         self.setDockOptions(QMainWindow.DockOption.AnimatedDocks | QMainWindow.DockOption.AllowNestedDocks)
 
         self.canvas = CanvasView(self.editor)
+        self.editor.comment_clicked.connect(self.edit_comment)
         self._build_actions()
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._build_toolbar())
         self.setCentralWidget(self.canvas)
@@ -516,9 +517,52 @@ class WorkspacePage(QMainWindow):
         if hasattr(w, "open_logic"):
             w.open_logic()
 
+    def add_comment_at(self, x: float, y: float, text: str | None = None) -> str | None:
+        from PySide6.QtWidgets import QInputDialog
+        if text is None:
+            text, ok = QInputDialog.getMultiLineText(self, "Комментарий", "Что здесь поправить или уточнить?")
+            if not ok:
+                return None
+        return self.editor.add_comment(x, y, text)
+
+    def edit_comment(self, comment_id: str) -> None:
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit, QVBoxLayout
+        ed = self.editor
+        c = ed.comment(comment_id)
+        if c is None:
+            return
+        d = QDialog(self)
+        d.setWindowTitle("Комментарий" + (" (решён)" if c.resolved else ""))
+        v = QVBoxLayout(d)
+        text = QPlainTextEdit(c.text)
+        v.addWidget(text)
+        bb = QDialogButtonBox()
+        save = bb.addButton("Сохранить", QDialogButtonBox.ButtonRole.AcceptRole)
+        done = bb.addButton("Открыть снова" if c.resolved else "✓ Решено", QDialogButtonBox.ButtonRole.ActionRole)
+        delete = bb.addButton("Удалить", QDialogButtonBox.ButtonRole.DestructiveRole)
+        bb.addButton("Отмена", QDialogButtonBox.ButtonRole.RejectRole)
+        v.addWidget(bb)
+        clicked = {}
+        bb.clicked.connect(lambda b: (clicked.update(b=b), d.accept() if b is not None else None))
+        bb.rejected.connect(d.reject)
+        self._comment_dialog = d
+        if d.exec() != QDialog.DialogCode.Accepted:
+            return
+        b = clicked.get("b")
+        if b is delete:
+            ed.delete_comment(comment_id)
+        elif b is done:
+            ed.update_comment(comment_id, resolved=not c.resolved)
+        elif b is save and text.toPlainText().strip() != c.text:
+            ed.update_comment(comment_id, text=text.toPlainText().strip())
+
     def show_context_menu(self, global_pos) -> None:
         ed = self.editor
         m = QMenu(self)
+        pos = getattr(self.canvas, "menu_scene_pos", None)
+        if pos and ed.screen():
+            m.addAction("💬 Комментарий здесь…", lambda x=pos[0], y=pos[1]: self.add_comment_at(x, y))
+            m.addSeparator()
         if ed.selection:
             for a in (self.a_replace, self.a_dup, self.a_copy, self.a_delete):
                 m.addAction(a)

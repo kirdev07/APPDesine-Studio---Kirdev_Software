@@ -56,6 +56,55 @@ def contrast(a: str, b: str) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
+def _hsl(color: str) -> tuple[float, float, float]:
+    import colorsys
+    r, g, b = (int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    return h, s, l
+
+
+def readable_color(fg: str, bg: str, need: float) -> str:
+    """Тот же оттенок текста, но светлее или темнее — пока контраст с фоном не станет достаточным."""
+    import colorsys
+    h, s, l0 = _hsl(fg[:7])
+    best = None
+    for target in (0.0, 1.0):  # темнее и светлее — берётся ближайший подходящий вариант
+        for i in range(1, 101):
+            l = l0 + (target - l0) * i / 100
+            r, g, b = colorsys.hls_to_rgb(h, l, s)
+            c = f"#{round(r * 255):02X}{round(g * 255):02X}{round(b * 255):02X}"
+            if contrast(c, bg) >= need:
+                if best is None or i < best[0]:
+                    best = (i, c)
+                break
+    if best is None:
+        best = (0, "#000000" if contrast("#000000", bg) > contrast("#FFFFFF", bg) else "#FFFFFF")
+    return best[1] + fg[7:9]  # прозрачность текста сохраняется
+
+
+def contrast_need(s: Screen, n, u: float) -> float:
+    size_dp = n.font_size / u if s.platform == PLATFORM_ANDROID else n.font_size * 0.75
+    return MIN_CONTRAST_LARGE if size_dp >= LARGE_TEXT_DP or (size_dp >= 18.5 and n.font_weight >= 700) \
+        else MIN_CONTRAST
+
+
+def contrast_fixes(doc: ProjectDocument, artboard: str, screen_ids=None) -> dict[str, dict[str, str]]:
+    """{экран: {текст: новый цвет}} для текстов с недостаточным контрастом (кроме частей копий компонентов)."""
+    out: dict[str, dict[str, str]] = {}
+    for s in doc.screens:
+        if screen_ids and s.id not in screen_ids:
+            continue
+        u = ViewSpec(default_profile(s)).units(s)
+        for n, _, _ in tree.walk(s.nodes):
+            if n.type != "text" or not n.visible or not n.text.strip() or not _opaque(n.text_color) or n.ref:
+                continue
+            bg = background_of(s, n, artboard)
+            need = contrast_need(s, n, u)
+            if contrast(n.text_color[:7], bg) < need:
+                out.setdefault(s.id, {})[n.id] = readable_color(n.text_color, bg, need)
+    return out
+
+
 def _opaque(color: str) -> bool:
     return bool(color) and (len(color) == 7 or color[7:9].upper() == "FF")
 
@@ -141,9 +190,7 @@ def _screen(c: _Ctx, s: Screen, engine, font_available, missing_chars, artboard:
             continue
         bg = background_of(s, n, artboard)
         ratio = contrast(n.text_color[:7], bg)
-        size_dp = n.font_size / u if s.platform == PLATFORM_ANDROID else n.font_size * 0.75
-        need = MIN_CONTRAST_LARGE if size_dp >= LARGE_TEXT_DP or (size_dp >= 18.5 and n.font_weight >= 700) \
-            else MIN_CONTRAST
+        need = contrast_need(s, n, u)
         if ratio < need:
             c.add("warning", "contrast", f"контраст текста {ratio:.1f}:1 на фоне {bg} — нужно не меньше {need:g}:1 "
                                          "(WCAG AA)", s, n)

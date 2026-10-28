@@ -58,6 +58,9 @@ class ValidatorPage(QWidget):
             row.addWidget(cb)
         row.addWidget(button("⟳ Проверить", self.refresh, "Проверить заново", "Primary"))
         lay.addLayout(row)
+        self.b_contrast = button("Исправить контраст", self.fix_contrast,
+                                 "Тексты с плохо читаемым цветом — тот же оттенок, светлее или темнее (WCAG AA)")
+        lay.addWidget(self.b_contrast)
         self.summary = label("", "Muted", wrap=True)
         lay.addWidget(self.summary)
         self.tree = QTreeWidget()
@@ -78,8 +81,16 @@ class ValidatorPage(QWidget):
             self.issues = run_validation(self.main, ids)
         self._fill()
 
+    def fix_contrast(self) -> int:
+        ids = [self.main.screen_id] if self.scope.currentData() == "screen" and self.main.screen_id else None
+        n = self.main.fix_contrast(ids)
+        self.refresh()
+        self.summary.setText(f"Цвет текста исправлен: {n}. " + self.summary.text() if n else self.summary.text())
+        return n
+
     def _fill(self) -> None:
         self.tree.clear()
+        self.b_contrast.setVisible(any(i.code == "contrast" for i in self.issues))
         c = summary(self.issues)
         self.summary.setText("✓ Замечаний нет — проект готов к экспорту" if not self.issues else
                              f"Критично: {c['critical']} · предупреждений: {c['warning']} · сведений: {c['info']}"

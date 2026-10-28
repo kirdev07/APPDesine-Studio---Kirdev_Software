@@ -588,6 +588,8 @@ class OverlayItem(QGraphicsItem):
                 p.setPen(QColor("#FFFFFF"))
                 p.drawText(QRectF(-w / 2, 0, w, 18), Qt.AlignmentFlag.AlignCenter, text)
                 p.restore()
+        if ed.comments_visible:
+            self._paint_comments(p, s, scale)
         if view.measuring() and nodes:
             self._paint_distances(p, ed, s, scale)
         p.setPen(self._pen(QColor("#FF4D7A"), 1))
@@ -621,6 +623,28 @@ class OverlayItem(QGraphicsItem):
             else:
                 p.drawRect(view.create_rect)
         del board
+
+    def _paint_comments(self, p: QPainter, s, scale: float) -> None:
+        """Значки комментариев: номер в кружке; решённые — серые."""
+        f = QFont(TOKENS["font"])
+        f.setPixelSize(11)
+        f.setBold(True)
+        for i, c in enumerate(s.comments, 1):
+            p.save()
+            p.translate(c.x, c.y)
+            p.scale(1 / scale, 1 / scale)
+            p.setPen(QPen(QColor("#FFFFFF"), 2))
+            p.setBrush(QColor("#6B6B6B") if c.resolved else QColor("#F2B705"))
+            path = QPainterPath()  # «капля»: кружок с хвостиком в точку комментария
+            path.moveTo(0, 0)
+            path.lineTo(0, -12)
+            path.arcTo(QRectF(0, -24, 24, 24), 180, -270)
+            path.closeSubpath()
+            p.drawPath(path)
+            p.setFont(f)
+            p.setPen(QColor("#111111"))
+            p.drawText(QRectF(0, -24, 24, 24), Qt.AlignmentFlag.AlignCenter, str(i))
+            p.restore()
 
     def _paint_distances(self, p: QPainter, ed, s, scale: float) -> None:
         """Alt: расстояния от выделенного до элемента под курсором (или до экрана)."""
@@ -834,6 +858,17 @@ class CanvasView(QGraphicsView):
         c = img.pixelColor(0, 0)
         return f"#{c.red():02X}{c.green():02X}{c.blue():02X}"
 
+    def comment_at(self, p) -> str | None:
+        """Комментарий, по значку которого щёлкнули (значок — 24 px экрана над точкой и правее)."""
+        s, ed = self.editor.screen(), self.editor
+        if not s or not ed.comments_visible:
+            return None
+        k = 1 / self.zoom()
+        for c in reversed(s.comments):
+            if c.x - 2 * k <= p.x() <= c.x + 26 * k and c.y - 26 * k <= p.y() <= c.y + 2 * k:
+                return c.id
+        return None
+
     def measuring(self) -> bool:
         return self._alt
 
@@ -846,6 +881,10 @@ class CanvasView(QGraphicsView):
             return
         p = self._scene_pos(event)
         ed = self.editor
+        hit = self.comment_at(p) if event.button() == Qt.MouseButton.LeftButton else None
+        if hit:
+            ed.comment_clicked.emit(hit)
+            return
         if event.button() == Qt.MouseButton.MiddleButton or (
                 event.button() == Qt.MouseButton.LeftButton and (self._space or ed.tool == TOOL_HAND)):
             self._mode = "pan"
@@ -1139,6 +1178,7 @@ class CanvasView(QGraphicsView):
         if not ed.screen():
             return
         p = self.mapToScene(event.pos())
+        self.menu_scene_pos = (p.x(), p.y())  # куда поставить комментарий из меню
         nid = ed.hit(p.x(), p.y(), 4 / self.zoom())
         if nid and nid not in ed.selection:
             ed.select([nid])

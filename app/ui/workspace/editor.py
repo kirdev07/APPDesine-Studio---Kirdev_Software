@@ -41,6 +41,7 @@ class Editor(QObject):
     preview_changed = Signal()    # временная геометрия при перетаскивании
     message = Signal(str)         # сообщение пользователю (строка состояния)
     open_component = Signal(str)  # двойной клик по экземпляру в режиме изоляции
+    comment_clicked = Signal(str)  # щелчок по значку комментария на холсте
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -893,6 +894,77 @@ class Editor(QObject):
         return name if self.patch("Цвет в проект", mutate) else None
 
     color_picker = None  # холст: функция(обратный_вызов) — следующий щелчок по холсту берёт цвет
+    comments_visible = True
+
+    # ---------- комментарии ----------
+    def add_comment(self, x: float, y: float, text: str, author: str = "") -> str | None:
+        from app.core.document.model import Comment
+        s = self.screen()
+        if not s or not text.strip():
+            return None
+        c = Comment(x=float(x), y=float(y), text=text.strip(), author=author)
+        sid = s.id
+
+        def mutate(doc):
+            doc.screen(sid).comments.append(Comment.from_dict(c.to_dict()))
+        return c.id if self.patch("Комментарий", mutate) else None
+
+    def comment(self, comment_id: str):
+        s = self.screen()
+        return next((c for c in (s.comments if s else []) if c.id == comment_id), None)
+
+    def update_comment(self, comment_id: str, **props) -> bool:
+        s = self.screen()
+        if self.comment(comment_id) is None:
+            return False
+        sid = s.id
+
+        def mutate(doc):
+            c = next(c for c in doc.screen(sid).comments if c.id == comment_id)
+            for k, v in props.items():
+                setattr(c, k, v)
+        label = "Комментарий решён" if props.get("resolved") else "Изменить комментарий"
+        return self.patch(label, mutate)
+
+    def delete_comment(self, comment_id: str) -> bool:
+        s = self.screen()
+        if self.comment(comment_id) is None:
+            return False
+        sid = s.id
+
+        def mutate(doc):
+            doc.screen(sid).comments[:] = [c for c in doc.screen(sid).comments if c.id != comment_id]
+        return self.patch("Удалить комментарий", mutate)
+
+    # ---------- версии и контраст ----------
+    def restore_document(self, other, label: str = "Вернуть версию") -> bool:
+        """Содержимое другой копии проекта (версии) — в текущий документ одной записью истории."""
+        from app.core.commands import DocPatch
+        snap = DocPatch.capture(other)
+        keep_id = self.doc.meta.id if self.doc else ""
+
+        def mutate(doc):
+            DocPatch.restore(doc, snap)
+            doc.meta.id = keep_id
+        ok = self.patch(label, mutate)
+        if ok and self.doc.screens and not self.screen():
+            self.set_screen(self.doc.screens[0].id)
+        return ok
+
+    def fix_contrast(self, screen_ids=None) -> int:
+        """Тексты с недостаточным контрастом — тот же оттенок, светлее или темнее. Одной записью истории."""
+        from app.engines.validation.engine import contrast_fixes
+        fixes = contrast_fixes(self.doc, self.artboard_color(), screen_ids) if self.doc else {}
+        count = sum(len(v) for v in fixes.values())
+        if not count:
+            return 0
+
+        def mutate(doc):
+            for sid, nodes in fixes.items():
+                m = tree.node_map(doc.screen(sid))
+                for nid, color in nodes.items():
+                    m[nid].text_color = color
+        return count if self.patch("Исправить контраст", mutate) else 0
 
     def set_app_icon(self, node_id: str | None = None) -> bool:
         """Выделенный элемент — иконка приложения (картинка 432×432 в ресурсах проекта); None — убрать."""

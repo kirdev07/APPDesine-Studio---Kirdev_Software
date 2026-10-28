@@ -15,8 +15,9 @@ from datetime import datetime, timezone
 # 8 — эффекты: уровень тени, градиент, размытие; 9 — масштаб и поворот (для анимаций);
 # 10 — варианты компонентов (свойства «Размер», «Стиль» … и выбор варианта у копии);
 # 11 — тонкая настройка вида: своя тень, обводка (пунктир, сторона, стороны), углы по отдельности, 3-й цвет
-# градиента, интервалы, курсив, подчёркивание, регистр и число строк текста.
-SCHEMA_VERSION = 11
+# градиента, интервалы, курсив, подчёркивание, регистр и число строк текста;
+# 12 — комментарии на экранах (заметки к месту макета, можно отметить решёнными).
+SCHEMA_VERSION = 12
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -466,6 +467,33 @@ class Guide:
 
 
 @dataclass
+class Comment:
+    """Заметка к месту экрана: что поправить, вопрос заказчику. В приложение не попадает."""
+    x: float
+    y: float
+    text: str
+    author: str = ""
+    resolved: bool = False
+    created_at: str = field(default_factory=now_iso)
+    id: str = field(default_factory=new_id)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "x": self.x, "y": self.y, "text": self.text, "author": self.author,
+                "resolved": self.resolved, "created_at": self.created_at}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Comment:
+        if not isinstance(d, dict):
+            raise ModelError("Комментарий должен быть объектом")
+        text = d.get("text", "")
+        if not isinstance(text, str) or len(text) > 20_000:
+            raise ModelError("Текст комментария — строка до 20 000 символов")
+        return cls(x=check_prop("x", d.get("x", 0)), y=check_prop("y", d.get("y", 0)), text=text,
+                   author=str(d.get("author", ""))[:200], resolved=bool(d.get("resolved", False)),
+                   created_at=str(d.get("created_at", ""))[:40], id=_req(d, "id", str))
+
+
+@dataclass
 class Screen:
     name: str
     platform: str
@@ -476,10 +504,12 @@ class Screen:
     safe_areas: bool = True
     nodes: list[Node] = field(default_factory=list)
     guides: list[Guide] = field(default_factory=list)
+    comments: list[Comment] = field(default_factory=list)
     id: str = field(default_factory=new_id)
 
     def to_dict(self) -> dict:
         return {
+            **({"comments": [c.to_dict() for c in self.comments]} if self.comments else {}),
             "id": self.id,
             "name": self.name,
             "platform": self.platform,
@@ -517,6 +547,10 @@ class Screen:
             nodes=[Node.from_dict(n) for n in nodes],
             guides=[Guide.from_dict(g) for g in guides],
         )
+        comments = d.get("comments", [])
+        if not isinstance(comments, list) or len(comments) > 5000:
+            raise ModelError("comments должно быть списком")
+        screen.comments = [Comment.from_dict(c) for c in comments]
         screen.validate()
         return screen
 
