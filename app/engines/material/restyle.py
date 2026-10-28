@@ -17,7 +17,7 @@ from app.engines.material.color import ROLES, scheme
 
 # стиль формы: corner_radius в оформлении → (название, множитель скруглений)
 SHAPES = {4: ("Строгие", 0.35), 12: ("Обычные", 1.0), 20: ("Мягкие", 1.6)}
-THEMES = {"amoled": "Тёмная (AMOLED)", "dark": "Тёмная", "light": "Светлая"}
+THEMES = {"amoled": "Тёмная (AMOLED)", "dark": "Тёмная", "gray": "Серая", "light": "Светлая"}
 FONTS = ("Segoe UI", "Arial", "Calibri", "Verdana", "Tahoma", "Trebuchet MS", "Bahnschrift", "Georgia",
          "Cambria", "Times New Roman")
 # порядок важности ролей: при совпадении цветов у нескольких ролей побеждает первая
@@ -91,9 +91,28 @@ def shape_factor(old: int, new: int) -> float:
     return SHAPES.get(new, ("", 1.0))[1] / SHAPES.get(old, ("", 1.0))[1]
 
 
-def restyle_node(n, cmap: dict[str, str], factor: float, old_font: str, new_font: str) -> None:
+WIN_KEYS = ("win_surface", "win_card", "win_stroke", "win_ctrl", "win_select")
+
+
+def win_map(old: Appearance, new: Appearance) -> dict[str, str]:
+    """Цвета Fluent (фон окна, карточки, рамки, подложки) старой темы → новой; точное совпадение, с прозрачностью."""
+    from app.libraries.components import _palette
+    a, b = _palette(old.theme, old.accent), _palette(new.theme, new.accent)
+    out: dict[str, str] = {}
+    for k in WIN_KEYS:
+        out.setdefault(a[k].upper(), b[k].upper())
+    return out
+
+
+def restyle_node(n, cmap: dict[str, str], factor: float, old_font: str, new_font: str,
+                 exact: dict[str, str] | None = None) -> None:
     for prop in ("fill", "stroke", "text_color", "fill2"):
-        setattr(n, prop, _map(cmap, getattr(n, prop)))
+        v = getattr(n, prop)
+        # окна Windows: фон и рамки — по палитре Fluent (значки и тексты — по ролям, белая галочка остаётся белой)
+        if exact and prop in ("fill", "stroke") and n.type not in ("vector", "text") and v and v.upper() in exact:
+            setattr(n, prop, exact[v.upper()])
+            continue
+        setattr(n, prop, _map(cmap, v))
     if n.radius > 0 and factor != 1.0:
         pill = min(n.w, n.h) / 2
         n.radius = round(pill if n.radius >= pill - 0.5 else min(n.radius * factor, pill), 2)
@@ -112,11 +131,14 @@ def restyle(doc: ProjectDocument, new: Appearance) -> int:
     cmap = color_map(old, new)
     factor = shape_factor(old.corner_radius, new.corner_radius)
     changed = 0
-    roots = [n for s in doc.screens for n in s.nodes] + [c.root for c in doc.components]
-    for n, _, _ in tree.walk(roots):
-        before = (n.fill, n.stroke, n.text_color, n.fill2, n.radius, n.font_family)
-        restyle_node(n, cmap, factor, old.font_family, new.font_family)
-        changed += before != (n.fill, n.stroke, n.text_color, n.fill2, n.radius, n.font_family)
+    wmap = win_map(old, new)
+    roots = [(n, s.platform == "windows") for s in doc.screens for n in s.nodes] + \
+        [(c.root, False) for c in doc.components]
+    for root, win in roots:
+        for n, _, _ in tree.walk([root]):
+            before = (n.fill, n.stroke, n.text_color, n.fill2, n.radius, n.font_family)
+            restyle_node(n, cmap, factor, old.font_family, new.font_family, wmap if win else None)
+            changed += before != (n.fill, n.stroke, n.text_color, n.fill2, n.radius, n.font_family)
     for comp in doc.components:  # состояния компонентов — тоже переопределения
         for state in comp.states.values():
             for props in state.values():

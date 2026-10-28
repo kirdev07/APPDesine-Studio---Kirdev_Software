@@ -94,6 +94,7 @@ class PreviewPage(QWidget):
         self.devices.currentItemChanged.connect(self._pick_device)
         lay.addWidget(self.devices, 1)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)  # подпись над полями: колонка узкая (1280 px)
         self.c_w, self.c_h, self.c_dpi = QSpinBox(), QSpinBox(), QSpinBox()
         for sp, lo, hi in ((self.c_w, 200, 8000), (self.c_h, 200, 8000), (self.c_dpi, 72, 800)):
             sp.setRange(lo, hi)

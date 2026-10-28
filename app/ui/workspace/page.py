@@ -104,7 +104,8 @@ class WorkspacePage(QMainWindow):
         a.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         a.setCheckable(checkable)
         a.setToolTip(tip or text)
-        a.triggered.connect(slot)
+        # флажок получает состояние; обычной команде «checked=False» не передаётся (иначе export_png(folder=False))
+        a.triggered.connect(lambda checked=False, act=a, fn=slot: fn(checked) if act.isCheckable() else fn())
         self.addAction(a)
         return a
 

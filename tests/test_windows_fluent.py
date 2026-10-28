@@ -68,3 +68,30 @@ def test_windows_ready_screens(win):
     assert {"win.titlebar", "win.navpane", "win.settings_card", "win.list", "win.textbox"} <= roles
     ed.set_screen(next(s for s in ed.doc.screens if s.platform == "android").id)
     assert ed.add_template_screen("win_settings") is None                  # не для экрана Android
+
+
+
+def test_theme_change_recolors_windows_screens():
+    """1.33: светлая тема для готовых экранов Windows — карточки и фон окна по палитре Fluent, текст читается."""
+    from dataclasses import replace
+
+    from app.core.document import tree
+    from app.core.project.service import build_document
+    from app.engines.material.restyle import restyle
+    from app.libraries import screen_templates_win
+    from app.libraries.components import _palette
+    from tests.conftest import make_spec
+
+    def fills(nodes):
+        return {n.fill.upper() for n, _, _ in tree.walk(nodes) if n.fill and n.type != "vector"}
+
+    doc = build_document(make_spec(".", title="Окно", platforms=["windows"], devices=["windows_window"]))
+    ap = replace(doc.meta.appearance, theme="amoled")
+    doc.meta.appearance = ap
+    light = replace(ap, theme="light")
+    doc.screens = [screen_templates_win.build("win_dashboard", doc.screens[0], ap)]
+    fresh = screen_templates_win.build("win_dashboard", doc.screens[0], light)
+    restyle(doc, light)
+    dark = {v.upper() for k, v in _palette("amoled").items() if k.startswith("win_")}
+    assert not (fills(doc.screens[0].nodes) & dark)                          # тёмных подложек не осталось
+    assert fills(doc.screens[0].nodes) <= fills(fresh.nodes)                  # как у экрана, созданного в светлой

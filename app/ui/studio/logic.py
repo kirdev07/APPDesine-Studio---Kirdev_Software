@@ -136,8 +136,22 @@ class LogicPage(QWidget):
         split.addWidget(self._build_right())
         split.setSizes([300, 560, 520])
         root.addWidget(split)
-        self.main.document_changed.connect(self.refresh)
-        self.main.screen_changed.connect(self.refresh)
+        self._stale = False
+        self.main.document_changed.connect(self._changed)
+        self.main.screen_changed.connect(self._changed)
+
+    def _changed(self, *_):
+        """Страница скрыта — обновится при показе (карта переходов рисует все экраны: на 50 экранах это секунда)."""
+        if self.isVisible():
+            self.refresh()
+        else:
+            self._stale = True
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self._stale:
+            self._stale = False
+            self.refresh()
 
     # ---------- левая колонка ----------
     def _build_left(self) -> QWidget:

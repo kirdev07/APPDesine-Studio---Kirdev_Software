@@ -315,6 +315,11 @@ class ExportPage(QWidget):
             self.folder.setText(self.ws.ctx.settings.get("export/folder") or
                                 str(self.ws.ctx.settings.projects_dir / "Экспорт"))
         self.inc["include_previews"].setChecked(self.ws.ctx.settings.get("export/include_previews"))
+        android = "android" in doc.meta.platforms  # проект только для Windows — флажок Android недоступен
+        cb = self.inc["include_android_project"]
+        if android != cb.isEnabled():
+            cb.setChecked(android)
+        cb.setEnabled(android)
         self.refresh_prompts()
         self._loading = False
         self.rebuild()
@@ -346,8 +351,9 @@ class ExportPage(QWidget):
                                 + ("\n⛔ Экспорт заблокирован — исправьте критичные замечания" if c["critical"] else ""))
         self.b_export.setEnabled(bool(chosen) and not c["critical"])
         has_android = any(s.platform == "android" for s in chosen) and o.include_android_project
-        for b in (self.b_android, self.b_apk):
+        for b in (self.b_android, self.b_apk, self.b_play):
             b.setEnabled(has_android and not c["critical"])
+        self.b_windows.setEnabled(any(s.platform == "windows" for s in chosen) and not c["critical"])
         self.b_export.setToolTip("" if self.b_export.isEnabled() else
                                  "Нет экранов или есть критичные замечания проверки")
         try:

@@ -374,6 +374,8 @@ class ColorField(QWidget):
         t = self.edit.text().strip().upper()
         if t and not t.startswith("#"):
             t = "#" + t
+        if re.fullmatch(r"#[0-9A-F]{3,4}", t):  # короткая запись: #FFF → #FFFFFF, #F008 → #FF000088
+            t = "#" + "".join(ch * 2 for ch in t[1:])
         if t and not _HEX.match(t):  # не код цвета («нет», опечатка) — вернуть прежнее значение
             self.set_value(self._value)
             return
@@ -1043,7 +1045,7 @@ class Inspector(QScrollArea):
             b.clicked.connect(slot)
             row.addWidget(b)
         f.addRow(row)
-        self.inst_open = QPushButton("Открыть мастер в Component Builder")
+        self.inst_open = QPushButton("Открыть мастер в конструкторе компонентов")
         self.inst_open.clicked.connect(lambda: self.editor.selected_instances() and self.editor.open_component.emit(
             self.editor.selected_instances()[0].component_id))
         f.addRow(self.inst_open)
@@ -1664,7 +1666,10 @@ class ScreensStrip(QWidget):
             self._submenus.append(apps)
             apps.setToolTip("Несколько экранов сразу: меню, кнопки и «Назад» уже ведут куда нужно")
             for key, (title, keys, *_rest) in APPS.items():
-                apps.addAction(f"{title} — {len(keys)} экранов", lambda k=key: self.editor.add_ready_app(k))
+                n = len(keys)
+                word = "экран" if n % 10 == 1 and n % 100 != 11 else \
+                    "экрана" if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else "экранов"
+                apps.addAction(f"{title} — {n} {word}", lambda k=key: self.editor.add_ready_app(k))
 
     def add_screen(self) -> None:
         doc = self.editor.doc

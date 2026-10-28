@@ -60,12 +60,17 @@ def bezel(screen: Screen, spec: ViewSpec) -> float:
     return {"phone": 12, "foldable": 14, "tablet": 18}.get(spec.profile.kind, 0) * u
 
 
+def own_title_bar(screen: Screen) -> bool:
+    """В дизайне окна уже есть свой заголовок (компонент «Заголовок окна» сверху) — второй рамкой не рисуется."""
+    return any(n.role == "win.titlebar" and n.visible and n.y <= 1 for n in screen.nodes)
+
+
 def frame_rect(screen: Screen, spec: ViewSpec) -> QRectF:
     """Прямоугольник устройства с рамкой в координатах экрана (экран — от 0,0)."""
     if spec.profile.platform == PLATFORM_ANDROID:
         b = bezel(screen, spec)
         return QRectF(-b, -b, screen.width + 2 * b, screen.height + 2 * b)
-    t = TITLE_BAR * spec.units(screen)
+    t = 0 if own_title_bar(screen) else TITLE_BAR * spec.units(screen)
     return QRectF(-1, -t - 1, screen.width + 2, screen.height + t + 2)
 
 
@@ -137,6 +142,10 @@ def paint_device(p: QPainter, screen: Screen, spec: ViewSpec, artboard: str, tit
         if spec.profile.kind == "foldable" and W < H * 1.2:
             p.setPen(QPen(QColor(255, 255, 255, 16), 1.0 * u))
             p.drawLine(QPointF(W / 2, 0), QPointF(W / 2, H))
+    elif own_title_bar(screen):  # только тонкая граница окна
+        p.setPen(QPen(QColor("#3A3A3A"), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(QRectF(-0.5, -0.5, W + 1, H + 1))
     else:
         t = TITLE_BAR * u
         bar = QRectF(0, -t, W, t)

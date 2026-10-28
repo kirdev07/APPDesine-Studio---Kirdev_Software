@@ -31,6 +31,7 @@ _KW = {"as", "break", "class", "continue", "do", "else", "false", "for", "fun", 
        "val", "var", "when", "while"}
 
 
+_WIN_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 _JAVA_KW = {"abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue",
             "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if",
             "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private",
@@ -64,11 +65,15 @@ def package_name(title: str) -> str:
     seg = re.sub(r"[^a-z0-9]+", "", _translit(title)) or "app"
     if not seg[0].isalpha():
         seg = "app" + seg
-    return f"com.design.{seg[:30]}"
+    seg = seg[:30]
+    if seg in _KW or seg in _JAVA_KW or seg in _WIN_RESERVED:  # «fun», «class», «con» — не имя пакета / папки
+        seg += "app"
+    return f"com.design.{seg}"
 
 
 def kstr(text: str) -> str:
-    return '"' + text.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("\n", "\\n") + '"'
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("\n", "\\n") \
+        .replace("\r", "\\r") + '"'
 
 
 def kcolor(c: str) -> str:
@@ -98,6 +103,7 @@ class _Screen:
 
     def __init__(self, gen: "AndroidProject", s: Screen, fn: str):
         self.g, self.s, self.fn = gen, s, fn
+        self.parts = 0  # счётчик частей большого экрана (локальные @Composable-функции)
         self.k = screen_dpi(s) / 160
         self.its = [i for i in gen.doc.interactions if i.screen_id == s.id]
         self.used: set[str] = set()
@@ -772,9 +778,7 @@ class _Screen:
             L += ["            if (wide) {"] + self.m3.rail(nav, "                ") + ["            }"]
         L += ["            Box(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {",
               f"                Box(modifier = Modifier.widthIn(max = {max_w}.dp).fillMaxSize()) {{"]
-        for n in s.nodes:
-            if n not in (top, nav, fab):
-                L += self.node(n, area, "abs", "                    ")
+        L += self.children([n for n in s.nodes if n not in (top, nav, fab)], area, "abs", "                    ")
         L += ["                }", "            }", "        }", "    }", "}"]
         return L
 
@@ -789,6 +793,33 @@ class _Screen:
                 out += self.actions_code(it, ind)
         return out
 
+    PART_LINES = 300  # столько строк кода в одном блоке компилятор переваривает (больше — «Method too large»)
+    SCOPES = {"abs": "BoxScope", "col": "ColumnScope", "row": "RowScope", "flow": "FlowRowScope"}
+
+    def children(self, nodes: list, parent, ctx: str, ind: str) -> list[str]:
+        """Код дочерних элементов; если его много — частями в локальных @Composable-функциях (каждая — свой метод
+        JVM), иначе на экране из 40+ элементов сборка падает с «Method too large»."""
+        blocks = [self.node(c, parent, ctx, ind) for c in nodes]
+        if sum(len(b) for b in blocks) <= self.PART_LINES:
+            return [line for b in blocks for line in b]
+        out, chunk = [], []
+
+        def flush():
+            if not chunk:
+                return
+            self.parts += 1
+            name = f"part{self.parts}"
+            out.append(f"{ind}@Composable fun {self.SCOPES[ctx]}.{name}() {{")
+            out.extend("    " + line for b in chunk for line in b)
+            out.extend([f"{ind}}}", f"{ind}{name}()"])
+            chunk.clear()
+        for b in blocks:
+            if chunk and sum(len(x) for x in chunk) + len(b) > self.PART_LINES:
+                flush()
+            chunk.append(b)
+        flush()
+        return out
+
     def stack(self, n, modtxt: str, ind: str) -> list[str]:
         main = {"start": "Start", "center": "Center", "end": "End", "space_between": "SpaceBetween"}[n.main_align]
         cross = {"start": "Start", "center": "CenterHorizontally", "end": "End", "stretch": "Start"}[n.cross_align]
@@ -797,18 +828,14 @@ class _Screen:
                    f"Arrangement.spacedBy({self.dp(n.gap)}, Alignment.{ {'Start': 'Top', 'Center': 'CenterVertically', 'End': 'Bottom'}[main] })")
             out = [f"{ind}Column(", f"{ind}    modifier = {modtxt},", f"{ind}    verticalArrangement = {arr},",
                    f"{ind}    horizontalAlignment = Alignment.{cross},", f"{ind}) {{"]
-            for c in n.children:
-                out += self.node(c, n, "col", ind + "    ")
-            return out + [f"{ind}}}"]
+            return out + self.children(n.children, n, "col", ind + "    ") + [f"{ind}}}"]
         if n.layout == "horizontal":
             vcross = {"start": "Top", "center": "CenterVertically", "end": "Bottom", "stretch": "Top"}[n.cross_align]
             arr = (f"Arrangement.SpaceBetween" if main == "SpaceBetween" else
                    f"Arrangement.spacedBy({self.dp(n.gap)}, Alignment.{ {'Start': 'Start', 'Center': 'CenterHorizontally', 'End': 'End'}[main] })")
             out = [f"{ind}Row(", f"{ind}    modifier = {modtxt},", f"{ind}    horizontalArrangement = {arr},",
                    f"{ind}    verticalAlignment = Alignment.{vcross},", f"{ind}) {{"]
-            for c in n.children:
-                out += self.node(c, n, "row", ind + "    ")
-            return out + [f"{ind}}}"]
+            return out + self.children(n.children, n, "row", ind + "    ") + [f"{ind}}}"]
         if n.layout == "wrap":  # с переносом: FlowRow, выравнивание — внутри строки
             vcross = {"start": "Top", "center": "CenterVertically", "end": "Bottom", "stretch": "Top"}[n.cross_align]
             arr = (f"Arrangement.spacedBy({self.dp(n.gap)})" if main == "Start" else
@@ -817,9 +844,7 @@ class _Screen:
             out = [f"{ind}FlowRow(", f"{ind}    modifier = {modtxt},", f"{ind}    horizontalArrangement = {arr},",
                    f"{ind}    verticalArrangement = Arrangement.spacedBy({self.dp(n.row_gap)}),",
                    f"{ind}    itemVerticalAlignment = Alignment.{vcross},", f"{ind}) {{"]
-            for c in n.children:
-                out += self.node(c, n, "flow", ind + "    ")
-            return out + [f"{ind}}}"]
+            return out + self.children(n.children, n, "flow", ind + "    ") + [f"{ind}}}"]
         cols = max(1, n.grid_columns)  # сетка: строки по cols элементов
         out = [f"{ind}Column(modifier = {modtxt}, verticalArrangement = Arrangement.spacedBy({self.dp(n.row_gap)})) {{"]
         for i in range(0, len(n.children), cols):
@@ -1535,6 +1560,8 @@ def drawable_name(name: str, used: set[str]) -> str:
     base = re.sub(r"[^a-z0-9_]+", "_", _translit(name.rsplit(".", 1)[0])).strip("_") or "image"
     if not base[0].isalpha():
         base = "img_" + base
+    if base in _WIN_RESERVED:  # con, aux, com1… — в Windows такой файл не создать
+        base += "_"
     n, i = base, 2
     while n in used:
         n, i = f"{base}_{i}", i + 1

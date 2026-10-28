@@ -582,7 +582,8 @@ def build(kind: str, screen: Screen, appearance: Appearance) -> Node:
     # компоненты ставятся на трети высоты экрана, не на всю ширину — с отступом 16 dp от левого края;
     # растянутые по ширине с полями (строка поиска, разделитель) сохраняют свой отступ
     full_width = node.constraint_h == "left_right" and node.x == 0
-    if node.y == 0 and not full_width and kind not in ("win_nav_pane", "m3_nav_drawer"):
+    full_height = node.constraint_v == "top_bottom" or node.h >= screen.height  # боковая панель, лист — на месте
+    if node.y == 0 and not full_width and not full_height and kind not in ("win_nav_pane", "m3_nav_drawer"):
         dx, dy = (0 if node.x else c.d(16)), round(screen.height * 0.35, 2)
         for n, _, _ in tree.walk([node]):  # координаты абсолютные: сдвигается всё содержимое
             n.x, n.y = round(n.x + dx, 2), round(n.y + dy, 2)

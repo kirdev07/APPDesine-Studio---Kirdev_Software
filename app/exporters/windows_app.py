@@ -465,6 +465,7 @@ class Screen(QWidget):
 
     def make_text(self, n, parent):
         lab = QLabel(n["text"], parent)
+        lab.setTextFormat(Qt.TextFormat.PlainText)  # «<b>» в тексте дизайна — просто символы
         font = QFont(n.get("font") or "Segoe UI")
         font.setPixelSize(max(1, round(n["size"])))
         font.setWeight(QFont.Weight(min(900, max(100, int(n.get("weight", 400))))))
@@ -522,6 +523,7 @@ class Screen(QWidget):
 
     def _caption(self, n, text: str) -> QLabel:
         lab = QLabel(text)
+        lab.setTextFormat(Qt.TextFormat.PlainText)
         lab.setFont(self._font(n))
         lab.setStyleSheet(f"color: {self._fg(n)}; background: transparent;")
         return lab
@@ -625,6 +627,7 @@ class Screen(QWidget):
 
     def make_link(self, n, parent):
         lab = QLabel(self._first(n), parent)
+        lab.setTextFormat(Qt.TextFormat.PlainText)
         lab.setFont(self._font(n))
         lab.setStyleSheet(f"color: {self._fg(n)}; background: transparent;")
         lab.setCursor(Qt.CursorShape.PointingHandCursor)

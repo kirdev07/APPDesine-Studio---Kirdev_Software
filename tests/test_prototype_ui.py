@@ -298,10 +298,13 @@ def test_logic_diagnostics_and_persistence(qtbot, app_win):
     configure_logic(win, ed, ids)
     ed.set_screen(ids["home"])
     ed.select([ids["counter"]])
+    before = len([a for it in ed.doc.interactions for a in it.actions])
     ed.delete_selection()
     ed.refresh_diagnostics()
-    assert any("элемент не на этом экране" in d.message for d in ed.diagnostics)
+    # 1.33: действия с удалённым элементом убираются вместе с ним — висячих ссылок нет, экспорт не блокируется
+    assert not any("элемент не на этом экране" in d.message for d in ed.diagnostics)
     ed.undo()
+    assert len([a for it in ed.doc.interactions for a in it.actions]) == before
     assert win.save_project()
     with zipfile.ZipFile(path) as zf:
         assert "interactions/logic.json" in zf.namelist() and "animations/animations.json" in zf.namelist()

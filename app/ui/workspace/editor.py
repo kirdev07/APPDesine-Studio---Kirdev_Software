@@ -601,7 +601,7 @@ class Editor(QObject):
         items = self.switch_items(nav_id)
         if nav is None or nav.role != "m3.nav_bar" or not 0 <= index < len(items):
             return False
-        if screen_id and self.doc.screen(screen_id) is None:
+        if screen_id and not any(x.id == screen_id for x in self.doc.screens):  # doc.screen() бросает исключение
             return False
         targets = self.nav_targets(nav_id)
         targets[index] = screen_id

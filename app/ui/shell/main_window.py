@@ -43,9 +43,9 @@ STUDIOS = [(PAGE_BUILDER, "Компоненты", "components", "Ctrl+Alt+1"), (
            (PAGE_ANIMATIONS, "Анимации", "animations", "Ctrl+Alt+6"), (PAGE_LOGIC, "Логика", "logic", "Ctrl+Alt+7"),
            (PAGE_PREVIEW, "Просмотр", "devices", "Ctrl+Alt+8"), (PAGE_VALIDATE, "Проверка", "validate", "Ctrl+Alt+9"),
            (PAGE_EXPORT, "Экспорт", "export", "Ctrl+Alt+0")]
-STUDIO_TITLES = {PAGE_BUILDER: "Component Builder", PAGE_ICONS: "SVG-редактор и иконки",
-                 PAGE_FONTS: "Typography Studio", PAGE_COLORS: "Цвета", PAGE_RESOURCES: "Ресурсы",
-                 PAGE_ANIMATIONS: "Animation Studio", PAGE_LOGIC: "Визуальная логика",
+STUDIO_TITLES = {PAGE_BUILDER: "Конструктор компонентов", PAGE_ICONS: "SVG-редактор и иконки",
+                 PAGE_FONTS: "Шрифты и стили текста", PAGE_COLORS: "Цвета", PAGE_RESOURCES: "Ресурсы",
+                 PAGE_ANIMATIONS: "Анимации", PAGE_LOGIC: "Визуальная логика",
                  PAGE_PREVIEW: "Интерактивный предпросмотр", PAGE_VALIDATE: "Проверка проекта",
                  PAGE_EXPORT: "AI-экспорт для Claude Code"}
 
@@ -249,7 +249,7 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         self.act_template = self._act(m, "Сохранить как шаблон…", None, self.save_as_template)
         m.addSeparator()
-        self._act(m, "Project Hub", QKeySequence("Ctrl+H"), lambda: self.show_page(PAGE_HUB))
+        self._act(m, "Все проекты", QKeySequence("Ctrl+H"), lambda: self.show_page(PAGE_HUB))
         self._act(m, "Настройки", QKeySequence("Ctrl+,"), lambda: self.show_page(PAGE_SETTINGS))
         m.addSeparator()
         self._act(m, "Выход", QKeySequence("Alt+F4"), self.close)
@@ -473,7 +473,8 @@ class MainWindow(QMainWindow):
         a = QAction(text, self)
         if shortcut is not None:
             a.setShortcut(shortcut)
-        a.triggered.connect(slot)
+        # флажок получает состояние; обычной команде «checked=False» не передаётся (иначе export_png(folder=False))
+        a.triggered.connect(lambda checked=False, act=a, fn=slot: fn(checked) if act.isCheckable() else fn())
         menu.addAction(a)
         return a
 
@@ -664,7 +665,7 @@ class MainWindow(QMainWindow):
     # ---------- экраны картинками и показ ----------
     def _export_dir(self) -> str:
         from pathlib import Path
-        base = Path(self.ctx.settings.get("general/projects_dir", str(Path.home()))) / "Экспорт"
+        base = Path(self.ctx.settings.get("general/projects_dir") or str(Path.home())) / "Экспорт"
         return str(base / (self.doc.meta.title if self.doc else "проект"))
 
     def export_png(self, folder: str | None = None, scale: float | None = None, all_screens: bool | None = None):

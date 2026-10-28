@@ -12,7 +12,7 @@ import re
 EXPORT_SCHEMA_VERSION = 1
 _ID = "^[0-9A-Za-z_:./-]{1,512}$"
 _SHA = "^[0-9a-f]{64}$"
-_PATH = r"^(?!.*\.\.)([a-z0-9_]+/)*[A-Za-z0-9_.][A-Za-z0-9_.-]*$"  # относительный, без «..»
+_PATH = r"^(?!.*\.\.)([a-z0-9_][a-z0-9_-]*/)*[A-Za-z0-9_.][A-Za-z0-9_.-]*$"  # относительный, без «..» (папки вида drawable-nodpi — можно)
 
 MANIFEST_SCHEMA = {
     "$id": "ads-ai-export/manifest/1",

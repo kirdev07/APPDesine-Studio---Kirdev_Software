@@ -15,6 +15,41 @@ from app.core.document.model import (
 )
 
 
+def prune_links(doc: ProjectDocument, screen_id: str, node_ids: set[str] | None = None) -> list[dict] | None:
+    """После удаления экрана (node_ids is None) или элементов экрана — убрать правила и действия, которые на них
+    ссылаются (иначе «переход на удалённый экран» блокирует экспорт). Возвращает прежние правила для отмены или None."""
+    from app.core.document.behavior import Interaction
+    before = [i.to_dict() for i in doc.interactions]
+    kept = []
+    for it in doc.interactions:
+        if node_ids is None and it.screen_id == screen_id:
+            continue
+        if node_ids is not None and it.screen_id == screen_id and it.node_id in node_ids:
+            continue
+        acts = []
+        for a in it.actions:
+            if node_ids is None and a.get("type") == "navigate" and a.get("screen_id") == screen_id:
+                continue
+            if node_ids is not None and it.screen_id == screen_id and a.get("node_id") in node_ids:
+                continue
+            acts.append(a)
+        if it.actions and not acts:
+            continue
+        if len(acts) != len(it.actions):
+            it = Interaction.from_dict(it.to_dict() | {"actions": acts})
+        kept.append(it)
+    if [i.to_dict() for i in kept] == before:
+        return None
+    doc.interactions[:] = kept
+    return before
+
+
+def restore_links(doc: ProjectDocument, before: list[dict] | None) -> None:
+    if before is not None:
+        from app.core.document.behavior import Interaction
+        doc.interactions[:] = [Interaction.from_dict(i) for i in before]
+
+
 class Command:
     label = "Изменение"
 
@@ -228,13 +263,17 @@ class DeleteNodes(Command):
                 node, parent, idx = tree.find(screen, nid)
                 records.append((parent.id if parent else None, idx, node.to_dict()))
             self.records = sorted(records, key=lambda r: (r[0] or "", r[1]))
+        gone = set()
         for parent_id, idx, _ in reversed(self.records):
-            tree.container(screen, parent_id).pop(idx)
+            node = tree.container(screen, parent_id).pop(idx)
+            gone |= {n.id for n, _, _ in tree.walk([node])}
+        self.links = prune_links(doc, self.screen_id, gone)  # нажатия и переключения на удалённые элементы
 
     def undo(self, doc):
         screen = doc.screen(self.screen_id)
         for parent_id, idx, data in self.records or []:
             tree.container(screen, parent_id).insert(idx, Node.from_dict(data))
+        restore_links(doc, getattr(self, "links", None))
 
 
 class SetProps(Command):
@@ -443,9 +482,11 @@ class RemoveScreen(Command):
         s = doc.screen(self.screen_id)
         self.index, self.data = doc.screens.index(s), s.to_dict()
         doc.screens.pop(self.index)
+        self.links = prune_links(doc, self.screen_id)  # правила экрана и переходы на него
 
     def undo(self, doc):
         doc.screens.insert(self.index, Screen.from_dict(self.data))
+        restore_links(doc, getattr(self, "links", None))
 
 
 class SetScreenProps(Command):

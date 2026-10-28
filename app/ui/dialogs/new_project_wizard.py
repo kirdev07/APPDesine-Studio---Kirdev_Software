@@ -123,13 +123,9 @@ class NewProjectWizard(QDialog):
         self.type_ui = QRadioButton("UI-дизайн — интерфейс, экраны и ресурсы")
         self.type_ui.setChecked(True)
         lay.addWidget(self.type_ui)
-        full = QRadioButton("Полный проект с кодом — недоступно: программа не генерирует приложения, "
-                            "только пакет задания для Claude Code (AI-экспорт)")
-        full.setEnabled(False)
-        lay.addWidget(full)
-        imp = QRadioButton("Импорт дизайна из Figma / изображений — не входит в v1.0")
-        imp.setEnabled(False)
-        lay.addWidget(imp)
+        lay.addWidget(label("Код приложения создаётся из дизайна на странице «Экспорт»: проект Android Studio "
+                            "(Kotlin + Compose), сборка APK / AAB и готовое приложение Windows (Python + PySide6).",
+                            "Muted", wrap=True))
         lay.addStretch()
         return w
 
