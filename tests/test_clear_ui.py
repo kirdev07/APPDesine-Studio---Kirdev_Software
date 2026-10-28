@@ -76,7 +76,10 @@ def test_ready_screens_and_add_menu(qtbot, win):
     strip = win.project_page.screens
     strip._fill_add_menu()
     titles = [a.text() for a in strip.add_menu.actions()]
-    assert "Пустой экран" in titles and all(t in titles for t, _ in TEMPLATES.values())
+    subs = [a.menu() for a in strip.add_menu.actions() if a.menu() is not None]
+    inner = [x.text() for sm in subs for x in sm.actions()]   # готовые экраны — по группам в подменю
+    assert "Пустой экран" in titles and all(t in inner for t, _ in TEMPLATES.values())
+    assert any(t.startswith("Банк — ") for t in inner)        # и «Готовое приложение»
     for key in TEMPLATES:
         ed.set_screen(ed.doc.screens[0].id)
         s = ed.add_template_screen(key)

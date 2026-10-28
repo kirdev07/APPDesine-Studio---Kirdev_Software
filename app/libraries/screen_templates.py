@@ -74,6 +74,16 @@ def _list_item(s, ap, title: str, sub: str) -> Node:
     return it
 
 
+def _icon_item(c, item: Node, glyph: str) -> Node:
+    """Строка списка со значком в кружке вместо пустой заглушки-аватара."""
+    lead = next((d for d in item.children if d.type == "ellipse"), None)
+    if lead is not None:
+        box = c.frame("Значок", "horizontal", [c.icon(22, color=c.s["onSecondaryContainer"], glyph=glyph)],
+                      w=40, h=40, radius=20, fill=c.s["secondaryContainer"], main_align="center", cross_align="center")
+        item.children[item.children.index(lead)] = box
+    return item
+
+
 def login(s: Screen, ap) -> list[Node]:
     c = _Ctx(s, ap)
     btn = _fill(components.build("m3_button_filled", s, ap))
@@ -122,17 +132,19 @@ def feed(s: Screen, ap) -> list[Node]:
 
 def profile(s: Screen, ap) -> list[Node]:
     c = _Ctx(s, ap)
-    avatar = c.frame("Аватар", "horizontal", [c.dot("Фото", 96, c.s["primaryContainer"])], h=104,
-                     main_align="center", cross_align="center", sizing_h="fill")
+    photo = c.frame("Фото", "horizontal", [c.icon(48, color=c.s["onPrimaryContainer"], glyph="person")], w=96,
+                    h=96, radius=48, fill=c.s["primaryContainer"], main_align="center", cross_align="center")
+    avatar = c.frame("Аватар", "horizontal", [photo], h=104, main_align="center", cross_align="center",
+                     sizing_h="fill")
     name = _text(c, "Анна Смирнова", 24, c.s["onSurface"], name="Имя")
     name.align = "center"
     sub = _text(c, "Дизайнер интерфейсов · Москва", 14, c.s["onSurfaceVariant"], name="О себе")
     sub.align = "center"
     edit = _fill(components.build("m3_button_tonal", s, ap))
     _set_text(edit, "Подпись", "Изменить профиль")
-    items = [_list_item(s, ap, t, d) for t, d in (("Уведомления", "Звук и вибрация"),
-                                                   ("Конфиденциальность", "Кто видит профиль"),
-                                                   ("Помощь", "Вопросы и поддержка"))]
+    items = [_icon_item(c, _list_item(s, ap, t, d), g) for g, t, d in (
+        ("notifications", "Уведомления", "Звук и вибрация"), ("lock", "Конфиденциальность", "Кто видит профиль"),
+        ("help", "Помощь", "Вопросы и поддержка"))]
     out = _fill(components.build("m3_button_outlined", s, ap))
     _set_text(out, "Подпись", "Выйти")
     kids = [avatar, name, sub, edit] + items + [out]
@@ -209,9 +221,38 @@ TEMPLATES: dict[str, tuple[str, callable]] = {
 
 def all_templates() -> dict:
     """Все готовые экраны: первые семь и добавленные в 1.9 (модуль screen_templates_more)."""
+    from app.libraries.screen_templates_apps import TEMPLATES as APPS
     from app.libraries.screen_templates_extra import TEMPLATES as EXTRA
     from app.libraries.screen_templates_more import TEMPLATES as MORE
-    return {**TEMPLATES, **MORE, **EXTRA}
+    return {**TEMPLATES, **MORE, **EXTRA, **APPS}
+
+
+# группы готовых экранов в меню «+ Экран»
+GROUPS = {
+    "Вход и начало": ("login", "register", "onboarding", "splash", "interests", "permission", "offline"),
+    "Главные и ленты": ("home", "feed", "social", "search", "notifications", "article"),
+    "Покупки и доставка": ("catalog", "product", "cart", "checkout", "tracking", "orders", "restaurants", "restaurant", "reviews",
+                           "payment_methods", "paywall"),
+    "Финансы": ("wallet", "bank_home", "transfer", "history", "payment_success", "stats"),
+    "Путешествия и события": ("trip_search", "hotel", "boarding_pass", "map", "event", "weather"),
+    "Здоровье и учёба": ("workout", "activity", "course"),
+    "Профиль и настройки": ("profile", "edit_profile", "settings", "help"),
+    "Общение и дела": ("chat", "notes", "tasks", "calendar", "smart_home", "player"),
+}
+
+
+def grouped_templates() -> list[tuple[str, list[tuple[str, str]]]]:
+    """[(группа, [(ключ, название)])] — все готовые экраны по группам; не попавшие в группы — в «Другие»."""
+    allt = all_templates()
+    out, seen = [], set()
+    for group, keys in GROUPS.items():
+        items = [(k, allt[k][0]) for k in keys if k in allt]
+        seen.update(k for k, _ in items)
+        out.append((group, items))
+    rest = [(k, t) for k, (t, _) in allt.items() if k not in seen]
+    if rest:
+        out.append(("Другие", rest))
+    return out
 
 
 def build(key: str, like: Screen, appearance) -> Screen:

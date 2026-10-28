@@ -114,7 +114,7 @@ def test_presets_from_selection_bar_play_in_preview(qtbot, win):
 def test_eighteen_ready_screens(qtbot, win):
     ed = win.project_page.editor
     t = all_templates()
-    assert len(t) == 22  # 1.19: календарь, карта, статистика, лента соцсети
+    assert len(t) == 49  # 1.28: банк, доставка, фитнес, путешествия, покупки, сервисные экраны
     for key in ("onboarding", "home", "product", "checkout", "search", "player", "notifications", "wallet",
                 "splash", "offline", "tracking"):
         ed.set_screen(ed.doc.screens[0].id)
@@ -122,4 +122,5 @@ def test_eighteen_ready_screens(qtbot, win):
         assert s.nodes and not [d for d in ed.diagnostics if d.severity == "warning"], key
     strip = win.project_page.screens
     strip._fill_add_menu()
-    assert "Музыкальный плеер" in [a.text() for a in strip.add_menu.actions()]
+    inner = [x.text() for a in strip.add_menu.actions() if a.menu() for x in a.menu().actions()]
+    assert "Музыкальный плеер" in inner

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
@@ -300,8 +302,11 @@ class LayersPanel(QWidget):
 RECENT_COLORS: list[str] = []  # последние выбранные цвета (за сеанс), новые — первыми
 
 
+_HEX = re.compile(r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")
+
+
 def remember_color(value: str) -> None:
-    if not value:
+    if not value or not _HEX.match(value):  # только настоящие коды цвета
         return
     v = value.upper()
     if v in RECENT_COLORS:
@@ -369,6 +374,9 @@ class ColorField(QWidget):
         t = self.edit.text().strip().upper()
         if t and not t.startswith("#"):
             t = "#" + t
+        if t and not _HEX.match(t):  # не код цвета («нет», опечатка) — вернуть прежнее значение
+            self.set_value(self._value)
+            return
         if t != self._value:
             self.committed.emit(t)
 
@@ -1617,7 +1625,8 @@ class ScreensStrip(QWidget):
             self.editor.set_screen(item.data(ROLE_ID))
 
     def _fill_add_menu(self) -> None:
-        from app.libraries.screen_templates import all_templates
+        from app.libraries.screen_templates import grouped_templates
+        from app.libraries.screen_templates_apps import APPS
         m = self.add_menu
         m.clear()
         cur = self.editor.screen()
@@ -1626,8 +1635,20 @@ class ScreensStrip(QWidget):
         if cur is not None and cur.platform == "android":
             m.addSeparator()
             m.addSection("Готовые экраны")
-            for key, (title, _) in all_templates().items():
-                m.addAction(title, lambda k=key: self.editor.add_template_screen(k))
+            self._submenus = []  # подменю держатся здесь: иначе Qt удаляет их раньше времени
+            for group, items in grouped_templates():
+                sub = QMenu(group, m)
+                m.addMenu(sub)
+                self._submenus.append(sub)
+                for key, title in items:
+                    sub.addAction(title, lambda k=key: self.editor.add_template_screen(k))
+            m.addSeparator()
+            apps = QMenu("Готовое приложение (связанные экраны)", m)
+            m.addMenu(apps)
+            self._submenus.append(apps)
+            apps.setToolTip("Несколько экранов сразу: меню, кнопки и «Назад» уже ведут куда нужно")
+            for key, (title, keys, *_rest) in APPS.items():
+                apps.addAction(f"{title} — {len(keys)} экранов", lambda k=key: self.editor.add_ready_app(k))
 
     def add_screen(self) -> None:
         doc = self.editor.doc

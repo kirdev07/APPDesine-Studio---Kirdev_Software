@@ -160,8 +160,11 @@ def scheme(seed: str, dark: bool, fidelity: bool = True) -> dict[str, str]:
     иначе — тон 40 / 80 основной палитры по правилам Material."""
     pal = palettes(seed)
     out = {role: pal[p](d if dark else l) for role, (l, d, p) in ROLES.items()}
+    seed_hex = to_hex(parse_hex(seed))
+    if fidelity and dark and contrast(seed_hex, out["surface"]) < 3.0:
+        fidelity = False  # тёмный цвет бренда на тёмном фоне не виден — тон 80 по правилам Material 3
     if fidelity:
-        seed = to_hex(parse_hex(seed))
+        seed = seed_hex
         out["primary"] = seed
         white_ok = contrast(seed, "#FFFFFF") >= 3.0  # как у кнопок прежних версий: белый, пока он читаем
         out["onPrimary"] = "#FFFFFF" if white_ok else pal["p"](10)

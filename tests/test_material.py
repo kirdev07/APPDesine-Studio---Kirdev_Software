@@ -150,7 +150,11 @@ def test_scheme_tokens_typography_and_component_search(qtbot, app_win, monkeypat
     prim = next(c for c in ed.doc.colors if c.name == "M3 тёмная · Основной (primary)")
     assert prim.value == "#00897B"
     ed.undo()
-    assert next(c for c in ed.doc.colors if c.name == prim.name).value == "#6750A4"
+    # тёмный цвет бренда в тёмной теме — светлый тон (на тёмном фоне читается), а не сам #6750A4
+    from app.engines.material.color import contrast, scheme
+    back = next(c for c in ed.doc.colors if c.name == prim.name).value
+    assert back == scheme("#6750A4", True)["primary"] != "#6750A4"
+    assert contrast(back, scheme("#6750A4", True)["surface"]) >= 3
     assert ed.add_material_typography() == 15 and ed.add_material_typography() == 15
     styles = [t for t in ed.doc.text_styles if t.name.startswith("M3 · ")]
     assert len(styles) == 15

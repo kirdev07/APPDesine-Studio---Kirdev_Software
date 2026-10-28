@@ -1737,6 +1737,54 @@ class Editor(QObject):
         if self.execute(AddScreen(screen)):
             self.set_screen(screen.id)
 
+    def add_ready_app(self, key: str) -> Screen | None:
+        """Готовое приложение: набор связанных экранов — нижнее меню ведёт на свои экраны (на каждом выбран свой
+        пункт), кнопки — к следующему шагу, «Назад» в шапке — назад. Одна запись истории."""
+        from app.core.document.behavior import Interaction
+        from app.engines.preview import live
+        from app.libraries import screen_templates
+        from app.libraries.screen_templates_apps import APPS, find_target, localize, relabel_nav
+        cur = self.screen()
+        if cur is None or not self.doc or key not in APPS or cur.platform != "android":
+            return None
+        _title, keys, nav_kind, nav_targets, taps = APPS[key]
+        ap = self.doc.meta.appearance
+        screens = [screen_templates.build(k, cur, ap) for k in keys]
+        for s, k in zip(screens, keys):
+            localize(s, key, k)
+
+        def go(sid, nid, target, transition="slide_left"):
+            return Interaction(screen_id=sid, trigger="tap", node_id=nid, actions=[
+                {"type": "navigate", "screen_id": target, "transition": transition, "duration": 300,
+                 "easing": "ease_out"}])
+        rules = []
+        for i, s in enumerate(screens):
+            bar = next((n for n in s.nodes if n.role == "m3.nav_bar"), None)
+            if bar is not None:  # меню приложения: свои пункты, выбран пункт этого экрана
+                sel = nav_targets.index(i) if i in nav_targets else 0
+                relabel_nav(bar, nav_kind, sel, ap)
+                for it, t in zip(live._items(bar), nav_targets):
+                    if t is not None and t != i:
+                        rules.append(go(s.id, it.id, screens[t].id, "fade"))
+            back = next((n for n, _, _ in tree.walk(s.nodes) if n.name == "Назад" and n.type == "vector"), None)
+            if back is not None and i > 0:
+                rules.append(Interaction(screen_id=s.id, trigger="tap", node_id=back.id, actions=[
+                    {"type": "back", "transition": "slide_right", "duration": 300, "easing": "ease_out"}]))
+        for si, what, ti in taps:
+            n = find_target(screens[si], what)
+            if n is not None:
+                rules.append(go(screens[si].id, n.id, screens[ti].id))
+        data = [s.to_dict() for s in screens]
+        rdata = [r.to_dict() for r in rules]
+
+        def mutate(doc):
+            doc.screens += [Screen.from_dict(d) for d in data]
+            doc.interactions += [Interaction.from_dict(r) for r in rdata]
+        if not self.patch(f"Готовое приложение «{APPS[key][0]}»", mutate):
+            return None
+        self.set_screen(screens[0].id)
+        return self.screen()
+
     def add_template_screen(self, key: str) -> Screen | None:
         """Готовый экран (вход, список, профиль…) для того же устройства, что текущий; одна запись истории."""
         from app.libraries import screen_templates
