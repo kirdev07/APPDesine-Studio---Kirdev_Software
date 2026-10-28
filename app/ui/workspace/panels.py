@@ -613,6 +613,22 @@ class Inspector(QScrollArea):
         self.blur.setToolTip("Размытие слоя вместе с содержимым (на Android 12+ — Modifier.blur)")
         self.blur.valueChanged.connect(lambda v: self._commit_leaves("blur", v, "Размытие"))
         f.addRow("Размытие", self.blur)
+        self.backdrop = _spin(0, 200, 0, " px")
+        self.backdrop.setToolTip("Матовое стекло: размывается то, что под элементом (заливку сделайте "
+                                 "полупрозрачной, например #FFFFFF33). В Android-коде — полупрозрачная «морозная» "
+                                 "заливка и светлый край; настоящее размытие фона — библиотека Haze")
+        self.backdrop.valueChanged.connect(lambda v: self._commit_leaves("backdrop_blur", v, "Матовое стекло"))
+        f.addRow("Стекло", self.backdrop)
+        self.overlay = ColorField()
+        self.overlay.setToolTip("Слой поверх заливки и картинки: затемнить фото под текстом, тонировать цветом")
+        self.overlay.committed.connect(self._commit_overlay)
+        f.addRow("Слой поверх", self.overlay)
+        self.overlay_blend = _combo([("normal", "Обычный"), ("multiply", "Умножение"), ("screen", "Осветление"),
+                                     ("overlay", "Перекрытие"), ("darken", "Темнее"), ("lighten", "Светлее")])
+        self.overlay_blend.setToolTip("Как слой поверх смешивается с содержимым")
+        self.overlay_blend.currentIndexChanged.connect(
+            lambda: self._commit_leaves("overlay_blend", self.overlay_blend.currentData(), "Режим наложения"))
+        f.addRow("Наложение", self.overlay_blend)
         self.shadow_color = ColorField()
         self.shadow_color.setToolTip("Своя тень любого цвета; в Android — Modifier.dropShadow / innerShadow")
         self.shadow_color.committed.connect(self._commit_shadow_color)
@@ -939,9 +955,9 @@ class Inspector(QScrollArea):
             if n.type != "image":
                 continue
             if mode == "none":
-                changes[n.id] = {"radius": 0.0}
+                changes[n.id] = {"radius": 0.0, "clip_path": ""}  # и маску формой тоже
             elif mode == "round":
-                changes[n.id] = {"radius": round(16 * k, 2)}
+                changes[n.id] = {"radius": round(16 * k, 2), "clip_path": ""}
             else:
                 parent = tree.find(s, n.id)[1]
                 stretched = parent is not None and parent.layout == "vertical" and parent.cross_align == "stretch"
@@ -1148,6 +1164,10 @@ class Inspector(QScrollArea):
                         b.setChecked(side in l0.stroke_sides)
                     for key, s in self.corner.items():
                         s.setValue(getattr(l0, key))
+                    self.backdrop.setValue(l0.backdrop_blur)
+                    self.overlay.set_value(l0.overlay)
+                    self.overlay_blend.setCurrentIndex(max(0, self.overlay_blend.findData(l0.overlay_blend)))
+                    self.overlay_blend.setEnabled(bool(l0.overlay))
                     self.shadow_color.set_value(l0.shadow_color)
                     for key, s in self.shadow.items():
                         s.setValue(getattr(l0, key))
@@ -1316,6 +1336,12 @@ class Inspector(QScrollArea):
             self.refresh()
             return
         self._commit_leaves("stroke_sides", sides, "Стороны обводки")
+
+    def _commit_overlay(self, value: str) -> None:
+        """Слой поверх без прозрачности закрыл бы всё: цвету без альфы ставится 40 %."""
+        if value and len(value) == 7:
+            value += "66"
+        self._commit_leaves("overlay", value, "Слой поверх")
 
     def _commit_shadow_color(self, value: str) -> None:
         """Тень без прозрачности выглядит грубо: цвету без альфы ставится 40 %."""

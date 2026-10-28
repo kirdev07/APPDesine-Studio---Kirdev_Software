@@ -264,7 +264,7 @@ class _Screen:
             m += self.motion.layer(n, ind + "    ")
         elif n.opacity < 1:
             m.append(f"{ind}    .alpha({_num(n.opacity)}f)")
-        shape = kshape(n, self.dp)
+        shape = f"maskShape({kstr(n.clip_path)})" if n.clip_path else kshape(n, self.dp)
         drop = shadow(n, self.dp, self.g.color, shape, inset=False)
         if drop:
             m.append(f"{ind}    {drop}")
@@ -274,14 +274,36 @@ class _Screen:
             color = self.ident(f"stroke {n.name}")
             self.pre.append(f"val {color} = {self.g.color(n.stroke)}")
             m += stroke_draw(n, self.dp, lambda _c, v=color: v, shape, ind + "    ")
-        if n.type == "image" and n.radius > 0:  # маска картинки: круг или скругление
+        if n.type == "image" and n.clip_path:  # маска любой формой
+            m.append(f"{ind}    .clip({shape})")
+        elif n.type == "image" and n.radius > 0:  # маска картинки: круг или скругление
             m.append(f"{ind}    .clip({'CircleShape' if n.radius >= min(n.w, n.h) / 2 - 0.5 else shape})")
+        elif n.clip_path and not n.fill and n.type not in ("text", "vector"):
+            m.append(f"{ind}    .clip({shape})")  # контейнер в форме фигуры обрезает содержимое
         if n.fill and n.type not in ("text", "image", "vector"):
             m.append(f"{ind}    .clip({shape})")
-            m.append(f"{ind}    .background({brush(n, self.g.color) or self.g.color(n.fill)})")
+            fill = n.fill
+            if n.backdrop_blur > 0 and not self.under_glass(n) and len(fill) == 9 and int(fill[7:], 16) < 0x80:
+                fill = fill[:7] + "80"  # стекло без копии фона под ним: плотнее, чтобы текст на нём читался
+            if n.backdrop_blur > 0 and self.under_glass(n):  # заливка стекла — поверх размытой копии фона
+                tint = self.ident(f"glass {n.name}")
+                self.pre.append(f"val {tint} = {self.g.color(fill)}")
+                m.append(f"{ind}    .drawWithContent {{ drawContent(); drawRect({tint}) }}")
+            else:
+                m.append(f"{ind}    .background({brush(n, self.g.color) or self.g.color(fill)})")
         inner = shadow(n, self.dp, self.g.color, shape, inset=True)
         if inner:
             m.append(f"{ind}    {inner}")
+        if n.overlay and n.type not in ("text", "vector"):  # слой поверх содержимого с режимом наложения
+            tint = self.ident(f"overlay {n.name}")
+            self.pre.append(f"val {tint} = {self.g.color(n.overlay)}")
+            blend = {"multiply": "Multiply", "screen": "Screen", "overlay": "Overlay", "darken": "Darken",
+                     "lighten": "Lighten"}.get(n.overlay_blend, "SrcOver")
+            m.append(f"{ind}    .drawWithContent {{ drawContent(); drawRect({tint}, blendMode = BlendMode.{blend}) }}")
+        if n.backdrop_blur > 0 and n.type not in ("text", "vector") and not n.stroke:
+            # матовое стекло: под ним — размытая копия картинок и фигур, что лежат ниже (Android 12+);
+            # на старых телефонах размытия нет — остаётся полупрозрачная заливка и светлый край
+            m.append(f"{ind}    .border(1.dp, Color.White.copy(alpha = 0.35f), {shape})")
         if n.stroke and n.stroke_width and n.type not in ("text", "vector"):
             if plain_stroke(n):
                 m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {self.g.color(n.stroke)}, {shape})")
@@ -413,15 +435,49 @@ class _Screen:
         elif n.is_frame and n.layout in ("vertical", "horizontal", "grid"):
             out += self.stack(n, modtxt, ind2)
         else:
-            if n.is_container and n.children:
+            under = self.under_glass(n) if n.backdrop_blur > 0 else []
+            if (n.is_container and n.children) or under:
                 out.append(f"{ind2}Box(modifier = {modtxt}) {{")
-                for c in n.children:
+                out += self.glass_copies(n, under, ind2 + "    ")
+                for c in (n.children if n.is_container else []):
                     out += self.node(c, n, "abs", ind2 + "    ")
                 out.append(f"{ind2}}}")
             else:
                 out.append(f"{ind2}Box(modifier = {modtxt})")
         if n.id in self.vis:
             out += close
+        return out
+
+    def under_glass(self, glass) -> list:
+        """Картинки и фигуры с заливкой, которые лежат под стеклом (раньше по порядку) и перекрываются с ним."""
+        if glass.backdrop_blur <= 0:
+            return []
+        out = []
+        for n, _, _ in tree.walk(self.s.nodes):
+            if n is glass:
+                break
+            if not n.visible or n.type not in ("image", "rect") or (n.type == "rect" and not n.fill):
+                continue
+            if n.type == "image" and n.asset_id not in self.g.drawables:
+                continue
+            if n.x < glass.x + glass.w and glass.x < n.x + n.w and n.y < glass.y + glass.h and glass.y < n.y + n.h:
+                out.append(n)
+        return out
+
+    def glass_copies(self, glass, under: list, ind: str) -> list[str]:
+        """Размытые копии того, что под стеклом, в его координатах (Modifier.blur — Android 12+)."""
+        out = []
+        for n in under:
+            mod = (f"Modifier.wrapContentSize(Alignment.TopStart, unbounded = true)"
+                   f".offset(x = {self.dp(n.x - glass.x)}, y = {self.dp(n.y - glass.y)})"
+                   f".size({self.dp(n.w)}, {self.dp(n.h)}).blur({self.dp(glass.backdrop_blur)})")
+            if n.type == "image":
+                scale = {"cover": "Crop", "contain": "Fit"}.get(n.fit, "FillBounds")
+                out.append(f"{ind}Image(painterResource(R.drawable.{self.g.drawables[n.asset_id]}), null, "
+                           f"contentScale = ContentScale.{scale}, modifier = {mod})  // фон под стеклом")
+            else:
+                out.append(f"{ind}Box({mod}.background({brush(n, self.g.color) or self.g.color(n.fill)}))"
+                           f"  // фон под стеклом")
         return out
 
     def variant_node(self, n, parent, mode: str, ind: str) -> list[str]:
@@ -704,6 +760,7 @@ class AndroidProject:
             "androidx.compose.ui.unit.sp", f"{self.pkg}.AppState", f"{self.pkg}.R", f"{self.pkg}.fmt",
             f"{self.pkg}.navigation.NavMotion", f"{self.pkg}.navigation.StepEasing",
             f"{self.pkg}.ui.components.DesignIcon", f"{self.pkg}.ui.components.linearAngleBrush",
+            f"{self.pkg}.ui.components.maskShape", "androidx.compose.ui.graphics.BlendMode",
             f"{self.pkg}.ui.theme.AppTheme", "kotlinx.coroutines.coroutineScope", "kotlinx.coroutines.launch")]
 
     def literal(self, var_type: str, value) -> str:

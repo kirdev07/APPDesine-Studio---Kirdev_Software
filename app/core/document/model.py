@@ -17,8 +17,9 @@ from datetime import datetime, timezone
 # 11 — тонкая настройка вида: своя тень, обводка (пунктир, сторона, стороны), углы по отдельности, 3-й цвет
 # градиента, интервалы, курсив, подчёркивание, регистр и число строк текста;
 # 12 — комментарии на экранах (заметки к месту макета, можно отметить решёнными);
-# 13 — данные графика у контейнера (data: числа через пробел).
-SCHEMA_VERSION = 13
+# 13 — данные графика у контейнера (data: числа через пробел);
+# 14 — матовое стекло (размытие фона под элементом), слой поверх с режимом наложения, маска любой формой.
+SCHEMA_VERSION = 14
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -98,7 +99,9 @@ EFFECT_PROPS = ("elevation", "gradient", "fill2", "grad_angle", "blur", "scale",
 # относительно края, стороны «trbl»), скругление углов по отдельности (-1 — как radius), средний цвет градиента.
 LOOK_PROPS = ("shadow_color", "shadow_x", "shadow_y", "shadow_blur", "shadow_spread", "shadow_inset",
               "stroke_dash", "stroke_align", "stroke_sides", "radius_tl", "radius_tr", "radius_br", "radius_bl",
-              "fill3")
+              "fill3", "backdrop_blur", "overlay", "overlay_blend", "clip_path")
+# Маска любой формой: контур в квадрате 0…MASK_BOX по ширине и высоте элемента.
+MASK_BOX = 1000.0
 # Текст: интервал между буквами (px), высота строки (множитель размера; 0 — обычная), курсив, линия, регистр,
 # не больше строк (0 — без ограничения; лишнее обрезается многоточием).
 TEXT_LOOK_PROPS = ("letter_spacing", "line_height", "italic", "decoration", "text_case", "max_lines")
@@ -111,7 +114,8 @@ _OMIT_DEFAULT = {"ref": "", "role": "", "elevation": 0, "gradient": "none", "fil
                  "shadow_inset": False, "stroke_dash": "solid", "stroke_align": "center", "stroke_sides": "trbl",
                  "radius_tl": -1.0, "radius_tr": -1.0, "radius_br": -1.0, "radius_bl": -1.0, "fill3": "",
                  "letter_spacing": 0.0, "line_height": 0.0, "italic": False, "decoration": "none",
-                 "text_case": "none", "max_lines": 0, "data": ""}
+                 "text_case": "none", "max_lines": 0, "data": "",
+                 "backdrop_blur": 0.0, "overlay": "", "overlay_blend": "normal", "clip_path": ""}
 TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style") + \
     TEXT_LOOK_PROPS
 # ref — идентификатор узла мастер-компонента, из которого получен узел экземпляра.
@@ -159,6 +163,7 @@ ENUMS = {
     "scroll": ("none", "vertical", "horizontal"),
     "gradient": GRADIENTS,
     "fit": ("fill", "cover", "contain"),  # картинка: растянуть / заполнить с обрезкой / вписать целиком
+    "overlay_blend": ("normal", "multiply", "screen", "overlay", "darken", "lighten"),
     "stroke_dash": ("solid", "dash", "dot"),
     "stroke_align": ("center", "inside", "outside"),
     "decoration": ("none", "underline", "strike"),
@@ -233,7 +238,17 @@ def check_prop(name: str, value, node_type: str = "rect"):
         if not isinstance(value, str) or len(value) > 100_000:
             raise ModelError(f"«{name}» должно быть строкой")
         return value
-    if name in ("fill", "stroke", "text_color", "fill2", "fill3", "shadow_color"):
+    if name == "clip_path":
+        if not isinstance(value, str) or len(value) > 200_000:
+            raise ModelError("Неверная маска")
+        if not value:
+            return ""
+        from app.core.document.pathdata import PathError, normalize
+        try:
+            return normalize(value)
+        except PathError as exc:
+            raise ModelError(f"Неверная маска: {exc}") from None
+    if name in ("fill", "stroke", "text_color", "fill2", "fill3", "shadow_color", "overlay"):
         if not isinstance(value, str) or (value and not _COLOR.match(value)):
             raise ModelError(f"Неверный цвет «{name}»: {value!r}")
         return value.upper()
@@ -259,6 +274,7 @@ def check_prop(name: str, value, node_type: str = "rect"):
     limits["shadow_blur"] = (0, 500)
     limits["shadow_spread"] = (-500, 500)
     limits["letter_spacing"] = (-50, 200)
+    limits["backdrop_blur"] = (0, 200)
     limits["line_height"] = (0, 10)
     lo, hi = limits.get(name, (-MAX_COORD, MAX_COORD))
     if not lo <= value <= hi:
@@ -321,6 +337,10 @@ class Node:
     radius_tr: float = -1.0
     radius_br: float = -1.0
     radius_bl: float = -1.0
+    backdrop_blur: float = 0.0    # матовое стекло: размытие того, что под элементом (px)
+    overlay: str = ""             # слой поверх содержимого (#RRGGBBAA): затемнение фото, тонировка
+    overlay_blend: str = "normal" # режим наложения слоя поверх
+    clip_path: str = ""           # маска любой формой: контур в квадрате 0…MASK_BOX
     blur: float = 0.0
     scale: float = 1.0            # масштаб и поворот вокруг центра — для анимаций (пружина, пульс, вращение)
     rotation: float = 0.0

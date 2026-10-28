@@ -652,6 +652,100 @@ class Editor(QObject):
                 doc.interactions.append(Interaction.from_dict(full.to_dict()))
         return self.patch("При нажатии" if action else "Убрать действие при нажатии", mutate)
 
+    # ---------- фигуры: объединение, вычитание, маски ----------
+    SHAPE_TYPES = ("rect", "ellipse", "vector")
+    SHAPE_OPS = {"union": "Объединение", "subtract": "Вычитание", "intersect": "Пересечение",
+                 "exclude": "Исключение"}
+
+    def shape_op_ready(self) -> bool:
+        nodes = self.selected_nodes()
+        return len(nodes) >= 2 and all(n.type in self.SHAPE_TYPES and not self.inside_instance(n.id) for n in nodes)
+
+    def combine_shapes(self, op: str) -> str | None:
+        """Две и больше фигуры → одна: объединение, вычитание (из нижней — верхние), пересечение, исключение.
+        Результат — контур на месте нижней фигуры с её заливкой и обводкой. Одна запись истории."""
+        from PySide6.QtGui import QPainterPath
+        from app.core.document.model import Node
+        from app.ui.workspace.canvas import node_outline, qpath_to_d
+        s = self.screen()
+        if not s or not self.shape_op_ready() or op not in self.SHAPE_OPS:
+            return None
+        order = {n.id: i for i, (n, _, _) in enumerate(tree.walk(s.nodes))}
+        nodes = sorted(self.selected_nodes(), key=lambda n: order[n.id])  # снизу вверх
+        base = node_outline(nodes[0]).simplified()
+        for n in nodes[1:]:
+            o = node_outline(n).simplified()
+            if op == "union":
+                base = base.united(o)
+            elif op == "subtract":
+                base = base.subtracted(o)
+            elif op == "intersect":
+                base = base.intersected(o)
+            else:
+                base = base.subtracted(o).united(o.subtracted(base))
+        base = base.simplified()
+        r = base.boundingRect()
+        if r.width() < 0.5 or r.height() < 0.5:
+            self.message.emit(f"{self.SHAPE_OPS[op]}: фигуры не пересекаются — ничего не осталось")
+            return None
+        d = qpath_to_d(base, -r.x(), -r.y())
+        first = nodes[0]
+        new = Node(type="vector", name=self.SHAPE_OPS[op], x=r.x(), y=r.y(), w=r.width(), h=r.height(), path=d,
+                   vb_w=r.width(), vb_h=r.height(), fill=first.fill or "#808080", stroke=first.stroke,
+                   stroke_width=first.stroke_width, opacity=first.opacity, fill_rule="nonzero",
+                   constraint_h=first.constraint_h, constraint_v=first.constraint_v)
+        ids = [n.id for n in nodes]
+        sid = s.id
+
+        def mutate(doc):
+            scr = doc.screen(sid)
+            _, parent, idx = tree.find(scr, ids[0])
+            siblings = parent.children if parent is not None else scr.nodes
+            siblings[idx] = Node.from_dict(new.to_dict())
+            for nid in ids[1:]:
+                _, par, i = tree.find(scr, nid)
+                (par.children if par is not None else scr.nodes).pop(i)
+        if self.patch(self.SHAPE_OPS[op], mutate):
+            self.select([new.id])
+            return new.id
+        return None
+
+    def mask_ready(self) -> bool:
+        nodes = self.selected_nodes()
+        if len(nodes) != 2:
+            return False
+        shapes = [n for n in nodes if n.type in self.SHAPE_TYPES]
+        targets = [n for n in nodes if n.type in ("image", "frame", "rect") and n not in shapes[:1]]
+        return bool(shapes) and bool(targets) and not any(self.inside_instance(n.id) for n in nodes)
+
+    def mask_with_shape(self) -> bool:
+        """Картинка (или контейнер) + фигура → картинка в форме фигуры; фигура убирается. Одна запись истории."""
+        from app.core.document.model import MASK_BOX
+        from app.ui.workspace.canvas import node_outline, qpath_to_d
+        s = self.screen()
+        if not s or not self.mask_ready():
+            return False
+        nodes = self.selected_nodes()
+        order = {n.id: i for i, (n, _, _) in enumerate(tree.walk(s.nodes))}
+        nodes.sort(key=lambda n: order[n.id])
+        # форма — верхняя фигура (как в Figma наоборот не путать: обрезаем то, что под ней)
+        shape = next(n for n in reversed(nodes) if n.type in self.SHAPE_TYPES)
+        target = next(n for n in nodes if n is not shape)
+        if target.w < 1 or target.h < 1:
+            return False
+        d = qpath_to_d(node_outline(shape), -target.x, -target.y, MASK_BOX / target.w, MASK_BOX / target.h)
+        tid, sid_, scr_id = target.id, shape.id, s.id
+
+        def mutate(doc):
+            scr = doc.screen(scr_id)
+            tree.find(scr, tid)[0].clip_path = d
+            _, par, i = tree.find(scr, sid_)
+            (par.children if par is not None else scr.nodes).pop(i)
+        if self.patch("Маска формой", mutate):
+            self.select([tid])
+            return True
+        return False
+
     def delete_selection(self) -> None:
         s = self.screen()
         if s and self.selection:

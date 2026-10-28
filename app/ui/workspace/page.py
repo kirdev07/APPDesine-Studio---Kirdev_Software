@@ -569,6 +569,12 @@ class WorkspacePage(QMainWindow):
             m.addAction(self.a_copy_style)
             if ed.style_clipboard:
                 m.addAction(self.a_paste_style)
+            if ed.shape_op_ready():
+                shapes = self._submenu(m, "Фигуры: объединить / вычесть…")
+                for op, title in ed.SHAPE_OPS.items():
+                    shapes.addAction(title, lambda o=op: ed.combine_shapes(o))
+            if ed.mask_ready():
+                m.addAction("Обрезать по форме (маска)", ed.mask_with_shape)
             if len(ed.selection) == 1 and hasattr(self.window(), "make_app_icon"):
                 m.addAction("Сделать иконкой приложения", self.window().make_app_icon)
             if self.a_replace_symbol.isEnabled():

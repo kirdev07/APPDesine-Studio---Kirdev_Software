@@ -282,6 +282,10 @@ fun Modifier.smart(key: String): Modifier {
 
 GRADIENT_KT = '''package {pkg}.ui.components
 
+import androidx.compose.foundation.shape.GenericShape
+import androidx.compose.ui.graphics.Matrix
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -290,6 +294,15 @@ import androidx.compose.ui.graphics.LinearGradientShader
 import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
 import kotlin.math.abs
+
+/** Маска любой формой: контур из квадрата 0…1000, растянутый на размер элемента. */
+fun maskShape(d: String): Shape {
+    val base = PathParser().parsePathString(d).toPath()
+    return GenericShape { size, _ ->
+        addPath(base)
+        transform(Matrix().apply { scale(size.width / 1000f, size.height / 1000f) })
+    }
+}
 
 /** Линейный градиент под произвольным углом (направление dx, dy), растянутый на размер элемента. */
 fun linearAngleBrush(colors: List<Color>, dx: Float, dy: Float): Brush = object : ShaderBrush() {

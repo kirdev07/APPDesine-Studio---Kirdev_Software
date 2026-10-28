@@ -137,9 +137,58 @@ def fill_brush(n: Node, rect: QRectF):
     return QBrush(g)
 
 
-def shape_path(n: Node, rect: QRectF | None = None) -> QPainterPath:
-    """Контур узла: эллипс или прямоугольник со скруглением каждого угла по отдельности."""
+def mask_path(n: Node, rect: QRectF | None = None) -> QPainterPath:
+    """Маска любой формой: контур из квадрата 0…MASK_BOX — на место и размер элемента."""
+    from app.core.document.model import MASK_BOX
     rect = rect or QRectF(n.x, n.y, n.w, n.h)
+    base = _PATH_CACHE.get("mask:" + n.clip_path)
+    if base is None:
+        tmp = Node(type="vector", path=n.clip_path, x=0, y=0, w=MASK_BOX, h=MASK_BOX, vb_w=MASK_BOX, vb_h=MASK_BOX)
+        base = _PATH_CACHE["mask:" + n.clip_path] = vector_path(tmp)
+    return QTransform().translate(rect.x(), rect.y()).scale(rect.width() / MASK_BOX,
+                                                              rect.height() / MASK_BOX).map(base)
+
+
+def qpath_to_d(path: QPainterPath, dx: float = 0.0, dy: float = 0.0, kx: float = 1.0, ky: float = 1.0) -> str:
+    """Контур Qt → строка пути (M, L, C, Z) со сдвигом и масштабом."""
+    def f(v):
+        return f"{round(v, 2):g}"
+    out, i, n = [], 0, path.elementCount()
+    start = None
+    while i < n:
+        e = path.elementAt(i)
+        x, y = (e.x + dx) * kx, (e.y + dy) * ky
+        if e.isMoveTo():
+            if start is not None:
+                out.append("Z")
+            out.append(f"M{f(x)} {f(y)}")
+            start = (x, y)
+            i += 1
+        elif e.isLineTo():
+            out.append(f"L{f(x)} {f(y)}")
+            i += 1
+        else:  # CurveTo + две точки данных
+            c2, end = path.elementAt(i + 1), path.elementAt(i + 2)
+            out.append(f"C{f(x)} {f(y)} {f((c2.x + dx) * kx)} {f((c2.y + dy) * ky)} "
+                       f"{f((end.x + dx) * kx)} {f((end.y + dy) * ky)}")
+            i += 3
+    if start is not None:
+        out.append("Z")
+    return " ".join(out)
+
+
+def node_outline(n: Node) -> QPainterPath:
+    """Контур элемента на экране (для операций с фигурами и масок)."""
+    if n.type == "vector":
+        return vector_path(n)
+    return shape_path(n)
+
+
+def shape_path(n: Node, rect: QRectF | None = None) -> QPainterPath:
+    """Контур узла: маска формой, эллипс или прямоугольник со скруглением каждого угла по отдельности."""
+    rect = rect or QRectF(n.x, n.y, n.w, n.h)
+    if n.clip_path:
+        return mask_path(n, rect)
     path = QPainterPath()
     if n.type == "ellipse":
         path.addEllipse(rect)
@@ -287,10 +336,24 @@ def _fit_rects(rect: QRectF, iw: int, ih: int, fit: str) -> tuple[QRectF, QRectF
     return rect, QRectF(0, 0, iw, ih)
 
 
-def paint_node(p: QPainter, n: Node, assets=None) -> None:
+_BLEND = {"multiply": QPainter.CompositionMode.CompositionMode_Multiply,
+          "screen": QPainter.CompositionMode.CompositionMode_Screen,
+          "overlay": QPainter.CompositionMode.CompositionMode_Overlay,
+          "darken": QPainter.CompositionMode.CompositionMode_Darken,
+          "lighten": QPainter.CompositionMode.CompositionMode_Lighten}
+
+
+def paint_node(p: QPainter, n: Node, assets=None, backdrop=None) -> None:
     rect = QRectF(n.x, n.y, n.w, n.h)
     p.save()
     p.setOpacity(p.opacity() * n.opacity)
+    if n.clip_path and n.type not in ("vector", "text"):  # маска формой: всё рисование — внутри контура
+        p.setClipPath(mask_path(n, rect), Qt.ClipOperation.IntersectClip)
+    if backdrop is not None and n.type not in ("vector", "text"):  # матовое стекло: размытый фон под элементом
+        p.save()
+        p.setClipPath(shape_path(n, rect), Qt.ClipOperation.IntersectClip)
+        p.drawImage(rect, backdrop)
+        p.restore()
     p.setBrush(fill_brush(n, rect))
     plain_stroke = n.stroke_dash == "solid" and n.stroke_align == "center" and n.stroke_sides == "trbl"
     if n.stroke and n.stroke_width > 0 and (plain_stroke or n.type in ("vector", "text")):
@@ -333,6 +396,12 @@ def paint_node(p: QPainter, n: Node, assets=None) -> None:
         _paint_text(p, n, rect)
     elif n.type == "rect" or n.fill or n.stroke:
         p.drawPath(outline)
+    if n.overlay and n.type not in ("vector", "text"):  # слой поверх: тонировка или затемнение содержимого
+        p.save()
+        p.setClipPath(outline if outline is not None else shape_path(n, rect), Qt.ClipOperation.IntersectClip)
+        p.setCompositionMode(_BLEND.get(n.overlay_blend, QPainter.CompositionMode.CompositionMode_SourceOver))
+        p.fillRect(rect, qcolor(n.overlay))
+        p.restore()
     if outline is not None and n.shadow_color and n.shadow_inset:
         paint_shadow(p, n, outline, inset=True)
     if custom_stroke:
@@ -387,9 +456,11 @@ class NodeItem(QGraphicsItem):
         apply_effects(self, self.node, self.k)
         self.update()
 
+    backdrop = None  # матовое стекло: размытая картинка того, что под элементом (готовит build_scene)
+
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        paint_node(painter, self.node, self.assets)
+        paint_node(painter, self.node, self.assets, self.backdrop)
 
 
 class ArtboardItem(QGraphicsItem):
@@ -443,7 +514,42 @@ def build_scene(scene: QGraphicsScene, screen: Screen, artboard_color: str, asse
                     item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemClipsChildrenToShape, n.clip)
                     rec(n.children, v, item)
     rec(screen.nodes, True, None)
+    _bake_backdrops(scene, items)
     return items
+
+
+def blurred(img, radius: float):
+    """Мягкое размытие без внешних библиотек: уменьшить и плавно увеличить (близко к гауссову)."""
+    from PySide6.QtCore import QSize
+    if radius <= 0.5:
+        return img
+    k = max(1.0, radius / 2)
+    small = img.scaled(QSize(max(1, round(img.width() / k)), max(1, round(img.height() / k))),
+                       Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    for _ in range(2):  # два прохода — без «квадратиков»
+        small = small.scaled(QSize(max(1, small.width() // 2 + 1), max(1, small.height() // 2 + 1)),
+                             Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation) \
+            .scaled(small.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    return small.scaled(img.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+
+def _bake_backdrops(scene: QGraphicsScene, items: dict) -> None:
+    """Для элементов со стеклом — снимок сцены под ними (без них самих), размытый."""
+    from PySide6.QtGui import QImage
+    glass = [it for it in items.values() if it.node.backdrop_blur > 0 and it.node.type not in ("vector", "text")]
+    for it in glass:
+        n = it.node
+        if n.w < 1 or n.h < 1:
+            continue
+        it.setVisible(False)
+        img = QImage(max(1, round(n.w)), max(1, round(n.h)), QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(QColor(0, 0, 0, 0))
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        scene.render(p, QRectF(0, 0, img.width(), img.height()), QRectF(n.x, n.y, n.w, n.h))
+        p.end()
+        it.setVisible(True)
+        it.backdrop = blurred(img, n.backdrop_blur)
 
 
 def measure_lines(a: tuple, b: tuple) -> list[tuple[float, float, float, float, float]]:
