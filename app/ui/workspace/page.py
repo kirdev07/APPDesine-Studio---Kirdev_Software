@@ -275,6 +275,15 @@ class WorkspacePage(QMainWindow):
         self.tap_menu.aboutToShow.connect(self._fill_tap_menu)
         self.tap_button.setMenu(self.tap_menu)
         lay.addWidget(self.tap_button)
+        self.anim_button = QToolButton()
+        self.anim_button.setText("Анимация ▾")
+        self.anim_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.anim_button.setAutoRaise(True)
+        self.anim_button.setToolTip("Готовые анимации: появление, выезд, пружина, пульс, встряска, вращение…")
+        self.anim_menu = QMenu(self.anim_button)
+        self.anim_menu.aboutToShow.connect(self._fill_anim_menu)
+        self.anim_button.setMenu(self.anim_menu)
+        lay.addWidget(self.anim_button)
         self.sel_buttons = []
         for action, text, danger in ((self.a_replace_symbol, "Значок…", False),
                                      (self.a_replace, "Заменить…", False), (self.a_dup, "Дублировать", False),
@@ -319,6 +328,10 @@ class WorkspacePage(QMainWindow):
                                                                                200))
                 self.sel_label.setToolTip(text)
                 self.tap_button.setVisible(len(nodes) == 1)
+                self.anim_button.setVisible(len(nodes) == 1)
+                if len(nodes) == 1:
+                    n_anim = len(self.editor.node_animations(nodes[0].id))
+                    self.anim_button.setText(f"Анимация ({n_anim}) ▾" if n_anim else "Анимация ▾")
                 self.sel_buttons[0].setVisible(len(nodes) == 1 and nodes[0].type == "vector")
                 if len(nodes) == 1:
                     self.tap_button.setText(self._tap_text(nodes[0].id))
@@ -389,6 +402,41 @@ class WorkspacePage(QMainWindow):
             vis.addAction("На экране нет других элементов").setEnabled(False)
         m.addSeparator()
         m.addAction("Сложнее (условия, переменные, анимации) — в «Логике»…", self._open_logic)
+
+    def _fill_anim_menu(self) -> None:
+        from app.engines.animation.presets import PRESETS
+        ed = self.editor
+        m = self.anim_menu
+        for old in getattr(self, "_anim_submenus", []):
+            old.deleteLater()
+        self._anim_submenus = []
+        m.clear()
+        if len(ed.selection) != 1:
+            return
+        nid = ed.selection[0]
+        for trigger, title in (("open", "При открытии экрана"), ("tap", "При нажатии на элемент"),
+                               ("none", "Только создать (запуск — в «Логике»)")):
+            sub = QMenu(title, m)
+            m.addMenu(sub)
+            self._anim_submenus.append(sub)
+            for p in PRESETS:
+                if trigger == "open" or not p.entrance or trigger == "none":
+                    a = sub.addAction(p.name, lambda k=p.key, t=trigger: ed.add_animation_preset(nid, k, t))
+                    a.setToolTip(p.hint)
+                elif trigger == "tap":
+                    a = sub.addAction(p.name, lambda k=p.key: ed.add_animation_preset(nid, k, "tap"))
+                    a.setToolTip(p.hint)
+            sub.setToolTipsVisible(True)
+        m.addSeparator()
+        n_anim = len(ed.node_animations(nid))
+        rm = m.addAction(f"Убрать анимации элемента ({n_anim})", lambda: ed.remove_node_animations(nid))
+        rm.setEnabled(n_anim > 0)
+        m.addAction("Открыть студию «Анимации»…", self._open_animations)
+
+    def _open_animations(self) -> None:
+        w = self.window()
+        if hasattr(w, "open_animations"):
+            w.open_animations()
 
     def _submenu(self, parent: QMenu, title: str) -> QMenu:
         """Подменю с явным родителем и ссылкой: подменю из addMenu(str) PySide может удалить раньше времени."""

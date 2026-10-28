@@ -366,7 +366,8 @@ class LayoutEngine:
             free = inner_main - total
             offset = {"start": 0.0, "center": free / 2, "end": free}.get(f.main_align, 0.0)
         overflow_axis = f.sizing_v if vertical else f.sizing_h
-        if total > inner_main + 0.5 and overflow_axis != "hug":
+        scrolls = f.scroll == ("vertical" if vertical else "horizontal")  # прокрутка — переполнение ожидаемо
+        if total > inner_main + 0.5 and overflow_axis != "hug" and not scrolls:
             self._diag("warning", f, f"содержимое не помещается ({total:.0f} из {inner_main:.0f} px)")
         pos = start_main + offset
         for c, m, cr in zip(kids, main, cross):

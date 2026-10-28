@@ -136,7 +136,11 @@ def fill_brush(n: Node, rect: QRectF):
 
 
 def apply_effects(item: QGraphicsItem, n: Node, k: float) -> None:
-    """Тень уровня Material 3 или размытие слоя (у элемента сцены может быть один эффект; размытие важнее)."""
+    """Тень уровня Material 3 или размытие слоя (у элемента сцены может быть один эффект; размытие важнее);
+    масштаб и поворот — вокруг центра элемента, вместе с содержимым."""
+    item.setTransformOriginPoint(n.x + n.w / 2, n.y + n.h / 2)
+    item.setScale(n.scale)
+    item.setRotation(n.rotation)
     if n.blur > 0:
         eff = item.graphicsEffect()
         if not isinstance(eff, QGraphicsBlurEffect):

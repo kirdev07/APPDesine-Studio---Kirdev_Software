@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 
 from app.core.document.model import ModelError, check_prop, new_id
 
-ANIMATABLE = ("x", "y", "w", "h", "opacity", "radius", "fill", "stroke", "text_color", "font_size", "stroke_width")
+ANIMATABLE = ("x", "y", "w", "h", "opacity", "radius", "fill", "stroke", "text_color", "font_size", "stroke_width",
+              "scale", "rotation")
 COLOR_PROPS = ("fill", "stroke", "text_color")
 EASINGS = ("linear", "ease_in", "ease_out", "ease_in_out", "step", "cubic")
 TRANSITIONS = ("none", "fade", "slide_left", "slide_right", "slide_up", "slide_down")

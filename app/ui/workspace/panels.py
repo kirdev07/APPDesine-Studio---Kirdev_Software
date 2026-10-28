@@ -998,7 +998,7 @@ class ScreensStrip(QWidget):
             self.editor.set_screen(item.data(ROLE_ID))
 
     def _fill_add_menu(self) -> None:
-        from app.libraries.screen_templates import TEMPLATES
+        from app.libraries.screen_templates import all_templates
         m = self.add_menu
         m.clear()
         cur = self.editor.screen()
@@ -1007,7 +1007,7 @@ class ScreensStrip(QWidget):
         if cur is not None and cur.platform == "android":
             m.addSeparator()
             m.addSection("Готовые экраны")
-            for key, (title, _) in TEMPLATES.items():
+            for key, (title, _) in all_templates().items():
                 m.addAction(title, lambda k=key: self.editor.add_template_screen(k))
 
     def add_screen(self) -> None:

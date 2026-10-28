@@ -222,6 +222,9 @@ class MainWindow(QMainWindow):
         self.tour.setModal(False)  # не мешает работать: окно можно закрыть или отодвинуть
         self.tour.show()
 
+    def open_animations(self) -> None:
+        self.show_page(PAGE_ANIMATIONS)
+
     def open_logic(self) -> None:
         self.show_page(PAGE_LOGIC)
 

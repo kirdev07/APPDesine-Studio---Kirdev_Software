@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 # 4 — векторы, изображения, компоненты и экземпляры, ресурсы, стили текста и цвета;
 # 5 — анимации, переменные, взаимодействия, переходы и поведение состояний компонентов;
 # 6 — сценарии предпросмотра, прокрутка, поля ввода; 7 — роль фрейма (вид компонента Material 3);
-# 8 — эффекты: уровень тени, градиент, размытие.
-SCHEMA_VERSION = 8
+# 8 — эффекты: уровень тени, градиент, размытие; 9 — масштаб и поворот (для анимаций).
+SCHEMA_VERSION = 9
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -77,12 +77,12 @@ NODE_TYPES = ("rect", "ellipse", "text", "group", "frame", "vector", "image", "i
 GEOMETRY_PROPS = ("x", "y", "w", "h")
 STYLE_PROPS = ("fill", "stroke", "stroke_width", "radius", "opacity")
 # Эффекты: уровень тени Material 3 (0–5), градиент заливки (от fill к fill2 под углом), размытие слоя.
-EFFECT_PROPS = ("elevation", "gradient", "fill2", "grad_angle", "blur")
+EFFECT_PROPS = ("elevation", "gradient", "fill2", "grad_angle", "blur", "scale", "rotation")
 ELEVATION_DP = (0, 1, 3, 6, 8, 12)  # уровни тени Material 3, dp
 GRADIENTS = ("none", "linear", "radial")
 # Значения по умолчанию, которые не записываются в файл (старые проекты и экспорт не меняются).
 _OMIT_DEFAULT = {"ref": "", "role": "", "elevation": 0, "gradient": "none", "fill2": "", "grad_angle": 180.0,
-                 "blur": 0.0}
+                 "blur": 0.0, "scale": 1.0, "rotation": 0.0}
 TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style")
 # ref — идентификатор узла мастер-компонента, из которого получен узел экземпляра.
 COMMON_PROPS = ("name", "visible", "locked", "ref")
@@ -194,6 +194,8 @@ def check_prop(name: str, value, node_type: str = "rect"):
     limits["vb_w"] = limits["vb_h"] = (0.001, MAX_COORD)
     limits["grad_angle"] = (-360, 360)
     limits["blur"] = (0, 250)
+    limits["scale"] = (0, 20)          # масштаб вокруг центра (1 — как нарисовано)
+    limits["rotation"] = (-3600, 3600)  # поворот вокруг центра, градусы
     lo, hi = limits.get(name, (-MAX_COORD, MAX_COORD))
     if not lo <= value <= hi:
         raise ModelError(f"«{name}» вне диапазона {lo}…{hi}")
@@ -240,6 +242,8 @@ class Node:
     fill2: str = ""
     grad_angle: float = 180.0     # как в CSS: 180 — сверху вниз, 90 — слева направо
     blur: float = 0.0
+    scale: float = 1.0            # масштаб и поворот вокруг центра — для анимаций (пружина, пульс, вращение)
+    rotation: float = 0.0
     text: str = ""
     font_family: str = "Segoe UI"
     font_size: float = 16.0

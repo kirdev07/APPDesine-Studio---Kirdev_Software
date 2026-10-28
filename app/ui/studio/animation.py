@@ -22,7 +22,7 @@ from app.ui.workspace.canvas import asset_lookup, build_scene
 ROLE = Qt.ItemDataRole.UserRole
 PROP_RU = {"x": "X", "y": "Y", "w": "Ширина", "h": "Высота", "opacity": "Непрозрачность", "radius": "Скругление",
            "fill": "Заливка", "stroke": "Обводка", "text_color": "Цвет текста", "font_size": "Размер шрифта",
-           "stroke_width": "Толщина обводки"}
+           "stroke_width": "Толщина обводки", "scale": "Масштаб", "rotation": "Поворот"}
 EASE_RU = {"linear": "Линейная", "ease_in": "Разгон", "ease_out": "Торможение", "ease_in_out": "Разгон и торможение",
            "step": "Скачок в конце", "cubic": "cubic-bezier…"}
 ROW_H, HEAD_W, RULER_H = 26, 190, 24

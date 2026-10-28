@@ -472,6 +472,54 @@ class Editor(QObject):
         return self.set_props({node_id: {"path": d, "vb_w": float(symbols.VIEWBOX), "vb_h": float(symbols.VIEWBOX),
                                          "name": symbols.russian_name(name)}}, f"Значок: {name}")
 
+    # ---------- готовые анимации ----------
+    def node_animations(self, node_id: str) -> list:
+        if not self.doc:
+            return []
+        s = self.screen()
+        ids = {node_id} | ({d.id for d in tree.descendants(tree.find(s, node_id)[0])} if s else set())
+        return [a for a in self.doc.animations if any(t.node_id in ids for t in a.tracks)]
+
+    def add_animation_preset(self, node_id: str, key: str, trigger: str = "open") -> bool:
+        """Готовая анимация для элемента; trigger: open — при открытии экрана, tap — при нажатии на элемент,
+        none — только создать (запуск — правилом «Логики»). Одна запись истории."""
+        from app.core.document.behavior import Interaction
+        from app.engines.animation import presets
+        from app.engines.preview.devices import screen_dpi
+        s = self.screen()
+        if not s or not self.doc:
+            return False
+        node = tree.find(s, node_id)[0]
+        k = screen_dpi(s) / 160 if s.platform == "android" else 1.0
+        anim = presets.build(key, node, s.id, k)
+        rule = None
+        if trigger in ("open", "tap"):
+            rule = Interaction.from_dict(Interaction(
+                screen_id=s.id, node_id="" if trigger == "open" else node_id,
+                trigger="screen_open" if trigger == "open" else "tap",
+                actions=[{"type": "play_animation", "animation_id": anim.id}]).to_dict())
+
+        def mutate(doc):
+            from app.core.document.behavior import Animation, Interaction as I
+            doc.animations.append(Animation.from_dict(anim.to_dict()))
+            if rule is not None:
+                doc.interactions.append(I.from_dict(rule.to_dict()))
+        return self.patch(f"Анимация «{presets.preset(key).name}»", mutate)
+
+    def remove_node_animations(self, node_id: str) -> bool:
+        """Убрать анимации элемента и правила, которые их запускают."""
+        ids = {a.id for a in self.node_animations(node_id)}
+        if not ids:
+            return False
+
+        def mutate(doc):
+            doc.animations = [a for a in doc.animations if a.id not in ids]
+            for it in list(doc.interactions):
+                it.actions = [a for a in it.actions if not (a["type"] == "play_animation"
+                                                            and a.get("animation_id") in ids)]
+            doc.interactions = [it for it in doc.interactions if it.actions]
+        return self.patch("Убрать анимации элемента", mutate)
+
     def replace_selection(self, kind: str) -> Node | None:
         """Заменить выделенный элемент заготовкой: новый встаёт на то же место (родитель, порядок, положение),
         старый удаляется; одна запись истории."""

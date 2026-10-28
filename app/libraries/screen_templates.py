@@ -202,9 +202,15 @@ TEMPLATES: dict[str, tuple[str, callable]] = {
 }
 
 
+def all_templates() -> dict:
+    """Все готовые экраны: первые семь и добавленные в 1.9 (модуль screen_templates_more)."""
+    from app.libraries.screen_templates_more import TEMPLATES as MORE
+    return {**TEMPLATES, **MORE}
+
+
 def build(key: str, like: Screen, appearance) -> Screen:
     """Новый экран того же устройства, что like, с готовым содержимым."""
-    title, fn = TEMPLATES[key]
+    title, fn = all_templates()[key]
     s = Screen(name=title, platform=like.platform, width=like.width, height=like.height, device_id=like.device_id)
     s.nodes = fn(s, appearance)
     return s

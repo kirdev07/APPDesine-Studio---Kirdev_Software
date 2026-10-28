@@ -4,7 +4,8 @@
   плавностями; действие «Запустить анимацию» запускает их, «Открытие экрана» — при показе экрана.
 - Тень уровня Material 3 → Modifier.shadow, градиент → Brush, размытие → Modifier.blur.
 - Переходы между экранами — в AppNavHost (AnimatedContent): затухание и сдвиги с длительностью и плавностью.
-Остальные дорожки (размер, цвет, скругление, шрифт) помечаются TODO.
+Дорожки непрозрачности, положения, масштаба и поворота — рабочий код; остальные (размер, цвет, скругление,
+шрифт) помечаются TODO.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import math
 from app.core.document import tree
 from app.core.document.model import ELEVATION_DP
 
-SUPPORTED = ("opacity", "x", "y")
+SUPPORTED = ("opacity", "x", "y", "scale", "rotation")
 _BEZIER = {"ease_in": (0.42, 0.0, 1.0, 1.0), "ease_out": (0.0, 0.0, 0.58, 1.0), "ease_in_out": (0.42, 0.0, 0.58, 1.0)}
 
 
@@ -61,7 +62,7 @@ class Motion:
                 if key not in self.vars:
                     var = gen.ident(f"anim {n.name} {tr.prop}")
                     self.vars[key] = var
-                    init = n.opacity if tr.prop == "opacity" else 0.0
+                    init = {"opacity": n.opacity, "scale": n.scale, "rotation": n.rotation}.get(tr.prop, 0.0)
                     if a.id in opening:
                         init = self._value(n, tr.prop, tr.keyframes[0].value)
                     self.decls.append(f"    val {var} = remember {{ Animatable({_f(init)}) }}")
@@ -78,7 +79,7 @@ class Motion:
             self.decls.insert(0, "    val scope = rememberCoroutineScope()")
 
     def _value(self, n, prop: str, v) -> float:
-        if prop == "opacity":
+        if prop in ("opacity", "scale", "rotation"):
             return float(v)
         return (float(v) - (n.x if prop == "x" else n.y)) / self.g.k   # смещение от места в дизайне, dp
 
@@ -102,7 +103,7 @@ class Motion:
         return f"scope.launch {{ {fn}() }}" if fn else None
 
     def animated(self, n) -> bool:
-        return any((n.id, p) in self.vars for p in SUPPORTED)
+        return any((n.id, p) in self.vars for p in SUPPORTED) or n.scale != 1 or n.rotation != 0
 
     def layer(self, n, ind: str) -> list[str]:
         """graphicsLayer с анимируемыми значениями узла (вместо статической непрозрачности)."""
@@ -114,6 +115,15 @@ class Motion:
         for prop, attr in (("x", "translationX"), ("y", "translationY")):
             if (n.id, prop) in self.vars:
                 parts.append(f"{attr} = {self.vars[(n.id, prop)]}.value.dp.toPx()")
+        if (n.id, "scale") in self.vars:
+            v = self.vars[(n.id, "scale")]
+            parts.append(f"scaleX = {v}.value; scaleY = {v}.value")
+        elif n.scale != 1:
+            parts.append(f"scaleX = {_f(n.scale)}; scaleY = {_f(n.scale)}")
+        if (n.id, "rotation") in self.vars:
+            parts.append(f"rotationZ = {self.vars[(n.id, 'rotation')]}.value")
+        elif n.rotation != 0:
+            parts.append(f"rotationZ = {_f(n.rotation)}")
         return [f"{ind}.graphicsLayer {{ {'; '.join(parts)} }}"] if parts else []
 
 
