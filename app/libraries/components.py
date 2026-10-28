@@ -535,7 +535,7 @@ SPECS: tuple[ComponentSpec, ...] = (
 
 
 _ALL: tuple[ComponentSpec, ...] | None = None
-CATEGORY_ORDER = ("Кнопки", "Поля", "Выбор", "Вход и регистрация", "Карточки", "Профиль и люди", "Магазин",
+CATEGORY_ORDER = ("Кнопки", "Поля", "Выбор", "Вход и регистрация", "Карточки", "Графики", "Профиль и люди", "Магазин",
                   "Навигация", "Обратная связь", "Состояния", "Окна")
 
 
@@ -545,7 +545,9 @@ def all_specs() -> tuple[ComponentSpec, ...]:
     if _ALL is None:
         from app.libraries.components_m3x import SPECS as M3X  # модули используют _Ctx отсюда
         from app.libraries.components_more import SPECS as MORE
-        android = [s for s in SPECS if s.platform == _A and s.category != "Значки"] + list(M3X) + list(MORE)
+        from app.libraries.charts import SPECS as CHARTS
+        android = [s for s in SPECS if s.platform == _A and s.category != "Значки"] + list(M3X) + list(MORE) + \
+            list(CHARTS)
         order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
         android.sort(key=lambda s: order.get(s.category, len(order)))  # одна категория — подряд
         icons = [s for s in SPECS if s.category == "Значки"]

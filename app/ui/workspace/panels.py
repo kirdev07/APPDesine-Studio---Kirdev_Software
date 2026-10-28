@@ -639,6 +639,14 @@ class Inspector(QScrollArea):
         self.shadow_inset.clicked.connect(lambda v: self._commit_leaves("shadow_inset", v, "Внутренняя тень"))
         f.addRow(self.shadow_inset)
 
+        self.sec_chart, f = self._section("График", "Числа через пробел: «12 30 18 40». Столбцы и линия — "
+                                                     "по порядку слева направо, кольцо — доли от целого. "
+                                                     "Цвета — у столбцов и долей в слоях графика.")
+        self.chart_data = QLineEdit()
+        self.chart_data.setPlaceholderText("12 30 18 40")
+        self.chart_data.editingFinished.connect(self._commit_chart)
+        f.addRow("Числа", self.chart_data)
+
         self.sec_text, f = self._section("Текст")
         self.text = QPlainTextEdit()
         self.text.setFixedHeight(80)
@@ -1096,6 +1104,10 @@ class Inspector(QScrollArea):
                 w.setVisible(has)
             self.sec_style.setVisible(has)
             self.sec_fx.setVisible(has)
+            chart = nodes[0] if len(nodes) == 1 and nodes[0].role.startswith("chart.") else None
+            self.sec_chart.setVisible(chart is not None)
+            if chart is not None and not self.chart_data.hasFocus():
+                self.chart_data.setText(chart.data)
             texts = [n for n in leaves if n.type == "text"]
             self.sec_text.setVisible(bool(texts))
             for w in (self.sec_screen, self.sec_guides, self.sec_project):
@@ -1288,6 +1300,13 @@ class Inspector(QScrollArea):
                 form.setRowVisible(w, on)
                 return
         w.setVisible(on)
+
+    def _commit_chart(self) -> None:
+        nodes = self.editor.selected_nodes()
+        if self._loading or len(nodes) != 1 or self.chart_data.text().strip() == nodes[0].data:
+            return
+        if not self.editor.set_chart_data(nodes[0].id, self.chart_data.text()):
+            self.chart_data.setText(nodes[0].data)
 
     def _commit_sides(self) -> None:
         sides = "".join(s for s, b in self.side_btns.items() if b.isChecked())

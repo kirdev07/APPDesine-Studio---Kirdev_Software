@@ -204,8 +204,9 @@ TEMPLATES: dict[str, tuple[str, callable]] = {
 
 def all_templates() -> dict:
     """Все готовые экраны: первые семь и добавленные в 1.9 (модуль screen_templates_more)."""
+    from app.libraries.screen_templates_extra import TEMPLATES as EXTRA
     from app.libraries.screen_templates_more import TEMPLATES as MORE
-    return {**TEMPLATES, **MORE}
+    return {**TEMPLATES, **MORE, **EXTRA}
 
 
 def build(key: str, like: Screen, appearance) -> Screen:

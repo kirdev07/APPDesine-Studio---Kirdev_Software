@@ -936,6 +936,32 @@ class Editor(QObject):
             doc.screen(sid).comments[:] = [c for c in doc.screen(sid).comments if c.id != comment_id]
         return self.patch("Удалить комментарий", mutate)
 
+    # ---------- графики ----------
+    def set_chart_data(self, node_id: str, text: str) -> bool:
+        """Новые числа графика: содержимое перестраивается под размер, цвета сохраняются."""
+        from app.engines.material.color import scheme
+        from app.engines.preview.devices import screen_dpi
+        from app.libraries import charts
+        s = self.screen()
+        node = tree.find(s, node_id)[0] if s else None
+        if node is None or node.role not in charts.CHART_ROLES:
+            return False
+        values = charts.parse_values(text)
+        if len(values) < (1 if node.role == "chart.donut" else 2) or \
+                (node.role != "chart.line" and any(v < 0 for v in values)):
+            self.message.emit("График: нужно не меньше двух чисел (у кольца — одно), без минусов у столбцов и кольца")
+            return False
+        ap = self.doc.meta.appearance
+        sch = scheme(ap.accent, ap.theme != "light")
+        default = [sch[r] for r in ("primary", "tertiary", "secondary", "error", "primaryContainer",
+                                    "tertiaryContainer")]
+        k = screen_dpi(s) / 160 if s.platform == "android" else 1.0
+        sid = s.id
+
+        def mutate(doc):
+            charts.rebuild(tree.find(doc.screen(sid), node_id)[0], values, k, default)
+        return self.patch("Данные графика", mutate)
+
     # ---------- версии и контраст ----------
     def restore_document(self, other, label: str = "Вернуть версию") -> bool:
         """Содержимое другой копии проекта (версии) — в текущий документ одной записью истории."""

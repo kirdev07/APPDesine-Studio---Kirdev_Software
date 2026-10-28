@@ -114,7 +114,7 @@ def test_presets_from_selection_bar_play_in_preview(qtbot, win):
 def test_eighteen_ready_screens(qtbot, win):
     ed = win.project_page.editor
     t = all_templates()
-    assert len(t) == 18
+    assert len(t) == 22  # 1.19: календарь, карта, статистика, лента соцсети
     for key in ("onboarding", "home", "product", "checkout", "search", "player", "notifications", "wallet",
                 "splash", "offline", "tracking"):
         ed.set_screen(ed.doc.screens[0].id)

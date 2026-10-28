@@ -16,8 +16,9 @@ from datetime import datetime, timezone
 # 10 — варианты компонентов (свойства «Размер», «Стиль» … и выбор варианта у копии);
 # 11 — тонкая настройка вида: своя тень, обводка (пунктир, сторона, стороны), углы по отдельности, 3-й цвет
 # градиента, интервалы, курсив, подчёркивание, регистр и число строк текста;
-# 12 — комментарии на экранах (заметки к месту макета, можно отметить решёнными).
-SCHEMA_VERSION = 12
+# 12 — комментарии на экранах (заметки к месту макета, можно отметить решёнными);
+# 13 — данные графика у контейнера (data: числа через пробел).
+SCHEMA_VERSION = 13
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -110,7 +111,7 @@ _OMIT_DEFAULT = {"ref": "", "role": "", "elevation": 0, "gradient": "none", "fil
                  "shadow_inset": False, "stroke_dash": "solid", "stroke_align": "center", "stroke_sides": "trbl",
                  "radius_tl": -1.0, "radius_tr": -1.0, "radius_br": -1.0, "radius_bl": -1.0, "fill3": "",
                  "letter_spacing": 0.0, "line_height": 0.0, "italic": False, "decoration": "none",
-                 "text_case": "none", "max_lines": 0}
+                 "text_case": "none", "max_lines": 0, "data": ""}
 TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style") + \
     TEXT_LOOK_PROPS
 # ref — идентификатор узла мастер-компонента, из которого получен узел экземпляра.
@@ -119,7 +120,7 @@ COMMON_PROPS = ("name", "visible", "locked", "ref")
 CHILD_PROPS = ("sizing_h", "sizing_v", "min_w", "max_w", "min_h", "max_h", "constraint_h", "constraint_v")
 # Свойства контейнера-фрейма.
 FRAME_PROPS = ("layout", "gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "main_align", "cross_align",
-               "grid_columns", "clip", "scroll", "role")
+               "grid_columns", "clip", "scroll", "role", "data")
 # Текстовое поле ввода в предпросмотре: текст можно набирать, значение можно связать с текстовой переменной.
 INPUT_PROPS = ("editable", "input_var")
 VECTOR_PROPS = ("path", "vb_w", "vb_h", "fill_rule")
@@ -207,6 +208,10 @@ def check_prop(name: str, value, node_type: str = "rect"):
     if name == "role":
         if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9_.]{0,64}", value):
             raise ModelError("Неверная роль фрейма")
+        return value
+    if name == "data":
+        if not isinstance(value, str) or len(value) > 2000 or not re.fullmatch(r"[0-9.\-\s]*", value):
+            raise ModelError("Данные графика — числа через пробел")
         return value
     if name == "state":
         if not isinstance(value, str) or not re.fullmatch(r"[0-9A-Za-zА-Яа-яЁё _-]{1,64}", value):
@@ -354,6 +359,7 @@ class Node:
     clip: bool = True
     scroll: str = "none"          # прокрутка содержимого фрейма в предпросмотре
     role: str = ""                # вид стандартного компонента (m3.switch, …) — для экспорта в Compose
+    data: str = ""                # числа графика (chart.*) через пробел
     # поле ввода (текст)
     editable: bool = False
     input_var: str = ""

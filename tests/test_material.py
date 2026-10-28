@@ -59,7 +59,7 @@ def test_components_have_roles_and_icons():
         if kind.removeprefix("m3_icon_") in ICONS:
             assert n.type == "vector" and n.path
             continue
-        assert n.role.startswith("m3."), kind
+        assert n.role.startswith(("m3.", "chart.")) or kind == "chart_kpi", kind   # графики (1.19) — chart.*
         for d in tree.descendants(n):
             if d.type == "vector":
                 assert d.path, kind
