@@ -61,7 +61,8 @@ def describe_interaction(doc: ProjectDocument, it) -> str:
 
 
 def build_task(doc: ProjectDocument, opts, screens: list, files: dict[str, str], issues: list,
-               included_assets: list, excluded_assets: list) -> str:
+               included_assets: list, excluded_assets: list, android: dict | None = None,
+               prompts: list | None = None) -> str:
     """Черновик AI_TASK.md. files — {screen_id: путь JSON в пакете}."""
     m = doc.meta
     update = opts.mode == "update"
@@ -84,6 +85,17 @@ def build_task(doc: ProjectDocument, opts, screens: list, files: dict[str, str],
             L += ["Сведения о существующем проекте:", "", opts.existing_notes.strip(), ""]
     else:
         L += ["**Новый проект.** Создайте структуру проекта, навигацию и экраны с нуля.", ""]
+    if android:
+        L += ["## Готовый каркас Android-проекта", "",
+              f"В папке `{android['root']}/` — проект Android Studio (Kotlin, Jetpack Compose, Material 3, пакет "
+              f"`{android['package']}`): Gradle, тема из токенов, `AppState` с переменными, навигация и экраны "
+              "по дизайну. Он собирается как есть — используйте его как основу" +
+              (" или перенесите нужные части в существующий проект." if update else "."),
+              "- Сохраните структуру пакетов и маршруты навигации; доработайте места с `TODO`.",
+              "- Абсолютные смещения (`offset`) замените адаптивной раскладкой, тексты вынесите в `strings.xml`.",
+              ""]
+        L += [f"- `{c['composable']}` (маршрут `{c['route']}`) — «{_screen_name(doc, sid)}»"
+              for sid, c in android["screens"].items()] + [""]
     L += ["## Экраны для реализации", ""]
     for s in screens:
         k = _px_per_dp(s)
@@ -163,6 +175,10 @@ def build_task(doc: ProjectDocument, opts, screens: list, files: dict[str, str],
         L += ["- Не применимо для нового проекта; при повторной генерации не затирайте уже написанный код.", ""]
     L += ["## Без разрушающих переписываний", "",
           "- Не удаляйте пользовательские данные и файлы; спорные места оставьте с пометкой TODO и опишите.", ""]
+    if prompts:
+        L += ["## Дополнительные указания", ""]
+        for name, text in prompts:
+            L += [f"### {name}", "", text.strip(), ""]
     warn = [i for i in issues if i.severity != "info"]
     if warn:
         L += ["## Замечания проверки дизайна", ""]

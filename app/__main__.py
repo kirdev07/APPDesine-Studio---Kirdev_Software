@@ -27,6 +27,16 @@ def _install_excepthook() -> None:
     sys.excepthook = hook
 
 
+def _apply_ui_scale(paths: AppPaths) -> None:
+    """Масштаб интерфейса из настроек (до создания QApplication). Переменная QT_SCALE_FACTOR важнее."""
+    import os
+
+    from app.core.settings import UI_SCALES, Settings
+    scale = Settings(paths.settings_file).get("general/ui_scale")
+    if scale in UI_SCALES and scale != 100 and "QT_SCALE_FACTOR" not in os.environ:
+        os.environ["QT_SCALE_FACTOR"] = f"{scale / 100:g}"
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     if "--smoke-test" in argv:  # самопроверка сборки: своя временная папка данных, данные пользователя не трогает
@@ -34,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
         i = argv.index("--smoke-test")
         return smoke.run(argv[i + 1] if len(argv) > i + 1 else None)
     paths = AppPaths.default().ensure()
+    _apply_ui_scale(paths)
     setup_logging(paths.logs)
     log.info("Запуск %s %s, Python %s", APP_NAME, APP_VERSION, sys.version.split()[0])
     _install_excepthook()

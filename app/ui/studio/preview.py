@@ -69,7 +69,14 @@ class PreviewPage(QWidget):
         root = QHBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         split = QSplitter(Qt.Orientation.Horizontal)
-        split.addWidget(self._build_devices())
+        from PySide6.QtWidgets import QFrame as _QFrame
+        left = QScrollArea()
+        left.setWidgetResizable(True)
+        left.setFrameShape(_QFrame.Shape.NoFrame)
+        left.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left.setWidget(self._build_devices())
+        left.setMinimumWidth(240)
+        split.addWidget(left)
         split.addWidget(self._build_center())
         split.addWidget(self._build_right())
         split.setSizes([270, 760, 380])
@@ -82,6 +89,7 @@ class PreviewPage(QWidget):
         self.platform_label = label("", "Muted")
         lay.addWidget(self.platform_label)
         self.devices = QListWidget()
+        self.devices.setMinimumHeight(220)
         self.devices.setWordWrap(True)
         self.devices.currentItemChanged.connect(self._pick_device)
         lay.addWidget(self.devices, 1)
@@ -145,10 +153,18 @@ class PreviewPage(QWidget):
         row.addWidget(button("⟲ Сначала", self.restart, "Начать сеанс заново с текущего экрана"))
         self.b_rotate = button("⟳ Повернуть", self.rotate, "Портрет ↔ альбом")
         row.addWidget(self.b_rotate)
-        self.screen_label = label("", "Muted", wrap=True)
-        row.addWidget(self.screen_label, 1)
+        self.b_limits = button("ℹ Ограничения", lambda: self.limits.setVisible(not self.limits.isVisible()),
+                               "Что симулируется приближённо")
+        row.addWidget(self.b_limits)
+        row.addStretch()
         lay.addLayout(row)
+        self.screen_label = label("", "Muted")
+        from PySide6.QtWidgets import QSizePolicy
+        self.screen_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        lay.addWidget(self.screen_label)
         self.limits = label("Ограничения симуляции: " + " ".join(SIMULATION_LIMITS), "Muted", wrap=True)
+        self.limits.setVisible(False)  # по кнопке: место — устройству
+        self.b_limits.setToolTip(chr(10).join(SIMULATION_LIMITS))
         lay.addWidget(self.limits)
         return frame
 
@@ -373,6 +389,7 @@ class PreviewPage(QWidget):
         if p.focus_id:
             text += " · ввод текста: набирайте на клавиатуре, Enter — готово"
         self.screen_label.setText(text)
+        self.screen_label.setToolTip(text)
         self.refresh_checks()
         if self.tabs.currentIndex() == 1:
             self.refresh_compare()

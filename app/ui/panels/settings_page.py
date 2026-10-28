@@ -84,6 +84,22 @@ class SettingsPage(QWidget):
         row.addWidget(self.projects_dir, 1)
         row.addWidget(browse)
         form.addRow("Папка проектов по умолчанию", row)
+        from app.core.settings import UI_SCALES
+        self.ui_scale = QComboBox()
+        for sc in UI_SCALES:
+            self.ui_scale.addItem(f"{sc} %", sc)
+        self.ui_scale.currentIndexChanged.connect(self._set_scale)
+        self.ui_scale.setToolTip("Крупнее — всё в окне больше: текст, кнопки, панели и холст")
+        row = QHBoxLayout()
+        row.addWidget(self.ui_scale)
+        self.scale_note = label("", "Muted")
+        row.addWidget(self.scale_note, 1)
+        self.b_restart = QPushButton("Перезапустить")
+        self.b_restart.setToolTip("Закрыть программу (с вопросом о несохранённых изменениях) и открыть снова")
+        self.b_restart.clicked.connect(self._restart)
+        self.b_restart.setVisible(False)
+        row.addWidget(self.b_restart)
+        form.addRow("Масштаб интерфейса", row)
         lay.addWidget(label("Программа работает полностью офлайн: без учётной записи, облака, рекламы и сбора аналитики.",
                             "Muted", wrap=True))
         lay.addStretch()
@@ -174,7 +190,7 @@ class SettingsPage(QWidget):
     def load(self) -> None:
         s = self.ctx.settings
         widgets = (self.show_hub, self.recent, self.autosave, self.autosave_min, self.backups, self.def_android,
-                   self.def_windows, self.export_previews)
+                   self.def_windows, self.export_previews, self.ui_scale)
         for wdg in widgets:
             wdg.blockSignals(True)
         self.show_hub.setChecked(s.get("general/show_hub_on_start"))
@@ -186,6 +202,7 @@ class SettingsPage(QWidget):
         self.def_android.setCurrentIndex(max(0, self.def_android.findData(s.get("devices/default_android"))))
         self.def_windows.setCurrentIndex(max(0, self.def_windows.findData(s.get("devices/default_windows"))))
         self.export_dir.setText(s.get("export/folder"))
+        self.ui_scale.setCurrentIndex(max(0, self.ui_scale.findData(s.get("general/ui_scale"))))
         self.export_previews.setChecked(s.get("export/include_previews"))
         for wdg in widgets:
             wdg.blockSignals(False)
@@ -193,6 +210,25 @@ class SettingsPage(QWidget):
     def _set(self, key: str, value) -> None:
         self.ctx.settings.set(key, value)
         self.changed.emit()
+
+    def _set_scale(self, _i=None) -> None:
+        self._set("general/ui_scale", int(self.ui_scale.currentData()))
+        import os
+        current = round(float(os.environ.get("QT_SCALE_FACTOR", "1")) * 100)
+        changed = current != self.ui_scale.currentData()
+        self.scale_note.setText("применится после перезапуска" if changed else "")
+        self.b_restart.setVisible(changed)
+
+    def _restart(self) -> None:
+        import sys
+
+        from PySide6.QtCore import QProcess
+        win = self.window()
+        if win.close():  # закрытие спросит о несохранённых изменениях; отказ — перезапуска нет
+            args = sys.argv[1:] if getattr(sys, "frozen", False) else ["-m", "app"] + sys.argv[1:]
+            os_env = __import__("os").environ
+            os_env.pop("QT_SCALE_FACTOR", None)
+            QProcess.startDetached(sys.executable, args)
 
     def _set_backups(self, v: int) -> None:
         self._set("project/backups_keep", v)

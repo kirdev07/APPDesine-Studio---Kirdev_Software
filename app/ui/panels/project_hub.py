@@ -121,14 +121,16 @@ class ProjectHubPage(QWidget):
         bl = QVBoxLayout(banner)
         bl.setContentsMargins(20, 16, 20, 16)
         bl.addWidget(label("Управление проектами", "H1"))
-        bl.addWidget(label("Создавайте, открывайте и организуйте свои дизайны. Всё хранится локально.", "Muted"))
+        bl.addWidget(label("Создавайте, открывайте и организуйте свои дизайны. Всё хранится локально.", "Muted",
+                           wrap=True))
         lay.addWidget(banner)
 
         projects, play = panel()
-        head = QHBoxLayout()
+        from app.ui.widgets import FlowLayout
         self.list_title = label("Ваши проекты", "H2")
-        head.addWidget(self.list_title)
-        head.addStretch()
+        play.addWidget(self.list_title)
+        head_w = QWidget()
+        head = FlowLayout(head_w, spacing=6)  # в узком окне кнопки переходят на вторую строку
         open_btn = QPushButton("Открыть файл…")
         open_btn.clicked.connect(self.open_file_dialog)
         head.addWidget(open_btn)
@@ -153,7 +155,7 @@ class ProjectHubPage(QWidget):
         self.sort_combo.setCurrentIndex(max(0, self.sort_combo.findData(saved_sort)))
         self.sort_combo.currentIndexChanged.connect(self._on_sort)
         head.addWidget(self.sort_combo)
-        play.addLayout(head)
+        play.addWidget(head_w)
 
         self.cards = QListWidget()
         self.cards.setObjectName("Cards")

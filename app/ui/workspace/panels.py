@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFormLayout, QGridLayout, QHBoxLayout,
     QHeaderView,
     QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
-    QScrollArea, QSpinBox, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QSpinBox, QSplitter, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.core.document import tree
@@ -46,27 +46,39 @@ class LayersPanel(QWidget):
     def __init__(self, editor: Editor, parent=None):
         super().__init__(parent)
         self.editor = editor
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 10, 10, 10)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        split = QSplitter(Qt.Orientation.Vertical)  # верх (элементы, компоненты) и слои делят высоту по желанию
+        outer.addWidget(split)
+        top = QWidget()
+        lay = QVBoxLayout(top)
+        lay.setContentsMargins(10, 10, 10, 4)
         lay.addWidget(label("Элементы", "H2"))
         grid = QGridLayout()
         grid.setSpacing(6)
         for i, (kind, key, short) in enumerate((("frame", "F", "Фрейм"), ("rect", "R", "Прямоугольник"),
                                                 ("ellipse", "O", "Эллипс"), ("text", "T", "Текст"))):
             b = QPushButton(f"{TYPE_GLYPH[kind]}  {short}")
-            b.setStyleSheet("padding:6px 4px")
+            b.setStyleSheet("padding:6px 2px")
+            b.setMinimumWidth(b.fontMetrics().horizontalAdvance(b.text()) + 16)
             b.setToolTip(f"{TYPE_NAMES[kind]}: добавить в центр экрана (инструмент — клавиша {key})")
             b.clicked.connect(lambda _=False, k=kind: editor.add_node(k))
             grid.addWidget(b, i // 2, i % 2)
         lay.addLayout(grid)
         lay.addWidget(label("Компоненты", "H2"))
         self.components = QListWidget()
-        self.components.setFixedHeight(170)
+        self.components.setMinimumHeight(60)
+        self.components.setToolTip("Щелчок — вставить на экран. Заготовки из фреймов с Auto Layout; свои "
+                                   "мастер-компоненты — раздел «Компоненты» и «Создать компонент» (Ctrl+Alt+K)")
         self.components.itemClicked.connect(self._insert_component)
-        lay.addWidget(self.components)
-        lay.addWidget(label("Заготовки из фреймов с Auto Layout. Свои мастер-компоненты — раздел «Компоненты» "
-                            "и «Создать компонент» (Ctrl+Alt+K).", "Muted", wrap=True))
-        lay.addWidget(separator())
+        lay.addWidget(self.components, 1)
+        split.addWidget(top)
+        bottom = QWidget()
+        lay = QVBoxLayout(bottom)
+        lay.setContentsMargins(10, 4, 10, 10)
+        split.addWidget(bottom)
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 3)
         head = QHBoxLayout()
         head.addWidget(label("Слои", "H2"))
         head.addStretch()

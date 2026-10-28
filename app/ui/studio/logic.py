@@ -178,7 +178,7 @@ class LogicPage(QWidget):
 
     def refresh(self) -> None:
         doc, s = self.main.doc, self.main.screen()
-        self.screen_label.setText(f"Экран: «{s.name}»" if s else "")
+        self.screen_label.setText(f"«{s.name}»" if s else "")
         names = {n.id: n.name or n.type for n, _, _ in tree.walk(s.nodes)} if s else {}
         cur = self.work["id"] if self.work else None
         self.list.blockSignals(True)

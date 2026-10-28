@@ -96,3 +96,22 @@ def test_settings_export_defaults(qtbot, app_win, tmp_path):
     win.show_page(PAGE_EXPORT)
     assert win.export_page.folder.text() == str(tmp_path / "Пакеты")
     assert not win.export_page.inc["include_previews"].isChecked()
+
+
+def test_ui_scale_setting_and_scrollable_nav(qtbot, app_win, monkeypatch):
+    win, ed, ctx = app_win
+    monkeypatch.delenv("QT_SCALE_FACTOR", raising=False)
+    win.show_page(PAGE_SETTINGS)
+    sp = win.settings_page
+    sp.ui_scale.setCurrentIndex(sp.ui_scale.findData(150))
+    assert ctx.settings.get("general/ui_scale") == 150
+    assert sp.b_restart.isVisibleTo(sp) and "перезапуска" in sp.scale_note.text()
+    from app.__main__ import _apply_ui_scale
+    _apply_ui_scale(ctx.paths)
+    import os
+    assert os.environ.pop("QT_SCALE_FACTOR") == "1.5"
+    from PySide6.QtWidgets import QScrollArea
+    nav = win.nav_hub.parentWidget()
+    while nav is not None and not isinstance(nav, QScrollArea):
+        nav = nav.parentWidget()
+    assert nav is not None  # в невысоком окне разделы прокручиваются

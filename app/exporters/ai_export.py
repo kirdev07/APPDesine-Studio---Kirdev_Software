@@ -45,6 +45,8 @@ class ExportOptions:
     include_interactions: bool = True
     include_assets: bool = True
     include_previews: bool = True
+    include_android_project: bool = True   # каркас Android Studio (Kotlin + Compose), если выбран Android
+    prompts: list = field(default_factory=list)   # [(название, текст)] — свои указания для ИИ
     existing_notes: str = ""           # режим обновления: что известно о существующем коде
     task_text: str | None = None       # отредактированный пользователем AI_TASK.md (None — черновик)
 
@@ -212,6 +214,16 @@ def build_package(doc: ProjectDocument, opts: ExportOptions, issues: list[Issue]
         if not rec["included"] and a.id in need:
             excluded.append(rec)
         manifest_assets.append(rec)
+    android = None
+    if opts.include_android_project and "android" in opts.platforms and any(s.platform == "android" for s in screens):
+        from app.exporters.android_project import ROOT as A_ROOT, VERSIONS, AndroidProject, drawable_name
+        used: set[str] = set()
+        drawables = {r["id"]: (drawable_name(r["name"], used), files[r["path"]], r["path"].rsplit(".", 1)[-1])
+                     for r in included if r["kind"] == "image" and r["path"].rsplit(".", 1)[-1] in ("png", "jpg", "webp")}
+        proj = AndroidProject(doc, screens, drawables)
+        files.update(proj.files())
+        android = {"root": A_ROOT, "package": proj.pkg, "versions": VERSIONS,
+                   "screens": {s.id: {"composable": proj.fns[s.id], "route": proj.routes[s.id]} for s in proj.screens}}
     files["schemas/manifest.schema.json"] = _dump(schema.MANIFEST_SCHEMA)
     files["schemas/screen.schema.json"] = _dump(schema.SCREEN_SCHEMA)
     manifest = {
@@ -223,10 +235,20 @@ def build_package(doc: ProjectDocument, opts: ExportOptions, issues: list[Issue]
         "references": {"start_screen": screens[0].id, "screen_components": comps, "screen_assets": used_assets,
                        "screen_files": screen_files},
         "options": {"include_animations": opts.include_animations, "include_interactions": opts.include_interactions,
-                    "include_assets": opts.include_assets, "include_previews": opts.include_previews},
+                    "include_assets": opts.include_assets, "include_previews": opts.include_previews,
+                    "include_android_project": bool(android)},
+        "android_project": android,
     }
+    from app.exporters.prompts import render
+    stack = {"android": "Android (Kotlin + Jetpack Compose)", "windows": "Windows (Python + PySide6)"}
+    values = {"проект": doc.meta.title, "платформа": ", ".join(stack[p] for p in opts.platforms),
+              "экраны": ", ".join(s.name for s in screens), "пакет": android["package"] if android else "",
+              "режим": "обновление существующего приложения" if opts.mode == "update" else "новое приложение"}
+    prompts = [(name.strip()[:120] or "Промпт", render(text, values)) for name, text in opts.prompts if text.strip()]
+    for i, (name, text) in enumerate(prompts, 1):
+        files[f"prompts/{i:02d}_{slug(name, 'prompt')}.md"] = f"# {name}\n\n{text.strip()}\n".encode("utf-8")
     task = opts.task_text if opts.task_text is not None else build_task(
-        doc, opts, screens, screen_files, issues or [], included, excluded)
+        doc, opts, screens, screen_files, issues or [], included, excluded, android, prompts)
     files["AI_TASK.md"] = task.encode("utf-8")
     files["README.md"] = build_readme(doc, manifest).encode("utf-8")
     manifest["files"] = [{"path": p, "sha256": _sha(b), "size": len(b)} for p, b in sorted(files.items())]

@@ -13,6 +13,7 @@ DEFAULTS = {
     "general/show_hub_on_start": True,
     "general/recent_limit": 20,
     "general/projects_dir": str(default_projects_dir()),
+    "general/ui_scale": 100,          # масштаб интерфейса, %; применяется при запуске
     "project/autosave_enabled": True,
     "project/autosave_minutes": 5,
     "project/backups_keep": 5,
@@ -27,6 +28,9 @@ DEFAULTS = {
     "export/folder": "",              # пусто — «<папка проектов>\Экспорт»
     "export/include_previews": True,
 }
+
+
+UI_SCALES = (80, 90, 100, 110, 125, 150, 175, 200)
 
 
 class Settings:

@@ -40,6 +40,10 @@ class AppPaths:
         return self.base / "templates"
 
     @property
+    def prompts(self) -> Path:
+        return self.base / "prompts"
+
+    @property
     def index_db(self) -> Path:
         return self.base / "projects.sqlite3"
 
@@ -48,7 +52,7 @@ class AppPaths:
         return self.base / "settings.ini"
 
     def ensure(self) -> AppPaths:
-        for p in (self.base, self.logs, self.backups, self.recovery, self.library, self.templates):
+        for p in (self.base, self.logs, self.backups, self.recovery, self.library, self.templates, self.prompts):
             p.mkdir(parents=True, exist_ok=True)
         return self
 

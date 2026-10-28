@@ -58,6 +58,7 @@ class WorkspacePage(QMainWindow):
         self.dock_diag = self._dock("Диагностика раскладки", self.diagnostics, Qt.DockWidgetArea.BottomDockWidgetArea, 0)
         self.tabifyDockWidget(self.dock_screens, self.dock_diag)
         self.dock_screens.raise_()
+        self._docks_sized = False
 
         self.editor.document_changed.connect(self._on_changed)
         self.editor.selection_changed.connect(self._update_actions)
@@ -65,6 +66,12 @@ class WorkspacePage(QMainWindow):
         self.canvas.zoom_changed.connect(lambda z: self.zoom_combo.setEditText(f"{round(z * 100)}%"))
         self.canvas.cursor_moved.connect(lambda x, y: self.pos_label.setText(f"x {x:.0f}   y {y:.0f}"))
         self._update_actions()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if not self._docks_sized:  # размеры доков применяются только у показанного окна
+            self._docks_sized = True
+            self.resizeDocks([self.dock_screens], [150], Qt.Orientation.Vertical)  # холсту — основная высота
 
     # ---------- построение ----------
     def _dock(self, title: str, widget: QWidget, area, width: int) -> QDockWidget:

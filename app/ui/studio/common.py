@@ -21,10 +21,9 @@ def scratch_document(main: ProjectDocument, screen: Screen) -> ProjectDocument:
 
 def editor_toolbar(editor: Editor, tools: list[tuple[str, str, str]], extra: list[QWidget] | None = None) -> QWidget:
     """Компактная панель: инструменты, отмена/повтор и дополнительные кнопки."""
+    from app.ui.widgets import FlowLayout
     bar = QWidget()
-    h = QHBoxLayout(bar)
-    h.setContentsMargins(8, 6, 8, 6)
-    h.setSpacing(4)
+    h = FlowLayout(bar, margin=6, spacing=4)  # при узком окне кнопки переносятся, а не сжимаются
     buttons = {}
     for key, glyph, tip in tools:
         b = QToolButton()
@@ -40,7 +39,6 @@ def editor_toolbar(editor: Editor, tools: list[tuple[str, str, str]], extra: lis
             b.setChecked(editor.tool == k)
     editor.view_changed.connect(sync)
     sync()
-    h.addSpacing(10)
     for text, slot, tip in (("↶", editor.undo, "Отменить"), ("↷", editor.redo, "Повторить")):
         b = QToolButton()
         b.setText(text)
@@ -49,7 +47,6 @@ def editor_toolbar(editor: Editor, tools: list[tuple[str, str, str]], extra: lis
         h.addWidget(b)
     for w in extra or []:
         h.addWidget(w)
-    h.addStretch()
     return bar
 
 

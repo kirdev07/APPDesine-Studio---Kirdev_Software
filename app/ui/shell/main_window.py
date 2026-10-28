@@ -122,16 +122,29 @@ class MainWindow(QMainWindow):
         b.setIcon(glyph_icon(icon, 20, fallback=text))
         b.setIconSize(QSize(20, 20))
         b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        b.setFixedSize(84, 50)
+        b.setFixedSize(94, 50)
         return b
 
     def _build_nav(self) -> QWidget:
         nav = QFrame()
-        nav.setFixedWidth(96)
+        nav.setFixedWidth(108)
         nav.setStyleSheet("QFrame{background:#000;border-right:1px solid #262626}")
-        v = QVBoxLayout(nav)
-        v.setContentsMargins(6, 8, 6, 8)
+        outer = QVBoxLayout(nav)
+        outer.setContentsMargins(0, 0, 0, 8)
+        outer.setSpacing(2)
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()  # в невысоком окне разделы прокручиваются, а не сжимаются
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea{background:#000;border:none}QScrollBar:vertical{width:6px}")
+        inner = QWidget()
+        inner.setStyleSheet("background:#000")
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(6, 8, 6, 4)
         v.setSpacing(2)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
         self.nav_group = QButtonGroup(self)
         self.nav_hub = self._nav_button("Проекты", "projects")
         self.nav_project = self._nav_button("Проект", "project")
@@ -164,7 +177,10 @@ class MainWindow(QMainWindow):
             b.setToolTip(f"{text}: будет доступно на этапе {stage}")
             v.addWidget(b)
         v.addStretch()
-        v.addWidget(self.nav_settings)
+        sl = QHBoxLayout()
+        sl.setContentsMargins(6, 0, 6, 0)
+        sl.addWidget(self.nav_settings)
+        outer.addLayout(sl)
         return nav
 
     def _build_menu(self) -> None:

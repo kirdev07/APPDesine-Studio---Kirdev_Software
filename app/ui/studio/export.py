@@ -160,7 +160,8 @@ class ExportPage(QWidget):
         self.inc = {}
         for key, text in (("include_interactions", "Логика и навигация"), ("include_animations", "Анимации"),
                           ("include_assets", "Ресурсы (иконки, шрифты, изображения)"),
-                          ("include_previews", "Превью экранов (PNG)")):
+                          ("include_previews", "Превью экранов (PNG)"),
+                          ("include_android_project", "Проект Android Studio (Kotlin + Compose)")):
             cb = QCheckBox(text)
             cb.setChecked(True)
             cb.toggled.connect(lambda _: self._options_changed())
@@ -186,6 +187,22 @@ class ExportPage(QWidget):
         self.assets = QListWidget()
         self.assets.setWordWrap(True)
         lay.addWidget(self.assets, 2)
+        lay.addWidget(label("Промпты для ИИ", "H2"))
+        self.prompts = QListWidget()
+        self.prompts.setWordWrap(True)
+        self.prompts.setToolTip("Отмеченные промпты войдут в AI_TASK.md и в папку prompts/ пакета")
+        self.prompts.itemChanged.connect(lambda _: self._options_changed())
+        self.prompts.itemDoubleClicked.connect(lambda _: self.edit_prompt())
+        lay.addWidget(self.prompts, 2)
+        from app.ui.widgets import FlowLayout
+        row_w = QWidget()
+        row = FlowLayout(row_w, spacing=4)
+        for text, slot, tip in (("+ Свой…", self.new_prompt, "Новый промпт в личную библиотеку"),
+                                ("Изменить…", self.edit_prompt, "Изменить свой промпт или сделать копию встроенного"),
+                                ("Удалить", self.delete_prompt, "Удалить свой промпт"),
+                                ("Вставить в задание", self.insert_prompt, "Вставить текст в AI_TASK.md у курсора")):
+            row.addWidget(button(text, slot, tip))
+        lay.addWidget(row_w)
         lay.addWidget(label("Проверка", "H2"))
         self.check_info = label("", "Muted", wrap=True)
         lay.addWidget(self.check_info)
@@ -198,7 +215,7 @@ class ExportPage(QWidget):
     def _build_task(self) -> QWidget:
         frame, lay = panel(margins=10)
         row = QHBoxLayout()
-        row.addWidget(label("4. Задание для Claude Code (AI_TASK.md)", "H2"), 1)
+        row.addWidget(label("4. AI_TASK.md", "H2"), 1)
         row.addWidget(button("Сгенерировать заново", self.regenerate_task, "Черновик по текущим настройкам"))
         row.addWidget(button("Копировать", self.copy_task, "Скопировать задание в буфер обмена"))
         lay.addLayout(row)
@@ -221,6 +238,14 @@ class ExportPage(QWidget):
         lay.addLayout(row)
         self.b_export = button("Собрать пакет", self.export, "Проверить проект, собрать и проверить архив", "Primary")
         lay.addWidget(self.b_export)
+        row = QHBoxLayout()
+        self.b_android = button("Android-проект в папку…", self.save_android,
+                                "Сохранить проект Android Studio, чтобы открыть его сразу")
+        self.b_apk = button("Собрать тестовый APK", self.build_apk,
+                            "Собрать отладочный APK на этом компьютере (Android SDK, JDK и Gradle из Android Studio)")
+        row.addWidget(self.b_android)
+        row.addWidget(self.b_apk)
+        lay.addLayout(row)
         self.steps = label("", "Muted", wrap=True)
         lay.addWidget(self.steps)
         return frame
@@ -233,6 +258,7 @@ class ExportPage(QWidget):
                           platforms=[p for p, cb in self.plat.items() if cb.isChecked() and cb.isEnabled()],
                           screen_ids=ids, existing_notes=self.notes.toPlainText(),
                           **{k: cb.isChecked() for k, cb in self.inc.items()})
+        o.prompts = [(p.name, p.text) for p in self._checked_prompts()]
         if self.task_edited:
             o.task_text = self.task.toPlainText()
         return o
@@ -269,6 +295,7 @@ class ExportPage(QWidget):
             self.folder.setText(self.ws.ctx.settings.get("export/folder") or
                                 str(self.ws.ctx.settings.projects_dir / "Экспорт"))
         self.inc["include_previews"].setChecked(self.ws.ctx.settings.get("export/include_previews"))
+        self.refresh_prompts()
         self._loading = False
         self.rebuild()
 
@@ -298,6 +325,9 @@ class ExportPage(QWidget):
                                  f"Критично: {c['critical']} · предупреждений: {c['warning']} · сведений: {c['info']}")
                                 + ("\n⛔ Экспорт заблокирован — исправьте критичные замечания" if c["critical"] else ""))
         self.b_export.setEnabled(bool(chosen) and not c["critical"])
+        has_android = any(s.platform == "android" for s in chosen) and o.include_android_project
+        for b in (self.b_android, self.b_apk):
+            b.setEnabled(has_android and not c["critical"])
         self.b_export.setToolTip("" if self.b_export.isEnabled() else
                                  "Нет экранов или есть критичные замечания проверки")
         try:
@@ -376,6 +406,123 @@ class ExportPage(QWidget):
     def copy_task(self) -> None:
         QGuiApplication.clipboard().setText(self.task.toPlainText())
         self.task_info.setText("Задание скопировано в буфер обмена")
+
+    # ---------- промпты ----------
+    def prompt_store(self):
+        from app.exporters.prompts import PromptStore
+        return PromptStore(self.ws.ctx.paths.prompts)
+
+    def refresh_prompts(self, select: str | None = None) -> None:
+        checked = {p.id for p in self._checked_prompts()}
+        loading, self._loading = self._loading, True
+        self.prompts.clear()
+        for p in self.prompt_store().items():
+            it = QListWidgetItem(f"{'◆' if p.builtin else '✎'} {p.name}  ·  {p.category}")
+            it.setToolTip(p.text)
+            it.setData(ROLE, p.id)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Checked if p.id in checked else Qt.CheckState.Unchecked)
+            self.prompts.addItem(it)
+            if p.id == select:
+                self.prompts.setCurrentItem(it)
+        self._loading = loading
+
+    def _checked_prompts(self):
+        store = self.prompt_store()
+        ids = [self.prompts.item(i).data(ROLE) for i in range(self.prompts.count())
+               if self.prompts.item(i).checkState() == Qt.CheckState.Checked]
+        return [p for p in (store.get(i) for i in ids) if p is not None]
+
+    def _current_prompt(self):
+        it = self.prompts.currentItem()
+        return self.prompt_store().get(it.data(ROLE)) if it else None
+
+    def new_prompt(self) -> None:
+        self._edit(None)
+
+    def edit_prompt(self) -> None:
+        p = self._current_prompt()
+        if p is not None:
+            self._edit(p)
+
+    def _edit(self, p) -> None:
+        from app.ui.studio.export_tools import PromptDialog
+        dlg = PromptDialog(p, self)
+        if dlg.exec() == PromptDialog.DialogCode.Accepted:
+            self.save_prompt(dlg.prompt)
+
+    def save_prompt(self, prompt):
+        saved = self.prompt_store().save(prompt)
+        self.refresh_prompts(select=saved.id)
+        it = self.prompts.currentItem()
+        if it is not None:
+            it.setCheckState(Qt.CheckState.Checked)
+        return saved
+
+    def delete_prompt(self) -> None:
+        p = self._current_prompt()
+        if p is None:
+            return
+        if p.builtin:
+            QMessageBox.information(self, "Промпты", "Встроенный промпт удалить нельзя — его можно не отмечать.")
+            return
+        if QMessageBox.question(self, "Промпты", f"Удалить свой промпт «{p.name}»?") == QMessageBox.StandardButton.Yes:
+            self.prompt_store().delete(p.id)
+            self.refresh_prompts()
+            self._options_changed()
+
+    def insert_prompt(self) -> None:
+        p = self._current_prompt()
+        if p is not None:
+            self.task.insertPlainText(f"\n## {p.name}\n\n{p.text.strip()}\n")
+            self.task.setFocus()
+
+    # ---------- Android ----------
+    def _android_files(self):
+        o = self.options()
+        o.include_previews = False
+        return build_package(self.main.doc, o, self.issues).files
+
+    def save_android(self, folder: str | None = None) -> Path | None:
+        from app.exporters.apk_builder import find_toolchain, write_project
+        if self.main.doc is None:
+            return None
+        if not folder:
+            folder = QFileDialog.getExistingDirectory(self, "Папка для Android-проекта", self.folder.text())
+            if not folder:
+                return None
+        target = Path(folder) / f"{slug(self.main.doc.meta.title, 'app')}_android"
+        if target.exists() and any(target.iterdir()) and QMessageBox.question(
+                self, "Android-проект", f"Папка {target} не пуста. Перезаписать файлы проекта? Ваши другие "
+                                       "файлы в ней не удаляются.") != QMessageBox.StandardButton.Yes:
+            return None
+        write_project(self._android_files(), target, find_toolchain().sdk)
+        self.steps.setText(f"✓ Android-проект сохранён: {target}\nОткройте папку в Android Studio (File → Open).")
+        return target
+
+    def build_apk(self):
+        """Тестовый APK: проект в служебной папке программы → Gradle assembleDebug."""
+        import shutil
+
+        from app.exporters.apk_builder import find_toolchain, write_project
+        from app.ui.studio.export_tools import ApkBuildDialog
+        if self.main.doc is None:
+            return None
+        t = find_toolchain()
+        if not t.ok:
+            QMessageBox.warning(self, "Сборка APK", "Не хватает инструментов: " + t.describe() +
+                                ".\n\nПроект можно сохранить кнопкой «Android-проект в папку…» и собрать в "
+                                "Android Studio.")
+            return None
+        project = self.ws.ctx.paths.base / "apk_build" / self.main.doc.meta.id
+        if project.exists():  # служебная папка программы: исходники пересоздаются целиком
+            shutil.rmtree(project / "app" / "src", ignore_errors=True)
+        write_project(self._android_files(), project, t.sdk)
+        dlg = ApkBuildDialog(t, project, self)
+        dlg.show()
+        dlg.start()
+        self.apk_dialog = dlg
+        return dlg
 
     def select_screens(self, screen_ids: list[str]) -> None:
         self._loading = True

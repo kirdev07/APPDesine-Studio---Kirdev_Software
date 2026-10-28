@@ -165,21 +165,30 @@ class ComponentBuilderPage(QWidget):
         v.setSpacing(6)
         top = QHBoxLayout()
         self.mode_buttons = []
-        for i, text in enumerate(("Дизайн", "Интерактивный просмотр", "Структура")):
+        for i, (text, tip) in enumerate((("Дизайн", "Редактирование мастера"),
+                                         ("Просмотр", "Интерактивный просмотр: наведение, нажатие, состояния"),
+                                         ("Структура", "Дерево элементов и ключи переопределений"))):
             b = QToolButton()
             b.setText(text)
+            b.setToolTip(tip)
             b.setCheckable(True)
+            b.setMinimumWidth(b.fontMetrics().horizontalAdvance(text) + 28)
             b.clicked.connect(lambda _=False, n=i: self.set_mode(n))
             self.mode_buttons.append(b)
             top.addWidget(b)
         top.addSpacing(12)
         self.crumbs = QLabel("")
         self.crumbs.setObjectName("Muted")
+        self.crumbs.setMinimumWidth(40)
+        from PySide6.QtWidgets import QSizePolicy
+        self.crumbs.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)  # не раздвигает строку
         top.addWidget(self.crumbs, 1)
         self.dirty_label = label("", "Muted")
         top.addWidget(self.dirty_label)
-        top.addWidget(button("Сохранить компонент", self.save, "Записать мастер в проект и обновить экземпляры",
-                             "Primary"))
+        save = button("Сохранить", self.save, "Сохранить компонент: записать мастер в проект и обновить "
+                                              "экземпляры", "Primary")
+        save.setMinimumWidth(save.fontMetrics().horizontalAdvance(save.text()) + 32)
+        top.addWidget(save)
         v.addLayout(top)
         canvas_box, cl = panel(margins=0)
         self.toolbar = editor_toolbar(self.editor, [
@@ -214,11 +223,11 @@ class ComponentBuilderPage(QWidget):
         prev_box, pl = panel(margins=8)
         head = QHBoxLayout()
         self.preview_toggle = QToolButton()
-        self.preview_toggle.setText("▾ Предпросмотр на устройстве")
+        self.preview_toggle.setText("▾ Предпросмотр")
         self.preview_toggle.setCheckable(True)
         self.preview_toggle.setChecked(True)
         self.preview_toggle.toggled.connect(lambda on: (self.preview.setVisible(on), self.preview_toggle.setText(
-            ("▾ " if on else "▸ ") + "Предпросмотр на устройстве")))
+            ("▾ " if on else "▸ ") + "Предпросмотр")))
         head.addWidget(self.preview_toggle)
         self.preview_device = QComboBox()
         self.preview_device.addItem("Android телефон (тёмный фон)", ("android", "#000000"))
