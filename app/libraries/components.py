@@ -522,12 +522,26 @@ SPECS: tuple[ComponentSpec, ...] = (
 )
 
 
+_ALL: tuple[ComponentSpec, ...] | None = None
+
+
+def all_specs() -> tuple[ComponentSpec, ...]:
+    """Все заготовки в порядке галереи: Material 3, дополнительные (вход, формы, магазин…), значки, Windows."""
+    global _ALL
+    if _ALL is None:
+        from app.libraries.components_more import SPECS as MORE  # модуль использует _Ctx отсюда
+        android = [s for s in SPECS if s.platform == _A and s.category != "Значки"]
+        icons = [s for s in SPECS if s.category == "Значки"]
+        _ALL = tuple(android + list(MORE) + icons + [s for s in SPECS if s.platform != _A])
+    return _ALL
+
+
 def specs_for(platform: str) -> list[ComponentSpec]:
-    return [s for s in SPECS if s.platform == platform]
+    return [s for s in all_specs() if s.platform == platform]
 
 
 def build(kind: str, screen: Screen, appearance: Appearance) -> Node:
-    spec = next((s for s in SPECS if s.kind == kind), None)
+    spec = next((s for s in all_specs() if s.kind == kind), None)
     if spec is None:
         raise KeyError(kind)
     c = _Ctx(screen, appearance)

@@ -20,7 +20,7 @@ ROLES: dict[str, str | None] = {
     "m3.radio_group": "0", "m3.slider": "0.4f", "m3.chip_assist": None, "m3.chip_filter": "true",
     "m3.text_field": '""', "m3.progress_linear": None, "m3.progress_circular": None, "m3.divider": None,
     "m3.badge": None, "m3.tabs": "0", "m3.segmented": "0", "m3.nav_bar": "0",
-    "m3.top_app_bar": None,
+    "m3.top_app_bar": None, "m3.password_field": '""',
 }
 # компоненты с собственным размером: ширина из дизайна не задаётся
 _INTRINSIC = {"m3.button_filled", "m3.button_tonal", "m3.button_outlined", "m3.button_text", "m3.icon_button",
@@ -30,7 +30,8 @@ _BUTTONS = {"m3.button_filled": "Button", "m3.button_tonal": "FilledTonalButton"
             "m3.button_outlined": "OutlinedButton", "m3.button_text": "TextButton"}
 STATE_PREFIX = {"m3.switch": "checked", "m3.checkbox": "checked", "m3.radio_group": "selected",
                 "m3.slider": "value", "m3.chip_filter": "selected", "m3.text_field": "input", "m3.tabs": "tab",
-                "m3.segmented": "segment", "m3.nav_bar": "navItem"}
+                "m3.segmented": "segment", "m3.nav_bar": "navItem",
+                "m3.password_field": "password"}
 
 
 def _texts(n):
@@ -63,6 +64,10 @@ class Material:
                     init = f"{self._slider_value(n):.2f}f"
                 self.state[n.id] = var
                 self.decls.append(f"    var {var} by remember {{ mutableStateOf({init}) }}")
+                if n.role == "m3.password_field":  # показать / скрыть пароль
+                    show = gen.ident(f"show {n.name}")
+                    self.state[n.id + ":show"] = show
+                    self.decls.append(f"    var {show} by remember {{ mutableStateOf(false) }}")
 
     @staticmethod
     def _slider_value(n) -> float:
@@ -172,6 +177,25 @@ class Material:
             if hint is not None:
                 out.append(f"{i2}supportingText = {{ Text({self.text(hint)}) }},")
             return out + [f"{i2}singleLine = true,", f"{i2}modifier = {M},", f"{ind})"]
+        if r == "m3.password_field":
+            from app.libraries.m3_icons import ICONS
+            show = self.state[n.id + ":show"]
+            ph = next((t for t in texts if t.name == "Плейсхолдер"), texts[0] if texts else None)
+            hint = next((t for t in texts if t.name == "Подсказка"), None)
+            eye, eye_off = (self.g.kstr(ICONS[k][1]) for k in ("visibility", "visibility_off"))
+            out = [f"{ind}OutlinedTextField(", f"{i2}value = {var},", f"{i2}onValueChange = {{ {var} = it }},"]
+            if ph is not None:
+                out.append(f"{i2}placeholder = {{ Text({self.g.kstr(ph.text)}) }},")
+            if hint is not None:
+                out.append(f"{i2}supportingText = {{ Text({self.text(hint)}) }},")
+            return out + [f"{i2}singleLine = true,",
+                          f"{i2}visualTransformation = if ({show}) VisualTransformation.None "
+                          "else PasswordVisualTransformation(),",
+                          f"{i2}trailingIcon = {{",
+                          f"{i3}IconButton(onClick = {{ {show} = !{show} }}) {{",
+                          f"{i3}    DesignIcon(if ({show}) {eye_off} else {eye}, contentDescription = "
+                          f"if ({show}) \"Скрыть пароль\" else \"Показать пароль\", evenOdd = true)",
+                          f"{i3}}}", f"{i2}}},", f"{i2}modifier = {M},", f"{ind})"]
         if r == "m3.progress_linear":
             part = [c for c in n.children if c.type == "rect"]
             p = max(0.0, min(1.0, part[0].w / n.w)) if part and n.w else 0.5

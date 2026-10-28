@@ -511,6 +511,8 @@ class AndroidProject:
             "androidx.compose.ui.platform.LocalConfiguration",
             "androidx.compose.ui.res.painterResource", "androidx.compose.ui.text.TextStyle",
             "androidx.compose.ui.text.font.FontWeight", "androidx.compose.ui.text.style.TextAlign",
+            "androidx.compose.ui.text.input.PasswordVisualTransformation",
+            "androidx.compose.ui.text.input.VisualTransformation",
             "androidx.compose.ui.tooling.preview.Preview", "androidx.compose.ui.unit.dp",
             "androidx.compose.ui.unit.sp", f"{self.pkg}.AppState", f"{self.pkg}.R", f"{self.pkg}.fmt",
             f"{self.pkg}.navigation.NavMotion", f"{self.pkg}.navigation.StepEasing",
