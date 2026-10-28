@@ -451,9 +451,51 @@ class Inspector(QScrollArea):
         self.stroke_w = _spin(0, 1000, 1)
         self.stroke_w.valueChanged.connect(lambda v: self._commit_leaves("stroke_width", v, "Толщина обводки"))
         f.addRow("Толщина", self.stroke_w)
+        self.stroke_dash = _combo([("solid", "Сплошная"), ("dash", "Пунктир"), ("dot", "Точки")])
+        self.stroke_dash.currentIndexChanged.connect(
+            lambda: self._commit_leaves("stroke_dash", self.stroke_dash.currentData(), "Вид обводки"))
+        self.stroke_align = _combo([("center", "По краю"), ("inside", "Внутри"), ("outside", "Снаружи")])
+        self.stroke_align.setToolTip("Где проходит обводка: по краю элемента, внутри него или снаружи")
+        self.stroke_align.currentIndexChanged.connect(
+            lambda: self._commit_leaves("stroke_align", self.stroke_align.currentData(), "Положение обводки"))
+        f.addRow("Линия", self.stroke_dash)
+        f.addRow("Положение", self.stroke_align)
+        self.stroke_look = self.stroke_dash
+        sides = QHBoxLayout()
+        sides.setContentsMargins(0, 0, 0, 0)
+        self.side_btns = {}
+        for side, glyph, tip in (("t", "↑", "Сверху"), ("r", "→", "Справа"), ("b", "↓", "Снизу"), ("l", "←", "Слева")):
+            b = QToolButton()
+            b.setText(glyph)
+            b.setCheckable(True)
+            b.setFixedSize(32, 26)
+            b.setStyleSheet("padding:0")
+            b.setToolTip(f"Обводка {tip.lower()}")
+            b.clicked.connect(self._commit_sides)
+            self.side_btns[side] = b
+            sides.addWidget(b)
+        sides.addStretch()
+        self.stroke_side_row = QWidget()
+        self.stroke_side_row.setLayout(sides)
+        f.addRow("Стороны", self.stroke_side_row)
         self.radius = _spin(0, 100000)
         self.radius.valueChanged.connect(lambda v: self._commit_leaves("radius", v, "Скругление"))
         f.addRow("Скругление", self.radius)
+        corners = QHBoxLayout()
+        corners.setContentsMargins(0, 0, 0, 0)
+        self.corner = {}
+        for key, glyph, tip in (("radius_tl", "↖", "левый верхний"), ("radius_tr", "↗", "правый верхний"),
+                                ("radius_br", "↘", "правый нижний"), ("radius_bl", "↙", "левый нижний")):
+            s = _spin(-1, 100000)
+            s.setMinimumWidth(34)
+            s.setSpecialValueText(glyph)  # -1 — как общее скругление
+            s.setToolTip(f"Скругление: {tip} угол. Пусто ({glyph}) — как общее")
+            s.valueChanged.connect(lambda v, k=key: self._commit_leaves(k, v, "Скругление угла"))
+            self.corner[key] = s
+            corners.addWidget(s)
+        self.corner_row = QWidget()
+        self.corner_row.setLayout(corners)
+        f.addRow("Углы", self.corner_row)
         self.opacity = QSpinBox()
         self.opacity.setRange(0, 100)
         self.opacity.setSuffix(" %")
@@ -476,6 +518,10 @@ class Inspector(QScrollArea):
         self.fill2 = ColorField()
         self.fill2.committed.connect(lambda v: self._commit_leaves("fill2", v, "Второй цвет градиента"))
         f.addRow("Второй цвет", self.fill2)
+        self.fill3 = ColorField()
+        self.fill3.setToolTip("Цвет посередине градиента — для переходов из трёх цветов")
+        self.fill3.committed.connect(lambda v: self._commit_leaves("fill3", v, "Средний цвет градиента"))
+        f.addRow("Середина", self.fill3)
         self.grad_angle = _spin(-360, 360, 0, "°")
         self.grad_angle.setToolTip("Направление линейного градиента: 180° — сверху вниз, 90° — слева направо")
         self.grad_angle.valueChanged.connect(lambda v: self._commit_leaves("grad_angle", v, "Угол градиента"))
@@ -484,6 +530,32 @@ class Inspector(QScrollArea):
         self.blur.setToolTip("Размытие слоя вместе с содержимым (на Android 12+ — Modifier.blur)")
         self.blur.valueChanged.connect(lambda v: self._commit_leaves("blur", v, "Размытие"))
         f.addRow("Размытие", self.blur)
+        self.shadow_color = ColorField()
+        self.shadow_color.setToolTip("Своя тень любого цвета; в Android — Modifier.dropShadow / innerShadow")
+        self.shadow_color.committed.connect(self._commit_shadow_color)
+        f.addRow("Своя тень", self.shadow_color)
+        self.shadow = {}
+        self.shadow_rows = []
+        for title, pair in (("Смещение", (("shadow_x", "X", "Смещение по X"), ("shadow_y", "Y", "Смещение по Y"))),
+                            ("Размытие", (("shadow_blur", "", "Размытие"), ("shadow_spread", "±", "Растяжение")))):
+            sh = QHBoxLayout()
+            sh.setContentsMargins(0, 0, 0, 0)
+            for key, mark, tip in pair:
+                s = _spin(0 if key == "shadow_blur" else -1000, 1000, 0, " px")
+                s.setToolTip(tip + " тени")
+                s.valueChanged.connect(lambda v, k=key, t=tip: self._commit_leaves(k, v, t + " тени"))
+                self.shadow[key] = s
+                if mark:
+                    sh.addWidget(label(mark, "Muted"))
+                sh.addWidget(s)
+            row = QWidget()
+            row.setLayout(sh)
+            self.shadow_rows.append(row)
+            f.addRow(title if title == "Смещение" else "Размытие тени", row)
+        self.shadow_row = self.shadow_rows[0]
+        self.shadow_inset = QCheckBox("Внутренняя тень")
+        self.shadow_inset.clicked.connect(lambda v: self._commit_leaves("shadow_inset", v, "Внутренняя тень"))
+        f.addRow(self.shadow_inset)
 
         self.sec_text, f = self._section("Текст")
         self.text = QPlainTextEdit()
@@ -517,6 +589,46 @@ class Inspector(QScrollArea):
         self.align.currentIndexChanged.connect(
             lambda: self._commit_leaves("align", self.align.currentData(), "Выравнивание текста", "text"))
         f.addRow("Выравнивание", self.align)
+        self.letter_spacing = _spin(-50, 200, 1, " px")
+        self.letter_spacing.setToolTip("Расстояние между буквами (в Android — letterSpacing)")
+        self.letter_spacing.valueChanged.connect(
+            lambda v: self._commit_leaves("letter_spacing", v, "Интервал между буквами", "text"))
+        self.line_height = _spin(0, 10, 2, " ×")
+        self.line_height.setSingleStep(0.1)
+        self.line_height.setSpecialValueText("обычная")
+        self.line_height.setToolTip("Высота строки в долях размера шрифта: 1.5 — полуторный интервал")
+        self.line_height.valueChanged.connect(
+            lambda v: self._commit_leaves("line_height", round(v, 2), "Высота строки", "text"))
+        sp = QHBoxLayout()
+        sp.setContentsMargins(0, 0, 0, 0)
+        sp.addWidget(label("Буквы", "Muted"))
+        sp.addWidget(self.letter_spacing)
+        sp.addWidget(label("Строка", "Muted"))
+        sp.addWidget(self.line_height)
+        f.addRow("Интервалы", sp)
+        self.italic = QCheckBox("Курсив")
+        self.italic.clicked.connect(lambda v: self._commit_leaves("italic", v, "Курсив", "text"))
+        self.decoration = _combo([("none", "Без линии"), ("underline", "Подчёркнутый"), ("strike", "Зачёркнутый")])
+        self.decoration.currentIndexChanged.connect(
+            lambda: self._commit_leaves("decoration", self.decoration.currentData(), "Линия текста", "text"))
+        st = QHBoxLayout()
+        st.setContentsMargins(0, 0, 0, 0)
+        st.addWidget(self.italic)
+        st.addWidget(self.decoration)
+        f.addRow("Начертание", st)
+        self.text_case = _combo([("none", "Как набрано"), ("upper", "ВСЕ ЗАГЛАВНЫЕ"), ("lower", "все строчные"),
+                                 ("title", "Каждое Слово")])
+        self.text_case.currentIndexChanged.connect(
+            lambda: self._commit_leaves("text_case", self.text_case.currentData(), "Регистр", "text"))
+        f.addRow("Регистр", self.text_case)
+        self.max_lines = QSpinBox()
+        self.max_lines.setRange(0, 1000)
+        self.max_lines.setSpecialValueText("без ограничения")
+        self.max_lines.setKeyboardTracking(False)
+        self.max_lines.setToolTip("Не больше стольких строк; лишнее обрезается многоточием «…»")
+        self.max_lines.valueChanged.connect(
+            lambda v: self._commit_leaves("max_lines", v, "Число строк", "text"))
+        f.addRow("Строк не больше", self.max_lines)
         self.editable = QCheckBox("Поле ввода в предпросмотре")
         self.editable.setToolTip("В предпросмотре текст можно набирать; исходный текст — подсказка")
         self.editable.clicked.connect(lambda v: self._commit_leaves("editable", v, "Поле ввода", "text"))
@@ -915,7 +1027,21 @@ class Inspector(QScrollArea):
                     self.blur.setValue(l0.blur)
                     linear = l0.gradient == "linear"
                     self.fill2.setEnabled(l0.gradient != "none")
+                    self.fill3.set_value(l0.fill3)
+                    self.fill3.setEnabled(l0.gradient != "none")
                     self.grad_angle.setEnabled(linear)
+                    self.stroke_dash.setCurrentIndex(max(0, self.stroke_dash.findData(l0.stroke_dash)))
+                    self.stroke_align.setCurrentIndex(max(0, self.stroke_align.findData(l0.stroke_align)))
+                    for side, b in self.side_btns.items():
+                        b.setChecked(side in l0.stroke_sides)
+                    for key, s in self.corner.items():
+                        s.setValue(getattr(l0, key))
+                    self.shadow_color.set_value(l0.shadow_color)
+                    for key, s in self.shadow.items():
+                        s.setValue(getattr(l0, key))
+                        s.setEnabled(bool(l0.shadow_color))
+                    self.shadow_inset.setChecked(l0.shadow_inset)
+                    self.shadow_inset.setEnabled(bool(l0.shadow_color))
                 if texts:
                     t0 = texts[0]
                     if self.text.toPlainText() != t0.text and not self.text.hasFocus():
@@ -925,6 +1051,12 @@ class Inspector(QScrollArea):
                     self.weight.setCurrentIndex(max(0, self.weight.findData(t0.font_weight)))
                     self.text_color.set_value(t0.text_color)
                     self.align.setCurrentIndex(max(0, self.align.findData(t0.align)))
+                    self.letter_spacing.setValue(t0.letter_spacing)
+                    self.line_height.setValue(t0.line_height)
+                    self.italic.setChecked(t0.italic)
+                    self.decoration.setCurrentIndex(max(0, self.decoration.findData(t0.decoration)))
+                    self.text_case.setCurrentIndex(max(0, self.text_case.findData(t0.text_case)))
+                    self.max_lines.setValue(t0.max_lines)
                     own = all(not t.ref for t in texts)  # поле экземпляра задаёт мастер-компонент
                     self.editable.setEnabled(own)
                     self.editable.setChecked(t0.editable)
@@ -955,6 +1087,8 @@ class Inspector(QScrollArea):
             if self.simple:  # простой режим: без привязок, размеров в раскладке, точек пути и направляющих
                 for w in (self.sec_size, self.sec_cons, self.sec_vec, self.sec_guides):
                     w.setVisible(False)
+            for w in (self.stroke_look, self.stroke_align, self.stroke_side_row, self.corner_row, *self.shadow_rows, self.shadow_inset):
+                self._row_visible(w, not self.simple)  # простой режим: без тонкой настройки обводки, углов и тени
         finally:
             self._loading = False
 
@@ -1009,6 +1143,30 @@ class Inspector(QScrollArea):
         changes = {n.id: {prop: value} for n in leaves if getattr(n, prop) != value}
         if changes and not self.editor.set_props(changes, label_):
             self.refresh()  # неверное значение — вернуть показ к данным модели
+
+    @staticmethod
+    def _row_visible(w: QWidget, on: bool) -> None:
+        """Скрыть строку формы вместе с подписью."""
+        box = w.parentWidget().layout() if w.parentWidget() else None
+        for i in range(box.count() if box else 0):
+            form = box.itemAt(i).layout()
+            if isinstance(form, QFormLayout) and form.indexOf(w) >= 0:
+                form.setRowVisible(w, on)
+                return
+        w.setVisible(on)
+
+    def _commit_sides(self) -> None:
+        sides = "".join(s for s, b in self.side_btns.items() if b.isChecked())
+        if not sides:  # без сторон обводки не бывает — снять последнюю нельзя
+            self.refresh()
+            return
+        self._commit_leaves("stroke_sides", sides, "Стороны обводки")
+
+    def _commit_shadow_color(self, value: str) -> None:
+        """Тень без прозрачности выглядит грубо: цвету без альфы ставится 40 %."""
+        if value and len(value) == 7:
+            value += "66"
+        self._commit_leaves("shadow_color", value, "Своя тень")
 
     def _commit_gradient(self) -> None:
         """Градиент без второго цвета не виден: подставляется более тёмный вариант заливки."""

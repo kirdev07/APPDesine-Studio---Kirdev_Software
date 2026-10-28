@@ -131,8 +131,120 @@ def fill_brush(n: Node, rect: QRectF):
         c = rect.center()
         g = QLinearGradient(c - QPointF(dx * half, dy * half), c + QPointF(dx * half, dy * half))
     g.setColorAt(0, qcolor(n.fill))
+    if n.fill3:  # средний цвет градиента
+        g.setColorAt(0.5, qcolor(n.fill3))
     g.setColorAt(1, qcolor(n.fill2))
     return QBrush(g)
+
+
+def shape_path(n: Node, rect: QRectF | None = None) -> QPainterPath:
+    """Контур узла: эллипс или прямоугольник со скруглением каждого угла по отдельности."""
+    rect = rect or QRectF(n.x, n.y, n.w, n.h)
+    path = QPainterPath()
+    if n.type == "ellipse":
+        path.addEllipse(rect)
+        return path
+    tl, tr, br, bl = n.corner_radii()
+    if tl == tr == br == bl:
+        path.addRoundedRect(rect, tl, tl)
+        return path
+    x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
+    path.moveTo(x + tl, y)
+    path.lineTo(x + w - tr, y)
+    path.arcTo(QRectF(x + w - 2 * tr, y, 2 * tr, 2 * tr), 90, -90)
+    path.lineTo(x + w, y + h - br)
+    path.arcTo(QRectF(x + w - 2 * br, y + h - 2 * br, 2 * br, 2 * br), 0, -90)
+    path.lineTo(x + bl, y + h)
+    path.arcTo(QRectF(x, y + h - 2 * bl, 2 * bl, 2 * bl), 270, -90)
+    path.lineTo(x, y + tl)
+    path.arcTo(QRectF(x, y, 2 * tl, 2 * tl), 180, -90)
+    path.closeSubpath()
+    return path
+
+
+def _grown(path: QPainterPath, d: float) -> QPainterPath:
+    """Контур, раздвинутый наружу (d > 0) или сжатый внутрь (d < 0)."""
+    if abs(d) < 0.01:
+        return QPainterPath(path)
+    from PySide6.QtGui import QPainterPathStroker
+    st = QPainterPathStroker()
+    st.setWidth(2 * abs(d))
+    st.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    ring = st.createStroke(path)
+    return path.united(ring).simplified() if d > 0 else path.subtracted(ring).simplified()
+
+
+SHADOW_STEPS = 8
+
+
+def paint_shadow(p: QPainter, n: Node, path: QPainterPath, inset: bool) -> None:
+    """Своя тень: мягкая — несколько слоёв с растущим отступом и малой прозрачностью."""
+    if not n.shadow_color or n.shadow_inset != inset:
+        return
+    base = qcolor(n.shadow_color)
+    steps = SHADOW_STEPS if n.shadow_blur > 0 else 1
+    off = path.translated(n.shadow_x, n.shadow_y)
+    p.save()
+    p.setPen(Qt.PenStyle.NoPen)
+    if inset:
+        p.setClipPath(path, Qt.ClipOperation.IntersectClip)
+        big = QPainterPath()
+        big.addRect(path.boundingRect().adjusted(-n.shadow_blur - 50, -n.shadow_blur - 50,
+                                                 n.shadow_blur + 50, n.shadow_blur + 50)
+                    .translated(n.shadow_x, n.shadow_y))
+    for i in range(steps):
+        t = (i + 0.5) / steps
+        c = QColor(base)
+        c.setAlphaF(base.alphaF() / steps * (1.6 if steps > 1 and not inset else 1))
+        p.setBrush(c)
+        if inset:
+            p.drawPath(big.subtracted(_grown(off, -(n.shadow_spread + n.shadow_blur * t))))
+        else:
+            p.drawPath(_grown(off, n.shadow_spread + n.shadow_blur * (t - 0.5)))
+    p.restore()
+
+
+_DASH = {"dash": Qt.PenStyle.DashLine, "dot": Qt.PenStyle.DotLine}
+
+
+def paint_stroke(p: QPainter, n: Node, path: QPainterPath, rect: QRectF) -> None:
+    """Обводка: сплошная / пунктир / точки; по центру края, внутри или снаружи; все стороны или выбранные."""
+    sw = n.stroke_width
+    pen = QPen(qcolor(n.stroke), sw * (1 if n.stroke_align == "center" else 2))
+    if n.stroke_dash == "dot":  # круглые точки: почти нулевой штрих с круглым концом
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setDashPattern([0.01, 2.2])
+    else:
+        pen.setStyle(_DASH.get(n.stroke_dash, Qt.PenStyle.SolidLine))
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+    p.save()
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(pen)
+    if n.stroke_sides != "trbl" and n.type != "ellipse":  # отдельные стороны — линии по краям
+        d = {"center": 0.0, "inside": sw / 2, "outside": -sw / 2}[n.stroke_align]
+        pen.setWidthF(sw)
+        p.setPen(pen)
+        r = rect.adjusted(d, d, -d, -d)
+        lines = {"t": (r.topLeft(), r.topRight()), "r": (r.topRight(), r.bottomRight()),
+                 "b": (r.bottomLeft(), r.bottomRight()), "l": (r.topLeft(), r.bottomLeft())}
+        for side in n.stroke_sides:
+            p.drawLine(*lines[side])
+    else:
+        if n.stroke_align == "inside":
+            p.setClipPath(path, Qt.ClipOperation.IntersectClip)
+        elif n.stroke_align == "outside":
+            outside = QPainterPath()
+            outside.addRect(rect.adjusted(-sw * 2, -sw * 2, sw * 2, sw * 2))
+            p.setClipPath(outside.subtracted(path), Qt.ClipOperation.IntersectClip)
+        p.drawPath(path)
+    p.restore()
+
+
+def shadow_margin(n: Node) -> float:
+    if not n.shadow_color or n.shadow_inset:
+        return 0.0
+    return max(abs(n.shadow_x), abs(n.shadow_y)) + n.shadow_blur + max(0.0, n.shadow_spread)
 
 
 def apply_effects(item: QGraphicsItem, n: Node, k: float) -> None:
@@ -180,12 +292,18 @@ def paint_node(p: QPainter, n: Node, assets=None) -> None:
     p.save()
     p.setOpacity(p.opacity() * n.opacity)
     p.setBrush(fill_brush(n, rect))
-    if n.stroke and n.stroke_width > 0:
+    plain_stroke = n.stroke_dash == "solid" and n.stroke_align == "center" and n.stroke_sides == "trbl"
+    if n.stroke and n.stroke_width > 0 and (plain_stroke or n.type in ("vector", "text")):
         pen = QPen(qcolor(n.stroke), n.stroke_width)
         pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+        pen.setStyle(_DASH.get(n.stroke_dash, Qt.PenStyle.SolidLine))
         p.setPen(pen)
     else:
         p.setPen(Qt.PenStyle.NoPen)
+    custom_stroke = bool(n.stroke and n.stroke_width > 0 and not plain_stroke and n.type not in ("vector", "text"))
+    outline = shape_path(n, rect) if n.type not in ("vector", "text") else None
+    if outline is not None and n.shadow_color and not n.shadow_inset:
+        paint_shadow(p, n, outline, inset=False)
     if n.type == "vector":
         p.drawPath(vector_path(n))
     elif n.type == "image":
@@ -199,11 +317,8 @@ def paint_node(p: QPainter, n: Node, assets=None) -> None:
                     (hasattr(r, "isValid") and not r.isValid()):
                 _paint_missing(p, rect, "не читается")
             else:
-                if n.radius > 0:  # маска: скругление или круг (радиус = половина стороны)
-                    clip = QPainterPath()
-                    rr = min(n.radius, n.w / 2, n.h / 2)
-                    clip.addRoundedRect(rect, rr, rr)
-                    p.setClipPath(clip, Qt.ClipOperation.IntersectClip)
+                if any(n.corner_radii()):  # маска: скругление (каждого угла) или круг
+                    p.setClipPath(outline, Qt.ClipOperation.IntersectClip)
                 if asset.ext == "svg":
                     r.render(p, rect)
                 else:
@@ -211,20 +326,37 @@ def paint_node(p: QPainter, n: Node, assets=None) -> None:
                     p.drawImage(dst, r, src)
     elif n.type == "ellipse":
         p.drawEllipse(rect)
-    else:
-        r = min(n.radius, n.w / 2, n.h / 2)
-        if n.type == "rect" or n.fill or n.stroke:
+    elif n.type == "text":
+        if n.fill or n.stroke:
+            r = min(n.radius, n.w / 2, n.h / 2)
             p.drawRoundedRect(rect, r, r)
-        if n.type == "text":
-            f = QFont(n.font_family)
-            f.setPixelSize(max(1, int(round(n.font_size))))
-            f.setWeight(QFont.Weight(n.font_weight))
-            p.setFont(f)
-            p.setPen(qcolor(n.text_color))
-            p.setClipRect(rect)
-            p.drawText(rect, ALIGN_FLAGS.get(n.align, Qt.AlignmentFlag.AlignLeft) | Qt.AlignmentFlag.AlignTop
-                       | Qt.TextFlag.TextWordWrap, n.text)
+        _paint_text(p, n, rect)
+    elif n.type == "rect" or n.fill or n.stroke:
+        p.drawPath(outline)
+    if outline is not None and n.shadow_color and n.shadow_inset:
+        paint_shadow(p, n, outline, inset=True)
+    if custom_stroke:
+        paint_stroke(p, n, outline, rect)
     p.restore()
+
+
+def _paint_text(p: QPainter, n: Node, rect: QRectF) -> None:
+    from app.engines.layout.engine import PLAIN_LOOK, text_look
+    from app.ui.workspace.text_measure import TextBlock, text_font
+    align = ALIGN_FLAGS.get(n.align, Qt.AlignmentFlag.AlignLeft)
+    look = text_look(n)
+    p.setPen(qcolor(n.text_color))
+    p.setClipRect(rect)
+    if look == PLAIN_LOOK and n.decoration == "none":
+        f = QFont(n.font_family)
+        f.setPixelSize(max(1, int(round(n.font_size))))
+        f.setWeight(QFont.Weight(n.font_weight))
+        p.setFont(f)
+        p.drawText(rect, align | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, n.text)
+        return
+    f = text_font(n.font_family, n.font_size, n.font_weight, look, n.decoration)
+    p.setFont(f)
+    TextBlock(n.text, f, n.font_size, rect.width(), n.line_height, n.max_lines, align).draw(p, rect, align)
 
 
 class NodeItem(QGraphicsItem):
@@ -238,15 +370,17 @@ class NodeItem(QGraphicsItem):
 
     def boundingRect(self) -> QRectF:
         n = self.node
-        m = n.stroke_width / 2 + 1
+        m = n.stroke_width * (1 if n.stroke_align == "outside" else 0.5) + 1 + shadow_margin(n)
         return QRectF(n.x, n.y, n.w, n.h).adjusted(-m, -m, m, m)
 
     def shape(self) -> QPainterPath:
         n = self.node
-        path = QPainterPath()
-        r = min(n.radius, n.w / 2, n.h / 2)
-        path.addRoundedRect(QRectF(n.x, n.y, n.w, n.h), r, r)
-        return path
+        if n.type in ("ellipse", "text", "vector"):  # выделение и попадание — по прямоугольнику, как раньше
+            path = QPainterPath()
+            r = min(n.radius, n.w / 2, n.h / 2)
+            path.addRoundedRect(QRectF(n.x, n.y, n.w, n.h), r, r)
+            return path
+        return shape_path(n)  # фреймы обрезают содержимое по своим (раздельным) углам
 
     def sync(self) -> None:
         self.prepareGeometryChange()

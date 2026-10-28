@@ -23,8 +23,17 @@ from app.core.document.tree import Rect, bounds, descendants
 EPS = 0.005
 
 
+# Вид текста, влияющий на размер: (интервал между буквами, высота строки, курсив, регистр, не больше строк)
+PLAIN_LOOK = (0.0, 0.0, False, "none", 0)
+
+
+def text_look(n) -> tuple:
+    return (n.letter_spacing, n.line_height, n.italic, n.text_case, n.max_lines)
+
+
 class TextMeasurer(Protocol):
-    def measure(self, text: str, family: str, size: float, weight: int, max_width: float | None) -> tuple[float, float]:
+    def measure(self, text: str, family: str, size: float, weight: int, max_width: float | None,
+                look: tuple = PLAIN_LOOK) -> tuple[float, float]:
         """Размер текста: без переноса (max_width=None) или с переносом по словам в заданную ширину."""
 
 
@@ -34,9 +43,10 @@ class SimpleMeasurer:
     def __init__(self, char_ratio: float = 0.55, line_ratio: float = 1.25):
         self.char_ratio, self.line_ratio = char_ratio, line_ratio
 
-    def measure(self, text, family, size, weight, max_width):
-        cw = size * self.char_ratio * (1.06 if weight >= 600 else 1.0)
-        lh = size * self.line_ratio
+    def measure(self, text, family, size, weight, max_width, look=PLAIN_LOOK):
+        spacing, line_h, _italic, case, max_lines = look
+        cw = size * self.char_ratio * (1.06 if weight >= 600 else 1.0) * (1.1 if case == "upper" else 1.0) + spacing
+        lh = size * (line_h or self.line_ratio)
         paragraphs = text.split("\n") if text else [""]
         lines, widest = 0, 0.0
         for para in paragraphs:
@@ -64,6 +74,8 @@ class SimpleMeasurer:
                     line_len = wl
                 widest = max(widest, line_len * cw)
             lines += count
+        if max_lines:
+            lines = min(lines, max_lines)
         return round(widest, 2), round(lines * lh, 2)
 
 
@@ -161,11 +173,16 @@ class LayoutEngine:
         return list(b) if b is not None else list(self.start[node.id])
 
     def _measure(self, node: Node, max_width: float | None) -> tuple[float, float]:
+        look = text_look(node)
         key = (node.text, node.font_family, node.font_size, node.font_weight,
-               None if max_width is None else round(max_width, 2))
+               None if max_width is None else round(max_width, 2), look)
         if key not in self._cache:
-            self._cache[key] = self.measurer.measure(node.text, node.font_family, node.font_size, node.font_weight,
-                                                     max_width)
+            if look == PLAIN_LOOK:  # обычный текст — как раньше (сторонние измерители без look тоже работают)
+                self._cache[key] = self.measurer.measure(node.text, node.font_family, node.font_size,
+                                                         node.font_weight, max_width)
+            else:
+                self._cache[key] = self.measurer.measure(node.text, node.font_family, node.font_size,
+                                                         node.font_weight, max_width, look)
         return self._cache[key]
 
     def _clamp_w(self, n: Node, w: float) -> float:

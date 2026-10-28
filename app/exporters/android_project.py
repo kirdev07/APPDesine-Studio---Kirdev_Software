@@ -17,7 +17,9 @@ from app.engines.material.color import ROLES as COLOR_ROLES, scheme
 from app.engines.material.type_scale import TYPE_SCALE, role_of
 from app.engines.preview.devices import screen_dpi
 from app.exporters.compose_m3 import Material
-from app.exporters.compose_motion import GRADIENT_KT, NAV_MOTION, Motion, brush, effects
+from app.exporters.compose_motion import (
+    GRADIENT_KT, NAV_MOTION, Motion, brush, effects, kshape, plain_stroke, shadow, stroke_draw,
+)
 
 ROOT = "android_project"
 VERSIONS = {"agp": "8.13.2", "kotlin": "2.2.10", "compose_bom": "2025.09.01", "activity_compose": "1.11.0",
@@ -71,6 +73,17 @@ def _num(v: float) -> str:
     return str(int(v)) if v == int(v) else str(v)
 
 
+def _cased(text: str, case: str) -> str:
+    """Регистр текста из дизайна (ВСЕ ЗАГЛАВНЫЕ, строчные, Каждое Слово) — сразу в строке кода."""
+    if case == "upper":
+        return text.upper()
+    if case == "lower":
+        return text.lower()
+    if case == "title":
+        return " ".join(w[:1].upper() + w[1:] for w in text.split(" "))
+    return text
+
+
 class _Screen:
     """Генерация одного экрана."""
 
@@ -83,6 +96,7 @@ class _Screen:
         self.texts: dict[str, str] = {}   # node_id → имя переменной текста
         self.inputs: dict[str, str] = {}  # node_id → имя переменной поля ввода
         self.todo: list[str] = []
+        self.pre: list[str] = []  # объявления перед элементом (цвет темы нельзя читать внутри рисования)
         m = tree.node_map(s)
         overlays = set()
         for it in self.its:
@@ -233,16 +247,27 @@ class _Screen:
             m += self.motion.layer(n, ind + "    ")
         elif n.opacity < 1:
             m.append(f"{ind}    .alpha({_num(n.opacity)}f)")
-        shape = "CircleShape" if n.type == "ellipse" else (f"RoundedCornerShape({self.dp(n.radius)})" if n.radius
-                                                           else "RectangleShape")
+        shape = kshape(n, self.dp)
+        drop = shadow(n, self.dp, self.g.color, shape, inset=False)
+        if drop:
+            m.append(f"{ind}    {drop}")
         m += effects(n, self.dp, shape, ind + "    ")
+        if n.stroke and n.stroke_width and n.type not in ("text", "vector") and not plain_stroke(n):
+            # до обрезки по форме: обводка снаружи и по краю не срезается, рисуется поверх заливки
+            color = self.ident(f"stroke {n.name}")
+            self.pre.append(f"val {color} = {self.g.color(n.stroke)}")
+            m += stroke_draw(n, self.dp, lambda _c, v=color: v, shape, ind + "    ")
         if n.type == "image" and n.radius > 0:  # маска картинки: круг или скругление
             m.append(f"{ind}    .clip({'CircleShape' if n.radius >= min(n.w, n.h) / 2 - 0.5 else shape})")
         if n.fill and n.type not in ("text", "image", "vector"):
             m.append(f"{ind}    .clip({shape})")
             m.append(f"{ind}    .background({brush(n, self.g.color) or self.g.color(n.fill)})")
+        inner = shadow(n, self.dp, self.g.color, shape, inset=True)
+        if inner:
+            m.append(f"{ind}    {inner}")
         if n.stroke and n.stroke_width and n.type not in ("text", "vector"):
-            m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {self.g.color(n.stroke)}, {shape})")
+            if plain_stroke(n):
+                m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {self.g.color(n.stroke)}, {shape})")
         if handlers:
             m += self.handlers(n, ind + "    ")
         if n.is_frame and n.scroll in ("vertical", "horizontal"):
@@ -296,6 +321,14 @@ class _Screen:
         return out
 
     def node(self, n, parent, mode: str, ind: str) -> list[str]:
+        saved, self.pre = self.pre, []
+        try:
+            out = self._node(n, parent, mode, ind)
+            return [ind + x for x in self.pre] + out
+        finally:
+            self.pre = saved
+
+    def _node(self, n, parent, mode: str, ind: str) -> list[str]:
         out: list[str] = []
         if n.is_group:  # у группы нет геометрии — дети в координатах родителя группы
             for c in n.children:
@@ -394,6 +427,14 @@ class _Screen:
         align = {"left": "TextAlign.Start", "center": "TextAlign.Center", "right": "TextAlign.End"}[n.align]
         style = (f"color = {self.g.color(n.text_color)}, fontSize = {_num(n.font_size / self.k)}.sp, "
                  f"fontWeight = FontWeight({n.font_weight}), textAlign = {align}")
+        if n.letter_spacing:
+            style += f", letterSpacing = {_num(n.letter_spacing / self.k)}.sp"
+        if n.line_height:
+            style += f", lineHeight = {_num(n.font_size * n.line_height / self.k)}.sp"
+        if n.italic:
+            style += ", fontStyle = FontStyle.Italic"
+        if n.decoration != "none":
+            style += f", textDecoration = TextDecoration.{'Underline' if n.decoration == 'underline' else 'LineThrough'}"
         if n.id in self.inputs:
             var = self.inputs[n.id]
             return ([f"{ind}BasicTextField(", f"{ind}    value = {var},",
@@ -405,9 +446,16 @@ class _Screen:
                      f"{ind}    decorationBox = {{ inner ->",
                      f"{ind}        if ({var}.isEmpty()) Text({kstr(n.text)}, {style.replace(self.g.color(n.text_color), self.g.color(n.text_color[:7] + '88'))})",
                      f"{ind}        inner()", f"{ind}    }},", f"{ind})"])
-        value = self.texts.get(n.id) or kstr(n.text)
-        return [f"{ind}Text(", f"{ind}    text = {value},", f"{ind}    {style},", f"{ind}    modifier = {modtxt},",
-                f"{ind})"]
+        value = self.texts.get(n.id)
+        if value is None:
+            value = kstr(_cased(n.text, n.text_case))
+        elif n.text_case != "none":  # текст меняется при работе — регистр в коде
+            value += {"upper": ".uppercase()", "lower": ".lowercase()",
+                      "title": '.split(" ").joinToString(" ") { it.replaceFirstChar(Char::titlecase) }'}[n.text_case]
+        lines = ([f"{ind}    maxLines = {n.max_lines},", f"{ind}    overflow = TextOverflow.Ellipsis,"]
+                 if n.max_lines else [])
+        return [f"{ind}Text(", f"{ind}    text = {value},", f"{ind}    {style},"] + lines + \
+            [f"{ind}    modifier = {modtxt},", f"{ind})"]
 
     def slots(self):
         """Верхняя панель, нижняя навигация и плавающая кнопка экрана — в слоты Scaffold (без смещений)."""
@@ -599,6 +647,12 @@ class AndroidProject:
             "androidx.compose.ui.platform.LocalConfiguration",
             "androidx.compose.ui.res.painterResource", "androidx.compose.ui.text.TextStyle",
             "androidx.compose.ui.text.font.FontWeight", "androidx.compose.ui.text.style.TextAlign",
+            "androidx.compose.ui.text.font.FontStyle", "androidx.compose.ui.text.style.TextDecoration",
+            "androidx.compose.ui.text.style.TextOverflow", "androidx.compose.ui.draw.drawWithContent",
+            "androidx.compose.ui.draw.dropShadow", "androidx.compose.ui.draw.innerShadow",
+            "androidx.compose.ui.graphics.PathEffect", "androidx.compose.ui.graphics.StrokeCap",
+            "androidx.compose.ui.graphics.drawOutline", "androidx.compose.ui.graphics.drawscope.inset",
+            "androidx.compose.ui.unit.DpOffset",
             "androidx.compose.ui.text.input.PasswordVisualTransformation",
             "androidx.compose.ui.text.input.VisualTransformation",
             "androidx.compose.ui.tooling.preview.Preview", "androidx.compose.ui.unit.dp",

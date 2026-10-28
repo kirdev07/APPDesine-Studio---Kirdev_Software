@@ -13,8 +13,10 @@ from datetime import datetime, timezone
 # 5 — анимации, переменные, взаимодействия, переходы и поведение состояний компонентов;
 # 6 — сценарии предпросмотра, прокрутка, поля ввода; 7 — роль фрейма (вид компонента Material 3);
 # 8 — эффекты: уровень тени, градиент, размытие; 9 — масштаб и поворот (для анимаций);
-# 10 — варианты компонентов (свойства «Размер», «Стиль» … и выбор варианта у копии).
-SCHEMA_VERSION = 10
+# 10 — варианты компонентов (свойства «Размер», «Стиль» … и выбор варианта у копии);
+# 11 — тонкая настройка вида: своя тень, обводка (пунктир, сторона, стороны), углы по отдельности, 3-й цвет
+# градиента, интервалы, курсив, подчёркивание, регистр и число строк текста.
+SCHEMA_VERSION = 11
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -85,12 +87,26 @@ GEOMETRY_PROPS = ("x", "y", "w", "h")
 STYLE_PROPS = ("fill", "stroke", "stroke_width", "radius", "opacity")
 # Эффекты: уровень тени Material 3 (0–5), градиент заливки (от fill к fill2 под углом), размытие слоя.
 EFFECT_PROPS = ("elevation", "gradient", "fill2", "grad_angle", "blur", "scale", "rotation")
+# Тонкая настройка вида: своя тень (shadow_color пусто — нет; inset — внутренняя), обводка (пунктир, положение
+# относительно края, стороны «trbl»), скругление углов по отдельности (-1 — как radius), средний цвет градиента.
+LOOK_PROPS = ("shadow_color", "shadow_x", "shadow_y", "shadow_blur", "shadow_spread", "shadow_inset",
+              "stroke_dash", "stroke_align", "stroke_sides", "radius_tl", "radius_tr", "radius_br", "radius_bl",
+              "fill3")
+# Текст: интервал между буквами (px), высота строки (множитель размера; 0 — обычная), курсив, линия, регистр,
+# не больше строк (0 — без ограничения; лишнее обрезается многоточием).
+TEXT_LOOK_PROPS = ("letter_spacing", "line_height", "italic", "decoration", "text_case", "max_lines")
 ELEVATION_DP = (0, 1, 3, 6, 8, 12)  # уровни тени Material 3, dp
 GRADIENTS = ("none", "linear", "radial")
 # Значения по умолчанию, которые не записываются в файл (старые проекты и экспорт не меняются).
 _OMIT_DEFAULT = {"ref": "", "role": "", "elevation": 0, "gradient": "none", "fill2": "", "grad_angle": 180.0,
-                 "blur": 0.0, "scale": 1.0, "rotation": 0.0, "fit": "fill", "variant": {}}
-TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style")
+                 "blur": 0.0, "scale": 1.0, "rotation": 0.0, "fit": "fill", "variant": {},
+                 "shadow_color": "", "shadow_x": 0.0, "shadow_y": 4.0, "shadow_blur": 12.0, "shadow_spread": 0.0,
+                 "shadow_inset": False, "stroke_dash": "solid", "stroke_align": "center", "stroke_sides": "trbl",
+                 "radius_tl": -1.0, "radius_tr": -1.0, "radius_br": -1.0, "radius_bl": -1.0, "fill3": "",
+                 "letter_spacing": 0.0, "line_height": 0.0, "italic": False, "decoration": "none",
+                 "text_case": "none", "max_lines": 0}
+TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style") + \
+    TEXT_LOOK_PROPS
 # ref — идентификатор узла мастер-компонента, из которого получен узел экземпляра.
 COMMON_PROPS = ("name", "visible", "locked", "ref")
 # Поведение узла внутри родителя: размер в Auto Layout и привязки в обычном контейнере.
@@ -106,7 +122,7 @@ INSTANCE_PROPS = ("component_id", "overrides", "state", "variant")
 VARIANT_GEOMETRY = ("w", "h", "pad_t", "pad_r", "pad_b", "pad_l", "gap")
 # …и роль корня: стиль «Контур» у кнопки Material 3 — это OutlinedButton в коде Android
 VARIANT_EXTRA = VARIANT_GEOMETRY + ("role",)
-_STYLE = STYLE_PROPS + EFFECT_PROPS
+_STYLE = STYLE_PROPS + EFFECT_PROPS + LOOK_PROPS
 LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + _STYLE + TEXT_PROPS + CHILD_PROPS + INPUT_PROPS
 ALLOWED_PROPS = {
     "group": COMMON_PROPS,
@@ -117,7 +133,8 @@ ALLOWED_PROPS = {
 }
 # Свойства, которые экземпляр может переопределить у узлов мастера (и состояния компонента).
 OVERRIDABLE = ("visible", "fill", "stroke", "stroke_width", "opacity", "radius", "text", "text_color", "font_family",
-               "font_size", "font_weight", "align", "asset_id", "path", "elevation", "fill2", "blur")
+               "font_size", "font_weight", "align", "asset_id", "path", "elevation", "fill2", "blur",
+               "shadow_color", "stroke_dash", "fill3", "italic", "decoration", "text_case", "letter_spacing")
 ROOT_REF = "__root__"  # ключ переопределений самого корня компонента
 STATE_NAMES = ("default", "hover", "focus", "pressed", "disabled", "loading", "empty", "error")
 ALIGNMENTS = ("left", "center", "right")
@@ -135,6 +152,10 @@ ENUMS = {
     "scroll": ("none", "vertical", "horizontal"),
     "gradient": GRADIENTS,
     "fit": ("fill", "cover", "contain"),  # картинка: растянуть / заполнить с обрезкой / вписать целиком
+    "stroke_dash": ("solid", "dash", "dot"),
+    "stroke_align": ("center", "inside", "outside"),
+    "decoration": ("none", "underline", "strike"),
+    "text_case": ("none", "upper", "lower", "title"),
 }
 MAX_DEPTH = 32
 MAX_COORD = 1_000_000.0
@@ -156,11 +177,20 @@ def check_prop(name: str, value, node_type: str = "rect"):
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < len(ELEVATION_DP):
             raise ModelError("Уровень тени должен быть от 0 до 5")
         return value
+    if name == "max_lines":
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1000:
+            raise ModelError("Число строк должно быть от 0 до 1000")
+        return value
+    if name == "stroke_sides":
+        if not isinstance(value, str) or not value or any(c not in "trbl" for c in value) or \
+                len(set(value)) != len(value):
+            raise ModelError("Стороны обводки — буквы t, r, b, l")
+        return "".join(c for c in "trbl" if c in value)
     if name == "grid_columns":
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 64:
             raise ModelError("Число колонок должно быть от 1 до 64")
         return value
-    if name in ("visible", "locked", "clip", "editable"):
+    if name in ("visible", "locked", "clip", "editable", "shadow_inset", "italic"):
         if not isinstance(value, bool):
             raise ModelError(f"«{name}» должно быть логическим")
         return value
@@ -192,7 +222,7 @@ def check_prop(name: str, value, node_type: str = "rect"):
         if not isinstance(value, str) or len(value) > 100_000:
             raise ModelError(f"«{name}» должно быть строкой")
         return value
-    if name in ("fill", "stroke", "text_color", "fill2"):
+    if name in ("fill", "stroke", "text_color", "fill2", "fill3", "shadow_color"):
         if not isinstance(value, str) or (value and not _COLOR.match(value)):
             raise ModelError(f"Неверный цвет «{name}»: {value!r}")
         return value.upper()
@@ -212,6 +242,13 @@ def check_prop(name: str, value, node_type: str = "rect"):
     limits["blur"] = (0, 250)
     limits["scale"] = (0, 20)          # масштаб вокруг центра (1 — как нарисовано)
     limits["rotation"] = (-3600, 3600)  # поворот вокруг центра, градусы
+    for k in ("radius_tl", "radius_tr", "radius_br", "radius_bl"):
+        limits[k] = (-1, MAX_COORD)  # -1 — как общее скругление
+    limits["shadow_x"] = limits["shadow_y"] = (-1000, 1000)
+    limits["shadow_blur"] = (0, 500)
+    limits["shadow_spread"] = (-500, 500)
+    limits["letter_spacing"] = (-50, 200)
+    limits["line_height"] = (0, 10)
     lo, hi = limits.get(name, (-MAX_COORD, MAX_COORD))
     if not lo <= value <= hi:
         raise ModelError(f"«{name}» вне диапазона {lo}…{hi}")
@@ -259,6 +296,20 @@ class Node:
     gradient: str = "none"
     fill2: str = ""
     grad_angle: float = 180.0     # как в CSS: 180 — сверху вниз, 90 — слева направо
+    fill3: str = ""               # средний цвет градиента (пусто — два цвета)
+    shadow_color: str = ""        # своя тень: цвет (пусто — нет), смещение, размытие, растяжение, внутренняя
+    shadow_x: float = 0.0
+    shadow_y: float = 4.0
+    shadow_blur: float = 12.0
+    shadow_spread: float = 0.0
+    shadow_inset: bool = False
+    stroke_dash: str = "solid"
+    stroke_align: str = "center"  # обводка по центру края, внутри или снаружи
+    stroke_sides: str = "trbl"    # стороны обводки: t — сверху, r — справа, b — снизу, l — слева
+    radius_tl: float = -1.0       # углы по отдельности; -1 — как radius
+    radius_tr: float = -1.0
+    radius_br: float = -1.0
+    radius_bl: float = -1.0
     blur: float = 0.0
     scale: float = 1.0            # масштаб и поворот вокруг центра — для анимаций (пружина, пульс, вращение)
     rotation: float = 0.0
@@ -268,6 +319,12 @@ class Node:
     font_weight: int = 400
     text_color: str = "#FFFFFF"
     align: str = "left"
+    letter_spacing: float = 0.0
+    line_height: float = 0.0      # множитель размера шрифта; 0 — обычная высота строки
+    italic: bool = False
+    decoration: str = "none"
+    text_case: str = "none"
+    max_lines: int = 0
     # поведение в родителе
     sizing_h: str = "fixed"
     sizing_v: str = "fixed"
@@ -309,6 +366,12 @@ class Node:
     ref: str = ""
     children: list[Node] = field(default_factory=list)
     id: str = field(default_factory=new_id)
+
+    def corner_radii(self) -> tuple[float, float, float, float]:
+        """Скругление углов (верх-лево, верх-право, низ-право, низ-лево) с учётом общего и размера."""
+        lim = min(self.w, self.h) / 2
+        return tuple(min(lim, max(0.0, self.radius if r < 0 else r))
+                     for r in (self.radius_tl, self.radius_tr, self.radius_br, self.radius_bl))
 
     @property
     def is_group(self) -> bool:

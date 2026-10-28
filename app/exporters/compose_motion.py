@@ -137,22 +137,74 @@ def effects(n, dp, shape: str, ind: str) -> list[str]:
     return out
 
 
+def shadow(n, dp, kcolor, shape: str, inset: bool) -> str | None:
+    """Своя тень → Modifier.dropShadow (до заливки) или innerShadow (после неё), Compose 1.9."""
+    if not n.shadow_color or n.shadow_inset != inset or n.type in ("text", "vector"):
+        return None
+    spec = (f"androidx.compose.ui.graphics.shadow.Shadow(radius = {dp(n.shadow_blur)}, "
+            f"color = {kcolor(n.shadow_color)}, spread = {dp(n.shadow_spread)}, "
+            f"offset = DpOffset({dp(n.shadow_x)}, {dp(n.shadow_y)}))")
+    return f".{'innerShadow' if inset else 'dropShadow'}({shape}, {spec})"
+
+
+def kshape(n, dp) -> str:
+    """Форма узла: круг, скругление (общее или каждого угла) или прямоугольник."""
+    if n.type == "ellipse":
+        return "CircleShape"
+    tl, tr, br, bl = n.corner_radii()
+    if tl == tr == br == bl:
+        return f"RoundedCornerShape({dp(tl)})" if tl else "RectangleShape"
+    return (f"RoundedCornerShape(topStart = {dp(tl)}, topEnd = {dp(tr)}, bottomEnd = {dp(br)}, "
+            f"bottomStart = {dp(bl)})")
+
+
+def plain_stroke(n) -> bool:
+    return n.stroke_dash == "solid" and n.stroke_align == "center" and n.stroke_sides == "trbl"
+
+
+def stroke_draw(n, dp, kcolor, shape: str, ind: str) -> list[str]:
+    """Обводка с пунктиром, положением (внутри / по краю / снаружи) или отдельными сторонами — поверх
+    содержимого в drawWithContent."""
+    w = f"{dp(n.stroke_width)}.toPx()"
+    pe = {"dash": "PathEffect.dashPathEffect(floatArrayOf(sw * 3f, sw * 2f))",
+          "dot": "PathEffect.dashPathEffect(floatArrayOf(0.01f, sw * 2.2f))"}.get(n.stroke_dash, "null")
+    cap = "StrokeCap.Round" if n.stroke_dash == "dot" else "StrokeCap.Butt"
+    d = {"center": "0f", "inside": "sw / 2f", "outside": "-sw / 2f"}[n.stroke_align]
+    out = [f"{ind}.drawWithContent {{", f"{ind}    drawContent()", f"{ind}    val sw = {w}", f"{ind}    val d = {d}"]
+    if n.stroke_sides != "trbl" and n.type != "ellipse":
+        ends = {"t": ("Offset(d, d)", "Offset(size.width - d, d)"),
+                "r": ("Offset(size.width - d, d)", "Offset(size.width - d, size.height - d)"),
+                "b": ("Offset(d, size.height - d)", "Offset(size.width - d, size.height - d)"),
+                "l": ("Offset(d, d)", "Offset(d, size.height - d)")}
+        for side in n.stroke_sides:
+            a, b = ends[side]
+            out.append(f"{ind}    drawLine({kcolor(n.stroke)}, {a}, {b}, sw, {cap}, {pe})")
+    else:
+        out += [f"{ind}    inset(d) {{",
+                f"{ind}        drawOutline({shape}.createOutline(size, layoutDirection, this), {kcolor(n.stroke)}, "
+                f"style = Stroke(width = sw, cap = {cap}, pathEffect = {pe}))",
+                f"{ind}    }}"]
+    return out + [f"{ind}}}"]
+
+
 def brush(n, kcolor) -> str | None:
     """Градиент заливки → Brush (угол как в CSS: 180° — сверху вниз)."""
     if n.gradient == "none" or not n.fill or not n.fill2:
         return None
-    colors = f"listOf({kcolor(n.fill)}, {kcolor(n.fill2)})"
+    stops = [n.fill] + ([n.fill3] if n.fill3 else []) + [n.fill2]  # средний цвет — посередине
+    colors = f"listOf({', '.join(kcolor(c) for c in stops)})"
+    back = f"listOf({', '.join(kcolor(c) for c in reversed(stops))})"
     if n.gradient == "radial":
         return f"Brush.radialGradient({colors})"
     a = n.grad_angle % 360
     if abs(a - 180) < 0.5:
         return f"Brush.verticalGradient({colors})"
     if abs(a) < 0.5:
-        return f"Brush.verticalGradient(listOf({kcolor(n.fill2)}, {kcolor(n.fill)}))"
+        return f"Brush.verticalGradient({back})"
     if abs(a - 90) < 0.5:
         return f"Brush.horizontalGradient({colors})"
     if abs(a - 270) < 0.5:
-        return f"Brush.horizontalGradient(listOf({kcolor(n.fill2)}, {kcolor(n.fill)}))"
+        return f"Brush.horizontalGradient({back})"
     dx, dy = math.sin(math.radians(a)), -math.cos(math.radians(a))
     return f"linearAngleBrush({colors}, {_f(dx)}, {_f(dy)})"
 
