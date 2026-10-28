@@ -16,7 +16,8 @@ ANIMATABLE = ("x", "y", "w", "h", "opacity", "radius", "fill", "stroke", "text_c
               "scale", "rotation")
 COLOR_PROPS = ("fill", "stroke", "text_color")
 EASINGS = ("linear", "ease_in", "ease_out", "ease_in_out", "step", "cubic")
-TRANSITIONS = ("none", "fade", "slide_left", "slide_right", "slide_up", "slide_down")
+# smart — «умный переход»: одноимённые элементы плавно перетекают с экрана на экран (Smart Animate)
+TRANSITIONS = ("none", "fade", "slide_left", "slide_right", "slide_up", "slide_down", "smart")
 TRIGGERS = ("tap", "long_press", "hover_enter", "hover_leave", "screen_open", "double_tap", "swipe_left",
             "swipe_right", "swipe_up", "swipe_down", "text_changed")
 # События сценария: всё, что делает пользователь (screen_open происходит само), плюс системные.
@@ -193,13 +194,14 @@ ACTION_FIELDS = {
     "set_visible": ("node_id", "mode"),
     "set_text": ("node_id", "text"),
     "play_animation": ("animation_id",),
-    "open_overlay": ("node_id",),
+    "open_overlay": ("node_id", "scrim"),   # scrim — затемнить экран под окном (нажатие по нему закрывает)
+    "wait": ("duration",),
     "close_overlay": (),
 }
 ACTION_NAMES = {"navigate": "Перейти на экран", "back": "Назад", "set_variable": "Изменить переменную",
                 "set_state": "Состояние компонента", "set_variant": "Переключить вариант", "set_visible": "Показать / скрыть", "set_text": "Задать текст",
                 "play_animation": "Запустить анимацию", "open_overlay": "Открыть всплывающее окно",
-                "close_overlay": "Закрыть окно"}
+                "close_overlay": "Закрыть окно", "wait": "Подождать"}
 VAR_MODES = ("set", "toggle", "increment", "decrement")
 VIS_MODES = ("show", "hide", "toggle")
 
@@ -217,6 +219,8 @@ def check_action(d: dict) -> dict:
             if (v or "none") not in TRANSITIONS:
                 raise ModelError(f"Неизвестный переход: {v!r}")
             out[f] = v or "none"
+        elif f == "scrim":
+            out[f] = bool(v)
         elif f == "duration":
             out[f] = _int(v if v is not None else 300, 0, 10_000, "длительность перехода")
         elif f == "easing":

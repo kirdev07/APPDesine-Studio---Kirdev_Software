@@ -1030,6 +1030,17 @@ class Inspector(QScrollArea):
         f.addRow("Размер", row)
         self.s_info = label("", "Muted")
         f.addRow(self.s_info)
+        self.s_auto = QComboBox()
+        self.s_auto.setToolTip("При открытии экрана — пауза и переход на другой (заставка, приветствие)")
+        self.s_auto.activated.connect(self._commit_auto)
+        self.s_auto_ms = _spin(0.1, 60, 1, " с")
+        self.s_auto_ms.setSingleStep(0.5)
+        self.s_auto_ms.valueChanged.connect(self._commit_auto)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.s_auto, 1)
+        row.addWidget(self.s_auto_ms)
+        f.addRow("Автопереход", row)
 
         self.sec_guides, f = self._section("Направляющие")
         self.guides = QListWidget()
@@ -1156,6 +1167,20 @@ class Inspector(QScrollArea):
                 k = _dp_factor(s)
                 self.s_info.setText(f"Android · {orient} · {s.width / k:.0f} × {s.height / k:.0f} dp" if k
                                     else "Windows · окно")
+                auto = ed.auto_advance()
+                self.s_auto.clear()
+                if auto == "custom":
+                    self.s_auto.addItem("своё правило в «Логике»", "custom")
+                else:
+                    self.s_auto.addItem("нет", "")
+                    for x in ed.doc.screens:
+                        if x.id != s.id and x.platform == s.platform:
+                            self.s_auto.addItem(f"→ {x.name}", x.id)
+                    if auto:
+                        self.s_auto.setCurrentIndex(max(0, self.s_auto.findData(auto[0])))
+                        self.s_auto_ms.setValue(auto[1] / 1000)
+                self.s_auto.setEnabled(auto != "custom")
+                self.s_auto_ms.setEnabled(bool(auto) and auto != "custom")
                 self.guides.clear()
                 for g in s.guides:
                     it = QListWidgetItem(f"{'Вертикальная' if g.axis == 'x' else 'Горизонтальная'} · {g.pos:g}")
@@ -1223,6 +1248,20 @@ class Inspector(QScrollArea):
         changes = {n.id: {prop: value} for n in leaves if getattr(n, prop) != value}
         if changes and not self.editor.set_props(changes, label_):
             self.refresh()  # неверное значение — вернуть показ к данным модели
+
+    def _commit_auto(self, *_):
+        if self._loading:
+            return
+        target = self.s_auto.currentData()
+        if target == "custom":
+            return
+        cur = self.editor.auto_advance()
+        ms = int(round(self.s_auto_ms.value() * 1000))
+        if not target:
+            if cur:
+                self.editor.set_auto_advance(None)
+        elif not cur or (cur[0], cur[1]) != (target, ms):
+            self.editor.set_auto_advance(target, ms, cur[2] if cur else "fade")
 
     @staticmethod
     def _row_visible(w: QWidget, on: bool) -> None:

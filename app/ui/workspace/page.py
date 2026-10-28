@@ -377,6 +377,11 @@ class WorkspacePage(QMainWindow):
         if a["type"] == "set_visible":
             n = tree.node_map(ed.screen()).get(a.get("node_id"))
             return "При нажатии: показать / скрыть «" + ((n.name if n else "?")[:14]) + "»"
+        if a["type"] == "open_overlay":
+            n = tree.node_map(ed.screen()).get(a.get("node_id"))
+            return "При нажатии: окно «" + ((n.name if n else "?")[:14]) + "»"
+        if a["type"] == "close_overlay":
+            return "При нажатии: закрыть окно"
         if a["type"] == "set_variant":
             return f"При нажатии: «{a.get('axis', '')[:14]}» → {a.get('value') or 'следующий'}"
         return "При нажатии: своё правило"
@@ -419,6 +424,27 @@ class WorkspacePage(QMainWindow):
             a.setChecked(isinstance(cur, dict) and cur.get("type") == "set_visible" and cur.get("node_id") == n.id)
         if not targets:
             vis.addAction("На экране нет других элементов").setEnabled(False)
+        win = self._submenu(m, "Открыть окно поверх (затемнение)")
+        win.setToolTip("Шторка снизу выезжает, остальные окна проявляются; нажатие по затемнению закрывает")
+        for n in targets:
+            a = win.addAction(n.name or TYPE_NAMES.get(n.type, ""), lambda tid=n.id: ed.set_overlay_tap(nid, tid))
+            a.setCheckable(True)
+            a.setChecked(isinstance(cur, dict) and cur.get("type") == "open_overlay" and cur.get("node_id") == n.id)
+        if not targets:
+            win.addAction("На экране нет других элементов").setEnabled(False)
+        close = m.addAction("Закрыть окно", lambda: ed.set_tap_action(nid, {"type": "close_overlay"}))
+        close.setCheckable(True)
+        close.setChecked(isinstance(cur, dict) and cur.get("type") == "close_overlay")
+        if isinstance(cur, dict) and cur.get("type") == "navigate":
+            from app.core.document.behavior import TRANSITIONS
+            from app.ui.studio.prototype import TRANSITION_RU
+            how = self._submenu(m, "Как переходить")
+            for t in TRANSITIONS:
+                name = TRANSITION_RU[t]
+                a = how.addAction(name[:1].upper() + name[1:], lambda tr=t: ed.set_tap_transition(nid, tr))
+                a.setCheckable(True)
+                a.setChecked(cur.get("transition") == t)
+            how.actions()[-1].setToolTip("Одноимённые элементы плавно перетекают на новый экран")
         self._fill_variant_tap(m, nid, cur)
         m.addSeparator()
         m.addAction("Сложнее (условия, переменные, анимации) — в «Логике»…", self._open_logic)

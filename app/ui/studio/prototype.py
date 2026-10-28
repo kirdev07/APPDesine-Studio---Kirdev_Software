@@ -21,7 +21,7 @@ from app.core.document import tree
 from app.core.document.model import PLATFORM_ANDROID, Screen
 from app.engines.animation import engine as anim
 from app.engines.logic.engine import Interpreter, format_value
-from app.engines.logic.runtime import apply_samples, compose, state_transition
+from app.engines.logic.runtime import apply_samples, compose, overlay_entrance, smart_transition, state_transition
 from app.engines.material.color import scheme
 from app.engines.preview import live
 from app.engines.preview.devices import TITLE_BAR, ViewSpec, adapt, default_profile
@@ -36,7 +36,8 @@ WHEEL_DP = 48         # прокрутка колесом за один щелч
 RIPPLE_MS = 450       # волна нажатия
 KEY_ROWS = ("йцукенгшщзхъ", "фывапролджэ", "ячсмитьбю")
 KEY_BACK, KEY_SPACE, KEY_DONE = "⌫", "␣", "⏎"
-TRANSITION_RU = {"none": "без перехода", "fade": "затухание", "slide_left": "сдвиг влево",
+TRANSITION_RU = {"smart": "умный (Smart Animate)", "none": "без перехода", "fade": "затухание",
+                 "slide_left": "сдвиг влево",
                  "slide_right": "сдвиг вправо", "slide_up": "сдвиг вверх", "slide_down": "сдвиг вниз"}
 STAGE_BG = QColor("#0B0B0B")
 
@@ -244,6 +245,7 @@ class PrototypePlayer(QWidget):
         self.spec: ViewSpec | None = None
         self.layout_diags: list = []
         self.effect_log: list[str] = []
+        self.waits: list[tuple[float, object]] = []  # (когда, эффект «Подождать») — продолжение действий
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         self.view = PlayerView(self)
@@ -272,6 +274,13 @@ class PrototypePlayer(QWidget):
 
     def advance(self, ms: float) -> None:
         self.now += ms
+        due = [w for w in self.waits if w[0] <= self.now]
+        if due:
+            self.waits = [w for w in self.waits if w[0] > self.now]
+            for _, e in due:
+                before_state = copy.deepcopy(self.interp.state)
+                before_pm = self.frame() if self.screen is not None else None
+                self._after_effects(self.interp.resume(e), before_state, before_pm)
         busy = bool(self.active) or self.transition is not None
         rippling = self.ripple is not None
         if rippling and self.now - self.ripple[3] > RIPPLE_MS:
@@ -822,6 +831,8 @@ class PrototypePlayer(QWidget):
                 nav = e
                 self.active, self.persist, self.scroll, self.focus_id = [], {}, {}, None
                 self.live, self.ripple = {}, None
+            elif e.kind == "wait":
+                self.waits.append((self.now + max(0, e.data["ms"]), e))
             elif e.kind == "animation":
                 a = self.doc.animation(e.data["animation_id"])
                 if a is not None:
@@ -837,7 +848,21 @@ class PrototypePlayer(QWidget):
                     if synth is not None:
                         self.active.append((synth, self.now))
         self.render(fit=nav is not None)
-        if nav is not None and before_pm is not None and not self.reduced_motion \
+        smart = nav is not None and nav.data["transition"] == "smart"
+        if smart and before_state is not None and not self.reduced_motion:
+            old = compose(self.doc, before_state, self.engine, {})
+            new = compose(self.doc, self.interp.state, self.engine, {})
+            synth = smart_transition(old, new, nav.data["duration"], nav.data["easing"]) if old and new else None
+            if synth is not None:
+                self.active.append((synth, self.now))
+                self.render()
+        for e in effects:
+            if e.kind == "overlay_open" and self.screen is not None and not self.reduced_motion:
+                synth = overlay_entrance(self.screen, e.data["node_id"])
+                if synth is not None:
+                    self.active.append((synth, self.now))
+                    self.render()
+        if nav is not None and before_pm is not None and not self.reduced_motion and not smart \
                 and nav.data["transition"] != "none" and nav.data["duration"] > 0:
             self.transition = _Transition(before_pm, self.frame(), nav.data["transition"], nav.data["duration"],
                                           nav.data["easing"], self.now)
@@ -846,7 +871,7 @@ class PrototypePlayer(QWidget):
 
     def restart(self) -> None:
         self.active, self.persist, self.transition, self.hover_id = [], {}, None, None
-        self.scroll, self.focus_id, self._last_tap = {}, None, None
+        self.scroll, self.focus_id, self._last_tap, self.waits = {}, None, None, []
         self.live, self.ripple = {}, None
         self.effect_log = []
         effects = self.interp.reset()
@@ -893,6 +918,8 @@ def describe(doc, e) -> str:
     if e.kind == "animation":
         a = doc.animation(d["animation_id"])
         return f"анимация «{a.name if a else '?'}»"
+    if e.kind == "wait":
+        return f"пауза {d['ms'] / 1000:g} с"
     if e.kind == "overlay_open":
         return "открыто окно"
     if e.kind == "overlay_close":

@@ -37,7 +37,8 @@ EASE_RU = {"linear": "Линейная", "ease_in": "Разгон", "ease_out": 
 DEFAULTS = {"navigate": {"transition": "slide_left", "duration": 300, "easing": "ease_out"},
             "back": {"transition": "slide_right", "duration": 250, "easing": "ease_out"},
             "set_variable": {"mode": "set", "value": ""}, "set_state": {"state": "default"},
-            "set_variant": {"axis": "", "value": ""},
+            "set_variant": {"axis": "", "value": ""}, "wait": {"duration": 1000},
+            "open_overlay": {"scrim": True},
             "set_visible": {"mode": "toggle"}, "set_text": {"text": ""}}
 
 
@@ -407,6 +408,8 @@ class LogicPage(QWidget):
                      f"{a.get('value') or 'следующее'}", "set_visible": MODE_RU.get(a.get("mode"), ""),
                      "set_text": f"«{a.get('text', '')[:24]}»", "open_overlay": ""}[t]
             return f"«{names.get(a.get('node_id'), '?')}» {extra}"
+        if t == "wait":
+            return f"{a.get('duration', 0) / 1000:g} с"
         if t == "play_animation":
             an = doc.animation(a.get("animation_id", ""))
             return f"«{an.name if an else '?'}»"
@@ -527,6 +530,11 @@ class LogicPage(QWidget):
                 defn = doc.component(n.component_id) if n is not None and n.is_instance else None
                 w = combo([("По умолчанию", "default")] + [(st, st) for st in (defn.states if defn else {})], f, cur)
                 title = "Состояние"
+            elif f == "scrim":
+                w = QCheckBox("Затемнить экран под окном")
+                w.setChecked(bool(cur))
+                w.toggled.connect(lambda v: self._set(r, "scrim", v))
+                title = ""
             elif f == "axis":
                 n = next((n for n, _, _ in nodes if n.id == a.get("node_id")), None)
                 defn = doc.component(n.component_id) if n is not None and n.is_instance else None

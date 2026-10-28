@@ -16,6 +16,7 @@ from app.core.document.model import ARTBOARD_COLORS, PLATFORM_ANDROID, ProjectDo
 from app.engines.material.color import ROLES as COLOR_ROLES, scheme
 from app.engines.material.type_scale import TYPE_SCALE, role_of
 from app.engines.preview.devices import screen_dpi
+from app.engines.logic.runtime import smart_keys
 from app.exporters.compose_m3 import Material
 from app.exporters.compose_motion import (
     GRADIENT_KT, NAV_MOTION, Motion, brush, effects, kshape, plain_stroke, shadow, stroke_draw,
@@ -110,6 +111,10 @@ class _Screen:
                     self.texts.setdefault(a["node_id"], ident(f"text {m[a['node_id']].name}", False, self.used,
                                                               "text"))
         self.overlays = overlays
+        self.scrims = {a["node_id"] for it in self.its for a in it.actions
+                       if a["type"] == "open_overlay" and a.get("scrim")}
+        self.waits = any(a["type"] == "wait" for it in self.its for a in it.actions)
+        self.smart = {name: n.id for name, n in smart_keys(s).items() if name in gen.smart_names}
         # переключение вариантов: node_id копии → {свойство: имя переменной}
         self.variant_vars: dict[str, dict[str, str]] = {}
         self._expanding: set[str] = set()
@@ -135,10 +140,25 @@ class _Screen:
 
     # ---------- действия ----------
     def actions_code(self, it, ind: str) -> list[str]:
+        out = self._acts(it.actions)
+        if it.condition:
+            v = self.g.doc.variable(it.condition["var_id"])
+            if v is not None:
+                st = self.g.state_names
+                cond = f"state.{st[v.id]} {it.condition['op']} {self.g.literal(v.type, it.condition['value'])}"
+                return [f"{ind}if ({cond}) {{"] + [f"{ind}    {x}" for x in out] + [f"{ind}}}"]
+        return [ind + x for x in out]
+
+    def _acts(self, actions: list[dict]) -> list[str]:
         out = []
         st = self.g.state_names
-        for a in it.actions:
+        for i, a in enumerate(actions):
             t = a["type"]
+            if t == "wait":  # пауза: остальные действия — в корутине после delay
+                rest = self._acts(actions[i + 1:])
+                out += [f"scope.launch {{", f"    delay({int(a.get('duration', 0))})"] + \
+                    [f"    {x}" for x in rest] + ["}"]
+                break
             if t == "navigate":
                 route = self.g.routes.get(a["screen_id"])
                 motion = (f'NavMotion("{a.get("transition", "none")}", {int(a.get("duration", 300))}, '
@@ -181,12 +201,7 @@ class _Screen:
                 out.append(f"{self.texts[a['node_id']]} = {self.template(str(a['text']))}")
             else:
                 out.append(f"// TODO: действие «{t}» (состояния компонентов и анимации — вручную)")
-        if it.condition:
-            v = self.g.doc.variable(it.condition["var_id"])
-            if v is not None:
-                cond = f"state.{st[v.id]} {it.condition['op']} {self.g.literal(v.type, it.condition['value'])}"
-                return [f"{ind}if ({cond}) {{"] + [f"{ind}    {x}" for x in out] + [f"{ind}}}"]
-        return [ind + x for x in out]
+        return out
 
     def template(self, text: str) -> str:
         by_name = {v.name: v for v in self.g.doc.variables}
@@ -226,6 +241,8 @@ class _Screen:
         if mode == "abs":
             m += self._place(n, parent, ind)
             fill_w, fill_h = self._fills
+        if self.smart.get(n.name) == n.id:  # умный переход: одноимённый элемент на другом экране
+            m.append(f"{ind}    .smart({kstr(n.name)})")
         main_fill = (mode == "col" and n.sizing_v == "fill") or (mode == "row" and n.sizing_h == "fill")
         if main_fill:
             m.append(f"{ind}    .weight(1f)")
@@ -338,18 +355,34 @@ class _Screen:
             return self.variant_node(n, parent, mode, ind)
         hidden = not n.visible
         if n.id in self.vis:  # показ и скрытие — с плавным появлением
-            out.append(f"{ind}AnimatedVisibility(visible = {self.vis[n.id]}, enter = fadeIn(), "
-                       f"exit = fadeOut()) {{")
-            ind2 = ind + "    "
+            var = self.vis[n.id]
+            if n.id in self.scrims and n in self.s.nodes:  # затемнение под окном; нажатие по нему закрывает
+                out += [f"{ind}androidx.compose.animation.AnimatedVisibility(visible = {var}, "
+                        f"modifier = Modifier.matchParentSize(), enter = fadeIn(), exit = fadeOut()) {{",
+                        f"{ind}    Box(Modifier.fillMaxSize().background(Color(0x66000000))",
+                        f"{ind}        .clickable(remember {{ MutableInteractionSource() }}, null) {{ {var} = false }})",
+                        f"{ind}}}"]
+            sheet = n.id in self.overlays and n.y + n.h >= self.s.height - 1  # шторка снизу — выезжает
+            enter, leave = ("slideInVertically { it } + fadeIn()", "slideOutVertically { it } + fadeOut()") \
+                if sheet else ("fadeIn()", "fadeOut()")
+            av = "androidx.compose.animation.AnimatedVisibility"  # полное имя: в Row/Column — не их перегрузка
+            if mode == "abs":  # слой во весь родитель: внутри снова Box — работают align и offset элемента
+                out += [f"{ind}{av}(visible = {var}, modifier = Modifier.matchParentSize(), enter = {enter}, "
+                        f"exit = {leave}) {{", f"{ind}    Box(Modifier.fillMaxSize()) {{"]
+                ind2 = ind + "        "
+            else:
+                out.append(f"{ind}{av}(visible = {var}, enter = {enter}, exit = {leave}) {{")
+                ind2 = ind + "    "
         elif hidden:
             return [f"{ind}// скрыт в дизайне: «{n.name or n.type}»"]
         else:
             ind2 = ind
+        close = ([f"{ind}    }}"] if n.id in self.vis and mode == "abs" else []) + [f"{ind}}}"]
         out.append(f"{ind2}// {n.name or n.type}" + (f" — экземпляр компонента" if n.is_instance else ""))
         if self.m3.handles(n):  # стандартный компонент Material 3 → компонент Compose
             out += self.m3.node(n, parent, mode, ind2)
             if n.id in self.vis:
-                out.append(f"{ind}}}")
+                out += close
             return out
         mod = self.modifier(n, parent, mode, ind2 + "    ")
         mod[0] = mod[0].lstrip()
@@ -388,7 +421,7 @@ class _Screen:
             else:
                 out.append(f"{ind2}Box(modifier = {modtxt})")
         if n.id in self.vis:
-            out.append(f"{ind}}}")
+            out += close
         return out
 
     def variant_node(self, n, parent, mode: str, ind: str) -> list[str]:
@@ -547,6 +580,8 @@ class _Screen:
              "@Composable",
              f"fun {self.fn}(state: AppState, onNavigate: (String, NavMotion) -> Unit, onBack: () -> Unit) {{"]
         L += self.m3.decls + self.motion.decls
+        if self.waits and "    val scope = rememberCoroutineScope()" not in L:
+            L.append("    val scope = rememberCoroutineScope()")
         m = tree.node_map(s)
         for nid, var in self.vis.items():
             L.append(f"    var {var} by remember {{ mutableStateOf({'true' if m[nid].visible and nid not in self.overlays else 'false'}) }}")
@@ -600,6 +635,13 @@ class AndroidProject:
         vused: set[str] = set()
         self.state_names = {v.id: ident(v.name, False, vused, "value") for v in doc.variables}
         self.roles = self._role_map()
+        # имена для умного перехода: есть переход smart и имя встречается (по одному разу) хотя бы на двух экранах
+        self.smart_names: set[str] = set()
+        if any(a["type"] == "navigate" and a.get("transition") == "smart" for it in doc.interactions
+               for a in it.actions):
+            from collections import Counter
+            counts = Counter(name for s in self.screens for name in smart_keys(s))
+            self.smart_names = {name for name, c in counts.items() if c >= 2}
 
     def _role_map(self) -> dict[str, str]:
         """#RRGGBB → роль схемы дизайна (фон дизайна — background): такие цвета в коде берутся из темы."""
@@ -652,7 +694,10 @@ class AndroidProject:
             "androidx.compose.ui.draw.dropShadow", "androidx.compose.ui.draw.innerShadow",
             "androidx.compose.ui.graphics.PathEffect", "androidx.compose.ui.graphics.StrokeCap",
             "androidx.compose.ui.graphics.drawOutline", "androidx.compose.ui.graphics.drawscope.inset",
-            "androidx.compose.ui.unit.DpOffset",
+            "androidx.compose.ui.unit.DpOffset", "androidx.compose.animation.slideInVertically",
+            "androidx.compose.animation.slideOutVertically",
+            "androidx.compose.foundation.interaction.MutableInteractionSource", "kotlinx.coroutines.delay",
+            f"{self.pkg}.navigation.smart",
             "androidx.compose.ui.text.input.PasswordVisualTransformation",
             "androidx.compose.ui.text.input.VisualTransformation",
             "androidx.compose.ui.tooling.preview.Preview", "androidx.compose.ui.unit.dp",
@@ -853,7 +898,10 @@ fun fmt(value: Any): String = if (value is Double && value % 1.0 == 0.0) value.t
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -869,21 +917,35 @@ private data class Entry(val route: String, val motion: NavMotion)
  * системная «Назад» возвращает на предыдущий экран обратным переходом.
  * При росте приложения замените на Navigation Compose — маршруты уже названы.
  */
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun AppNavHost() {{
     val state = remember {{ AppState() }}
     val stack = remember {{ mutableStateListOf(Entry("{start}", NavMotion("none", 0))) }}
     var forward by remember {{ mutableStateOf(true) }}
-    val go: (String, NavMotion) -> Unit = {{ route, motion -> forward = true; stack.add(Entry(route, motion)) }}
-    val back: () -> Unit = {{ if (stack.size > 1) {{ forward = false; stack.removeAt(stack.lastIndex) }} }}
+    var smartOn by remember {{ mutableStateOf(false) }}  // умный переход: общие элементы перетекают
+    val go: (String, NavMotion) -> Unit = {{ route, motion ->
+        forward = true; smartOn = motion.kind == "smart"; stack.add(Entry(route, motion))
+    }}
+    val back: () -> Unit = {{
+        if (stack.size > 1) {{
+            forward = false; smartOn = stack.last().motion.kind == "smart"; stack.removeAt(stack.lastIndex)
+        }}
+    }}
     BackHandler(enabled = stack.size > 1) {{ back() }}
-    AnimatedContent(
-        targetState = stack.last(),
-        transitionSpec = {{ screenTransition(if (forward) targetState.motion else initialState.motion, forward) }},
-        label = "screen",
-    ) {{ entry ->
-        when (entry.route) {{
+    SharedTransitionLayout {{
+        val shared = this
+        AnimatedContent(
+            targetState = stack.last(),
+            transitionSpec = {{ screenTransition(if (forward) targetState.motion else initialState.motion, forward) }},
+            label = "screen",
+        ) {{ entry ->
+            CompositionLocalProvider(LocalSharedScope provides shared, LocalNavScope provides this,
+                                     LocalSmartOn provides smartOn) {{
+                when (entry.route) {{
 {routes}
+                }}
+            }}
         }}
     }}
 }}

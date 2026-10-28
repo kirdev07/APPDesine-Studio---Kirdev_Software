@@ -211,7 +211,10 @@ def brush(n, kcolor) -> str | None:
 
 NAV_MOTION = '''package {pkg}.navigation
 
+import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.CubicBezierEasing
@@ -225,6 +228,9 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.IntOffset
 
 /** Переход между экранами из логики прототипа: вид (fade, slide_left, …), длительность и плавность. */
@@ -253,8 +259,24 @@ fun screenTransition(m: NavMotion, forward: Boolean): ContentTransform {
         "slide_right" -> slideInHorizontally(move) { -d * it } togetherWith slideOutHorizontally(move) { d * it }
         "slide_up" -> slideInVertically(move) { d * it } togetherWith slideOutVertically(move) { -d * it }
         "slide_down" -> slideInVertically(move) { -d * it } togetherWith slideOutVertically(move) { d * it }
-        else -> fadeIn(fade) togetherWith fadeOut(fade)
+        else -> fadeIn(fade) togetherWith fadeOut(fade)  // smart: экраны проявляются, общие элементы — sharedBounds
     }
+}
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+val LocalSharedScope = compositionLocalOf<SharedTransitionScope?> { null }
+val LocalNavScope = compositionLocalOf<AnimatedVisibilityScope?> { null }
+/** Идёт «умный переход» (Smart Animate): одноимённые элементы перетекают между экранами. */
+val LocalSmartOn = compositionLocalOf { false }
+
+/** Элемент, который при умном переходе перетекает в одноимённый на другом экране (по имени слоя). */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+fun Modifier.smart(key: String): Modifier {
+    val shared = LocalSharedScope.current
+    val anim = LocalNavScope.current
+    if (shared == null || anim == null || !LocalSmartOn.current) return this
+    return with(shared) { this@smart.sharedBounds(rememberSharedContentState(key), anim) }
 }
 '''
 

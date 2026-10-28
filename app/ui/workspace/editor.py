@@ -571,6 +571,55 @@ class Editor(QObject):
         return [it for it in self.doc.interactions if it.screen_id == s.id and it.node_id == node_id
                 and it.trigger == "tap"]
 
+    def auto_advance(self) -> tuple[str, int, str] | None | str:
+        """Автопереход экрана: (экран, пауза мс, переход), None — нет, "custom" — своё правило в «Логике»."""
+        s = self.screen()
+        rules = [it for it in (self.doc.interactions if self.doc else []) if s and it.screen_id == s.id
+                 and it.trigger == "screen_open"]
+        if not rules:
+            return None
+        acts = rules[0].actions
+        if len(rules) == 1 and not rules[0].condition and len(acts) == 2 and acts[0]["type"] == "wait" \
+                and acts[1]["type"] == "navigate":
+            return acts[1]["screen_id"], acts[0]["duration"], acts[1]["transition"]
+        return "custom"
+
+    def set_auto_advance(self, target_id: str | None, ms: int = 2000, transition: str = "fade") -> bool:
+        """«Через N секунд перейти на экран» при открытии текущего (заставка, онбординг). Одна запись истории."""
+        from app.core.document.behavior import Interaction
+        s = self.screen()
+        if not s or not self.doc or self.auto_advance() == "custom":
+            return False
+        full = None
+        if target_id:
+            full = Interaction.from_dict(Interaction(screen_id=s.id, trigger="screen_open", actions=[
+                {"type": "wait", "duration": int(ms)},
+                {"type": "navigate", "screen_id": target_id, "transition": transition, "duration": 400,
+                 "easing": "ease_in_out"}]).to_dict())
+        sid = s.id
+
+        def mutate(doc):
+            doc.interactions = [it for it in doc.interactions if not (it.screen_id == sid
+                                                                       and it.trigger == "screen_open")]
+            if full is not None:
+                doc.interactions.append(Interaction.from_dict(full.to_dict()))
+        return self.patch("Автопереход" if target_id else "Убрать автопереход", mutate)
+
+    def set_tap_transition(self, node_id: str, transition: str) -> bool:
+        cur = self.tap_action(node_id)
+        if not isinstance(cur, dict) or cur.get("type") != "navigate":
+            return False
+        return self.set_tap_action(node_id, {**cur, "transition": transition})
+
+    def set_overlay_tap(self, node_id: str, target_id: str) -> bool:
+        """Нажатие открывает окно поверх экрана с затемнением; само окно в дизайне скрывается."""
+        if not self.set_tap_action(node_id, {"type": "open_overlay", "node_id": target_id, "scrim": True}):
+            return False
+        target = tree.find(self.screen(), target_id)[0] if self.screen() else None
+        if target is not None and target.visible:
+            self.set_props({target_id: {"visible": False}}, "Окно скрыто до открытия")
+        return True
+
     def tap_action(self, node_id: str) -> dict | None | str:
         """Действие при нажатии: словарь простого действия, None — ничего, "custom" — своё правило в «Логике»."""
         rules = self.tap_rules(node_id)
@@ -591,7 +640,7 @@ class Editor(QObject):
             t = action["type"]
             base = {"navigate": {"transition": "slide_left", "duration": 300, "easing": "ease_in_out"},
                     "back": {"transition": "slide_right", "duration": 300, "easing": "ease_in_out"},
-                    "set_visible": {"mode": "toggle"}}.get(t, {})
+                    "set_visible": {"mode": "toggle"}, "open_overlay": {"scrim": True}}.get(t, {})
             full = Interaction.from_dict(Interaction(screen_id=s.id, node_id=node_id, trigger="tap",
                                                      actions=[{**base, **action}]).to_dict())
         old_ids = {it.id for it in self.tap_rules(node_id)}

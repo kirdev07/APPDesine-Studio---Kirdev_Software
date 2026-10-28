@@ -42,12 +42,13 @@ class RuntimeState:
     visibility: dict = field(default_factory=dict)   # node_id → bool
     texts: dict = field(default_factory=dict)        # node_id → текст
     overlays: list[str] = field(default_factory=list)
+    scrims: list[str] = field(default_factory=list)  # открытые окна с затемнением под ними
 
     def snapshot(self) -> dict:
         return {"screen_id": self.screen_id, "history": list(self.history),
                 "variables": dict(sorted(self.variables.items())), "states": dict(sorted(self.states.items())),
                 "visibility": dict(sorted(self.visibility.items())), "texts": dict(sorted(self.texts.items())),
-                "overlays": list(self.overlays),
+                "overlays": list(self.overlays), **({"scrims": list(self.scrims)} if self.scrims else {}),
                 **({"variants": {k: dict(sorted(v.items())) for k, v in sorted(self.variants.items())}}
                    if self.variants else {})}
 
@@ -125,6 +126,10 @@ class Interpreter:
         out: list[Effect] = []
         s = self.screen()
         if s is None:
+            return out
+        if trigger == "tap" and node_id.startswith("scrim:"):  # нажатие по затемнению закрывает окно
+            out = self._act({"type": "close_overlay"}, 0)
+            self.effects += out
             return out
         if trigger == "text_input":
             n = tree.node_map(s).get(node_id)
@@ -245,10 +250,24 @@ class Interpreter:
             if n >= MAX_ACTIONS:
                 out.append(Effect("error", {"message": "Превышено число действий"}))
                 break
+            if act["type"] == "wait":  # остальные действия — после паузы (resume)
+                out.append(Effect("wait", {"ms": act["duration"], "screen_id": self.state.screen_id,
+                                           "rest": [dict(a) for a in it.actions[n + 1:]], "depth": depth}))
+                break
             before = self.state.screen_id
             out += self._act(act, depth)
             if act["type"] in ("navigate", "back") and self.state.screen_id != before:
                 break  # после смены экрана остальные действия старого экрана не выполняются
+        return out
+
+    def resume(self, wait: Effect) -> list[Effect]:
+        """Продолжить действия после «Подождать», если пользователь не ушёл с экрана."""
+        d = wait.data
+        if d["screen_id"] != self.state.screen_id or not d["rest"]:
+            return []
+        it = Interaction(screen_id=d["screen_id"], trigger="screen_open", actions=d["rest"])
+        out = self._run(it, d["depth"])
+        self.effects += out
         return out
 
     def _act(self, a: dict, depth: int) -> list[Effect]:
@@ -261,7 +280,7 @@ class Interpreter:
                 return [Effect("error", {"message": "Цикл переходов при открытии экрана остановлен"})]
             st.history.append(st.screen_id)
             prev, st.screen_id = st.screen_id, a["screen_id"]
-            st.overlays = []
+            st.overlays, st.scrims = [], []
             eff = [Effect("navigate", {"from": prev, "to": st.screen_id, "transition": a["transition"],
                                        "duration": a["duration"], "easing": a["easing"]})]
             for it in [i for i in self.doc.interactions if i.screen_id == st.screen_id
@@ -272,7 +291,7 @@ class Interpreter:
             if not st.history:
                 return []
             prev, st.screen_id = st.screen_id, st.history.pop()
-            st.overlays = []
+            st.overlays, st.scrims = [], []
             eff = [Effect("back", {"from": prev, "to": st.screen_id, "transition": a["transition"],
                                    "duration": a["duration"], "easing": a["easing"]})]
             if depth < MAX_DEPTH:  # возврат на экран — тоже «открытие экрана»
@@ -345,11 +364,16 @@ class Interpreter:
         if t == "open_overlay":
             if a["node_id"] not in st.overlays:
                 st.overlays.append(a["node_id"])
+            if a.get("scrim") and a["node_id"] not in st.scrims:
+                st.scrims.append(a["node_id"])
             return [Effect("overlay_open", {"node_id": a["node_id"]})]
         if t == "close_overlay":
             if not st.overlays:
                 return []
-            return [Effect("overlay_close", {"node_id": st.overlays.pop()})]
+            nid = st.overlays.pop()
+            if nid in st.scrims:
+                st.scrims.remove(nid)
+            return [Effect("overlay_close", {"node_id": nid})]
         return [Effect("error", {"message": f"Неизвестное действие {t}"})]
 
     # ---------- повтор ----------
