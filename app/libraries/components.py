@@ -239,8 +239,9 @@ def m3_search_bar(c: _Ctx) -> Node:
                    [c.icon(24, color=c.s["onSurface"], glyph="search"),
                     c.text("Найти в сообщениях", 16, c.s["onSurfaceVariant"], name="Плейсхолдер", sizing_h="fill"),
                     c.icon(30, "Аватар", c.s["primaryContainer"])],
-                   w=c.width_dp - 32, h=56, radius=28, pad_l=16, pad_r=16, gap=16, fill=c.s["surfaceContainerHigh"],
-                   cross_align="center", role="m3.search_bar")
+                   x=c.d(16), w=c.width_dp - 32, h=56, radius=28, pad_l=16, pad_r=16, gap=16,
+                   fill=c.s["surfaceContainerHigh"], cross_align="center", constraint_h="left_right",
+                   role="m3.search_bar")
 
 
 def m3_card(c: _Ctx) -> Node:
@@ -273,7 +274,8 @@ def m3_list_item(c: _Ctx) -> Node:
 
 
 def m3_divider(c: _Ctx) -> Node:
-    return c.frame("Разделитель", "none", [], w=c.width_dp - 32, h=1, fill=c.s["outlineVariant"], role="m3.divider")
+    return c.frame("Разделитель", "none", [], x=c.d(16), w=c.width_dp - 32, h=1, fill=c.s["outlineVariant"],
+                   constraint_h="left_right", role="m3.divider")
 
 
 def m3_progress_linear(c: _Ctx) -> Node:
@@ -315,8 +317,8 @@ def m3_snackbar(c: _Ctx) -> Node:
     return c.frame("Всплывающее сообщение", "horizontal",
                    [c.text("Фото удалено", 14, c.s["inverseOnSurface"], name="Сообщение", sizing_h="fill"),
                     c.label("Отменить", c.s["inversePrimary"], name="Действие")],
-                   w=c.width_dp - 32, h=48, pad_l=16, pad_r=16, gap=8, radius=4, fill=c.s["inverseSurface"],
-                   cross_align="center", role="m3.snackbar")
+                   x=c.d(16), w=c.width_dp - 32, h=48, pad_l=16, pad_r=16, gap=8, radius=4,
+                   fill=c.s["inverseSurface"], cross_align="center", constraint_h="left_right", role="m3.snackbar")
 
 
 def m3_dialog(c: _Ctx) -> Node:
@@ -530,10 +532,11 @@ def build(kind: str, screen: Screen, appearance: Appearance) -> Node:
         raise KeyError(kind)
     c = _Ctx(screen, appearance)
     node = spec.builder(c)
-    # компоненты не на всю ширину ставятся с отступом 16 dp от левого края, на трети высоты экрана
-    if node.constraint_h != "left_right" and node.x == 0 and node.y == 0 and kind not in ("win_nav_pane",
-                                                                                           "m3_nav_drawer"):
-        dx, dy = c.d(16), round(screen.height * 0.35, 2)
+    # компоненты ставятся на трети высоты экрана, не на всю ширину — с отступом 16 dp от левого края;
+    # растянутые по ширине с полями (строка поиска, разделитель) сохраняют свой отступ
+    full_width = node.constraint_h == "left_right" and node.x == 0
+    if node.y == 0 and not full_width and kind not in ("win_nav_pane", "m3_nav_drawer"):
+        dx, dy = (0 if node.x else c.d(16)), round(screen.height * 0.35, 2)
         for n, _, _ in tree.walk([node]):  # координаты абсолютные: сдвигается всё содержимое
             n.x, n.y = round(n.x + dx, 2), round(n.y + dy, 2)
     return node

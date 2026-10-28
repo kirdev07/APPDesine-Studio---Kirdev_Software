@@ -63,6 +63,10 @@ def test_components_have_roles_and_icons():
         for d in tree.descendants(n):
             if d.type == "vector":
                 assert d.path, kind
+    for kind in ("m3_search_bar", "m3_divider", "m3_snackbar"):  # растягиваются по ширине с полями 16 dp
+        n = components.build(kind, s, doc.meta.appearance)
+        assert n.constraint_h == "left_right" and n.x > 0 and n.x + n.w == pytest.approx(s.width - n.x, abs=0.1)
+        assert n.y > 0
     badge = components.build("m3_badge", s, doc.meta.appearance)
     ico = badge.children[0]
     assert ico.x > badge.x and ico.y > badge.y      # содержимое сдвигается вместе с корнем
@@ -100,6 +104,8 @@ def test_compose_export_real_material_components():
                  "NavigationBarItem(", "DesignIcon(", "@OptIn(ExperimentalMaterial3Api::class)",
                  "contentColor = MaterialTheme.colorScheme.onBackground", ".align(Alignment.BottomStart)"):
         assert call in src, call
+    snack = src[src.index("Snackbar("):]
+    assert ".padding(start = 16.dp, end = 16.dp)" in snack[:400] and ".fillMaxWidth()" in snack[:400]
     items = src.split("NavigationBarItem(")
     assert 'onNavigate("screen2")' not in items[1] and 'onNavigate("screen2")' in items[2]  # переход у второго пункта
     assert "Column(" in src and "Удалить черновик?" in src                    # диалог — общей раскладкой
