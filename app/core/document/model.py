@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 # 13 — данные графика у контейнера (data: числа через пробел);
 # 14 — матовое стекло (размытие фона под элементом), слой поверх с режимом наложения, маска любой формой;
 # 15 — липкий элемент в прокрутке (sticky) и листание страницами (paging).
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -159,7 +159,7 @@ ENUMS = {
     "sizing_v": ("fixed", "fill", "hug"),
     "constraint_h": ("left", "right", "left_right", "center", "scale"),
     "constraint_v": ("top", "bottom", "top_bottom", "center", "scale"),
-    "layout": ("none", "vertical", "horizontal", "grid"),
+    "layout": ("none", "vertical", "horizontal", "grid", "wrap"),  # wrap — в строку с переносом
     "main_align": ("start", "center", "end", "space_between"),
     "cross_align": ("start", "center", "end", "stretch"),
     "fill_rule": ("nonzero", "evenodd"),

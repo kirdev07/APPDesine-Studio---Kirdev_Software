@@ -101,7 +101,7 @@ def test_compose_export_real_material_components():
     for call in ("TopAppBar(", "Switch(checked = ", "Checkbox(checked = ", "RadioButton(selected = ", "Slider(value = ",
                  "FilterChip(", "FloatingActionButton(", "FilledTonalButton(", "PrimaryTabRow(", "SegmentedButton(",
                  "BadgedBox(", "LinearProgressIndicator(", "OutlinedTextField(", "NavigationBar(",
-                 "NavigationBarItem(", "DesignIcon(", "@OptIn(ExperimentalMaterial3Api::class)",
+                 "NavigationBarItem(", "DesignIcon(", "@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)",
                  "contentColor = MaterialTheme.colorScheme.onBackground", "bottomBar = {", "NavigationRail {",
                  "topBar = {", "Scaffold("):
         assert call in src, call

@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFormLayout, QGridLayout, QHBoxLayout,
+    QApplication, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFormLayout, QGridLayout, QHBoxLayout,
     QHeaderView,
     QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
     QScrollArea, QSpinBox, QSplitter, QTabWidget, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
@@ -51,7 +51,7 @@ TYPE_GLYPH = {"rect": "▭", "ellipse": "◯", "text": "T", "group": "▣", "fra
               "instance": "◈"}
 SIZING = [("fixed", "Фиксированный"), ("fill", "Заполнить"), ("hug", "По содержимому")]
 LAYOUTS = [("none", "Нет (свободно)"), ("vertical", "Вертикально ↓"), ("horizontal", "Горизонтально →"),
-           ("grid", "Сетка ▦")]
+           ("wrap", "С переносом ↵"), ("grid", "Сетка ▦")]
 MAIN_ALIGN = [("start", "В начале"), ("center", "По центру"), ("end", "В конце"), ("space_between", "Равномерно")]
 CROSS_ALIGN = [("start", "В начале"), ("center", "По центру"), ("end", "В конце"), ("stretch", "Растянуть")]
 CONSTRAINT_H = [("left", "Слева"), ("right", "Справа"), ("left_right", "Слева и справа"), ("center", "По центру"),
@@ -324,6 +324,7 @@ class ColorField(QWidget):
         super().__init__(parent)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
         self.swatch = QToolButton()
         self.swatch.setFixedSize(28, 24)
         self.swatch.setToolTip("Выбрать цвет")
@@ -331,12 +332,15 @@ class ColorField(QWidget):
         self.edit = QLineEdit()
         self.edit.setPlaceholderText("нет")
         self.edit.setMaxLength(9)
+        self.edit.setMinimumWidth(self.edit.fontMetrics().horizontalAdvance("#DDDDDDDD") + 20)  # код цвета целиком
         self.edit.editingFinished.connect(self._typed)
         lay.addWidget(self.swatch)
         lay.addWidget(self.edit, 1)
         self.clear_btn = QToolButton()
         self.clear_btn.setText("✕")
         self.clear_btn.setToolTip("Без цвета")
+        self.clear_btn.setFixedWidth(26)
+        self.clear_btn.setStyleSheet("padding:0")
         self.clear_btn.setVisible(allow_none)
         self.clear_btn.clicked.connect(lambda: self.committed.emit(""))
         lay.addWidget(self.clear_btn)
@@ -355,6 +359,7 @@ class ColorField(QWidget):
     def set_value(self, v: str) -> None:
         self._value = v
         self.edit.setText(v)
+        self.edit.setCursorPosition(0)  # видно начало кода цвета («#»), а не хвост
         c = qcolor(v).name(QColor.NameFormat.HexArgb) if v else "transparent"
         style = f"background:{qcolor(v).name()};" if v else "background:transparent;"
         self.swatch.setStyleSheet(f"QToolButton{{{style}border:1px solid #3A3A3A;border-radius:4px}}")
@@ -432,6 +437,7 @@ class Inspector(QScrollArea):
         self._loading = False
         self._build_node()
         self._build_screen()
+        self._build_dev()
         for combo in body.findChildren(QComboBox):  # длинные пункты не должны расширять панель
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
@@ -833,6 +839,73 @@ class Inspector(QScrollArea):
         f.addRow(label("Как элемент ведёт себя на экране другого размера или в растянутом контейнере.", "Muted", wrap=True))
 
     # --- вектор и экземпляр
+    # --- для разработчика
+    def _build_dev(self) -> None:
+        self.sec_dev, f = self._section("Для разработчика", "Размеры в dp, цвета с ролью темы и код Jetpack Compose "
+                                        "выделенного элемента — тот же, что попадёт в проект Android Studio.")
+        self.dev_toggle = QPushButton("Показать код ▾")
+        self.dev_toggle.setCheckable(True)
+        self.dev_toggle.setToolTip("Свойства и код Compose выделенного элемента")
+        self.dev_toggle.toggled.connect(lambda on: (self.dev_toggle.setText("Скрыть код ▴" if on else "Показать код ▾"),
+                                                    self._refresh_dev()))
+        f.addRow(self.dev_toggle)
+        self.dev_spec = QPlainTextEdit()
+        self.dev_spec.setReadOnly(True)
+        self.dev_spec.setFixedHeight(190)
+        self.dev_code = QPlainTextEdit()
+        self.dev_code.setReadOnly(True)
+        self.dev_code.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.dev_code.setFixedHeight(220)
+        self.dev_code.setStyleSheet("font-family: Consolas, 'Cascadia Mono', monospace; font-size: 9pt;")  # код — моноширинным
+        f.addRow(self.dev_spec)
+        f.addRow(self.dev_code)
+        row = QHBoxLayout()
+        self.dev_copy_spec = QPushButton("Копировать свойства")
+        self.dev_copy_code = QPushButton("Копировать код")
+        self.dev_copy_spec.clicked.connect(lambda: self._copy_dev(self.dev_spec.toPlainText(), "Свойства"))
+        self.dev_copy_code.clicked.connect(lambda: self._copy_dev(self.dev_code.toPlainText(), "Код Compose"))
+        row.addWidget(self.dev_copy_spec)
+        row.addWidget(self.dev_copy_code)
+        self.dev_buttons = QWidget()
+        self.dev_buttons.setLayout(row)
+        row.setContentsMargins(0, 0, 0, 0)
+        f.addRow(self.dev_buttons)
+        self._dev_key = None
+
+    def _copy_dev(self, text: str, what: str) -> None:
+        QApplication.clipboard().setText(text)
+        self.editor.message.emit(f"{what} скопированы в буфер обмена")
+
+    def _refresh_dev(self) -> None:
+        """Свойства и код считаются, только когда раздел раскрыт (и элемент или документ поменялись)."""
+        ed = self.editor
+        nodes = ed.selected_nodes()
+        one = len(nodes) == 1 and ed.screen() is not None
+        self.sec_dev.setVisible(one)
+        on = one and self.dev_toggle.isChecked()
+        for w in (self.dev_spec, self.dev_code, self.dev_buttons):
+            w.setVisible(on)
+        if not on:
+            self._dev_key = None
+            return
+        n, s = nodes[0], ed.screen()
+        key = (n.id, s.id, repr(n.to_dict()), repr(ed.doc.meta.appearance))
+        if key == self._dev_key:
+            return
+        self._dev_key = key
+        from app.exporters import dev_info
+        self.dev_spec.setPlainText(dev_info.spec_text(dev_info.spec_rows(ed.doc, s, n)))
+        try:
+            code = dev_info.compose_snippet(ed.doc, s, n.id)
+        except Exception as e:  # noqa: BLE001 — показать причину вместо пустого поля
+            code = f"// не удалось построить код: {e}"
+        real = bool(code) and not code.startswith("// не удалось")
+        if not code:
+            code = ("// Код Compose — для экранов Android." if s.platform != "android" else
+                    "// Это часть компонента: код — у самого компонента (выделите его целиком).")
+        self.dev_code.setPlainText(code)
+        self.dev_copy_code.setEnabled(real)
+
     def _build_extra(self) -> None:
         self.sec_vec, f = self._section("Вектор")
         self.vec_path = QPlainTextEdit()
@@ -1000,10 +1073,11 @@ class Inspector(QScrollArea):
             self.al_mode.setCurrentIndex(self.al_mode.findData(f0.layout))
             auto = f0.layout != "none"
             grid = f0.layout == "grid"
+            rows = grid or f0.layout == "wrap"  # промежуток между строками — у сетки и у переноса
             for w in (self.al_gap, self.al_main, self.al_cross, *self.al_pads.values()):
                 w.setEnabled(auto)
-            self.al_row_gap.setVisible(grid)
-            self.al_row_gap_label.setVisible(grid)
+            self.al_row_gap.setVisible(rows)
+            self.al_row_gap_label.setVisible(rows)
             self.al_cols.setVisible(grid)
             self.al_cols_label.setVisible(grid)
             self.al_main.setEnabled(auto and not grid)
@@ -1260,6 +1334,7 @@ class Inspector(QScrollArea):
                     w.setVisible(False)
             for w in (self.stroke_look, self.stroke_align, self.stroke_side_row, self.corner_row, *self.shadow_rows, self.shadow_inset):
                 self._row_visible(w, not self.simple)  # простой режим: без тонкой настройки обводки, углов и тени
+            self._refresh_dev()
         finally:
             self._loading = False
 

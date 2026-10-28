@@ -475,7 +475,7 @@ class _Screen:
             if n.stroke and n.stroke_width:
                 out.append(f"{ind2}        drawPath(p, {kcolor(n.stroke)}, style = Stroke(width = {_num(n.stroke_width)}f))")
             out += [f"{ind2}    }}", f"{ind2}}}"]
-        elif n.is_frame and n.layout in ("vertical", "horizontal", "grid"):
+        elif n.is_frame and n.layout in ("vertical", "horizontal", "grid", "wrap"):
             out += self.stack(n, modtxt, ind2)
         else:
             under = self.under_glass(n) if n.backdrop_blur > 0 else []
@@ -590,9 +590,17 @@ class _Screen:
         finally:
             self._expanding.discard(n.id)
 
+    def behind(self, n) -> str:
+        """Заливка ближайшего предка — то, на чём лежит текст."""
+        try:
+            chain = list(reversed(tree.ancestors(self.s, n.id)))
+        except Exception:
+            return ""
+        return next((a.fill for a in chain if a.fill and a.type != "text"), "")
+
     def text(self, n, modtxt: str, ind: str) -> list[str]:
         align = {"left": "TextAlign.Start", "center": "TextAlign.Center", "right": "TextAlign.End"}[n.align]
-        style = (f"color = {self.g.color(n.text_color)}, fontSize = {_num(n.font_size / self.k)}.sp, "
+        style = (f"color = {self.g.color(n.text_color, self.behind(n))}, fontSize = {_num(n.font_size / self.k)}.sp, "
                  f"fontWeight = FontWeight({n.font_weight}), textAlign = {align}")
         if n.letter_spacing:
             style += f", letterSpacing = {_num(n.letter_spacing / self.k)}.sp"
@@ -696,6 +704,17 @@ class _Screen:
             for c in n.children:
                 out += self.node(c, n, "row", ind + "    ")
             return out + [f"{ind}}}"]
+        if n.layout == "wrap":  # с переносом: FlowRow, выравнивание — внутри строки
+            vcross = {"start": "Top", "center": "CenterVertically", "end": "Bottom", "stretch": "Top"}[n.cross_align]
+            arr = (f"Arrangement.spacedBy({self.dp(n.gap)})" if main == "Start" else
+                   "Arrangement.SpaceBetween" if main == "SpaceBetween" else
+                   f"Arrangement.spacedBy({self.dp(n.gap)}, Alignment.{ {'Center': 'CenterHorizontally', 'End': 'End'}[main] })")
+            out = [f"{ind}FlowRow(", f"{ind}    modifier = {modtxt},", f"{ind}    horizontalArrangement = {arr},",
+                   f"{ind}    verticalArrangement = Arrangement.spacedBy({self.dp(n.row_gap)}),",
+                   f"{ind}    itemVerticalAlignment = Alignment.{vcross},", f"{ind}) {{"]
+            for c in n.children:
+                out += self.node(c, n, "flow", ind + "    ")
+            return out + [f"{ind}}}"]
         cols = max(1, n.grid_columns)  # сетка: строки по cols элементов
         out = [f"{ind}Column(modifier = {modtxt}, verticalArrangement = Arrangement.spacedBy({self.dp(n.row_gap)})) {{"]
         for i in range(0, len(n.children), cols):
@@ -710,7 +729,7 @@ class _Screen:
         bg = kcolor(g.artboard)
         L = [f"package {g.pkg}.ui.screens", "", *g.imports(), "",
              f"/** Экран «{s.name}» ({_num(s.width / self.k)} × {_num(s.height / self.k)} dp). Сгенерирован App Design Studio. */",
-             "@OptIn(ExperimentalMaterial3Api::class)",
+             "@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)",
              "@Composable",
              f"fun {self.fn}(state: AppState, onNavigate: (String, NavMotion) -> Unit, onBack: () -> Unit) {{"]
         L += self.m3.decls + self.motion.decls
@@ -750,12 +769,12 @@ class _Screen:
               f"private fun {self.fn}Preview() {{",
               f"    AppTheme {{ {self.fn}(AppState(), onNavigate = {{ _, _ -> }}, onBack = {{}}) }}", "}", ""]
         if self.motion.todo:
-            L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class)"),
+            L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)"),
                      "// TODO: анимации, которые не переведены автоматически (размер, цвет, скругление, шрифт):\n"
                      + "\n".join(f"//   {t}" for t in self.motion.todo))
         swipes = [it for it in self.its if it.trigger.startswith("swipe") or it.trigger in ("hover_enter", "hover_leave")]
         if swipes:
-            L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class)"), f"// TODO: жесты {sorted({i.trigger for i in swipes})} — добавьте "
+            L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)"), f"// TODO: жесты {sorted({i.trigger for i in swipes})} — добавьте "
                                               "pointerInput / detectDragGestures по описанию в AI_TASK.md")
         return "\n".join(L)
 
@@ -787,6 +806,7 @@ class AndroidProject:
         """#RRGGBB → роль схемы дизайна (фон дизайна — background): такие цвета в коде берутся из темы."""
         ap = self.doc.meta.appearance
         sch = scheme(ap.accent, ap.theme != "light")
+        self.scheme = {k: v.upper() for k, v in sch.items()}
         from app.engines.material.restyle import ORDERED_ROLES
         out = {self.artboard.upper(): "background"}
         for r in ORDERED_ROLES:
@@ -794,11 +814,21 @@ class AndroidProject:
                 out.setdefault(sch[r].upper(), r)
         return out
 
-    def color(self, c: str) -> str:
-        """Цвет для кода: роль темы (меняется со светлой / тёмной темой и цветами обоев) или точный цвет."""
+    def on_role(self, c: str, behind: str) -> str | None:
+        """Текст на заливке роли темы: его цвет — пара «on…» этой роли (белый на primary — onPrimary),
+        иначе в тёмной теме текст получил бы цвет фона и пропал."""
+        under = self.roles.get((behind or "")[:7].upper())
+        if not c or under is None:
+            return None
+        on = "on" + under[0].upper() + under[1:]
+        return on if self.scheme.get(on) == c[:7].upper() else None
+
+    def color(self, c: str, behind: str = "") -> str:
+        """Цвет для кода: роль темы (меняется со светлой / тёмной темой и цветами обоев) или точный цвет.
+        behind — заливка под текстом: для пары «on…» роли."""
         if not c:
             return kcolor(c)
-        role = self.roles.get(c[:7].upper())
+        role = self.on_role(c, behind) or self.roles.get(c[:7].upper())
         if role is None:
             return kcolor(c)
         alpha = c[7:9]

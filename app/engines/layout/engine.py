@@ -284,6 +284,14 @@ class LayoutEngine:
                     self._diag("info", c, "«Заполнить» внутри фрейма «по содержимому» — считается по содержимому")
             hs = [self._intrinsic_h(c, w) for c, w in zip(kids, ws)]
             return sum(ws) + f.gap * (len(kids) - 1) + ph, max(hs) + pv
+        if f.layout == "wrap":
+            if inner_w is None:  # ширина по содержимому — всё в одну строку
+                ws = [self._intrinsic_w(c) for c in kids]
+                hs = [self._intrinsic_h(c, w) for c, w in zip(kids, ws)]
+                return sum(ws) + f.gap * (len(kids) - 1) + ph, max(hs) + pv
+            lines = self._wrap_lines(f, kids, inner_w)
+            heights = [max(h for _, _, h in line) for line in lines]
+            return width, sum(heights) + f.row_gap * (len(lines) - 1) + pv
         cols = max(1, f.grid_columns)
         if inner_w is not None:
             col_w = max(0.0, (inner_w - f.gap * (cols - 1)) / cols)
@@ -388,6 +396,9 @@ class LayoutEngine:
         if f.layout == "grid":
             self._arrange_grid(f, kids, ix, iy, iw, ih)
             return
+        if f.layout == "wrap":
+            self._arrange_wrap(f, kids, ix, iy, iw, ih)
+            return
         vertical = f.layout == "vertical"
         n = len(kids)
         gaps = f.gap * (n - 1)
@@ -437,6 +448,45 @@ class LayoutEngine:
             else:
                 self._place(c, (pos, cpos, m, cr))
             pos += m + gap
+
+    def _wrap_lines(self, f: Node, kids: list[Node], inner_w: float) -> list[list[tuple[Node, float, float]]]:
+        """Строки раскладки с переносом: (элемент, ширина, высота); элемент шире строки — один в строке."""
+        lines: list[list[tuple[Node, float, float]]] = [[]]
+        used = 0.0
+        for c in kids:
+            w = min(self._intrinsic_w(c), inner_w) if inner_w > 0 else self._intrinsic_w(c)
+            h = self._intrinsic_h(c, w)
+            need = w if not lines[-1] else used + f.gap + w
+            if lines[-1] and need > inner_w + 0.5:
+                lines.append([])
+                need = w
+            lines[-1].append((c, w, h))
+            used = need
+        return [ln for ln in lines if ln]
+
+    def _arrange_wrap(self, f: Node, kids: list[Node], ix: float, iy: float, iw: float, ih: float) -> None:
+        """В строку, а что не помещается — на следующую (чипы, теги). Выравнивание — внутри каждой строки."""
+        cy = iy
+        for line in self._wrap_lines(f, kids, iw):
+            row_h = max(h for _, _, h in line)
+            total = sum(w for _, w, _ in line) + f.gap * (len(line) - 1)
+            gap = f.gap
+            if f.main_align == "space_between" and len(line) > 1:
+                gap = max(f.gap, (iw - (total - f.gap * (len(line) - 1))) / (len(line) - 1))
+                offset = 0.0
+            else:
+                offset = {"start": 0.0, "center": (iw - total) / 2, "end": iw - total}.get(f.main_align, 0.0)
+            cx = ix + max(0.0, offset)
+            for c, w, h in line:
+                if not c.is_group and (c.sizing_v == "fill" or f.cross_align == "stretch"):
+                    h = self._clamp_h(c, row_h)
+                cpos = {"center": cy + (row_h - h) / 2, "end": cy + row_h - h}.get(f.cross_align, cy)
+                self._place(c, (cx, cpos, w, h))
+                cx += w + gap
+            cy += row_h + f.row_gap
+        used = cy - f.row_gap - iy
+        if used > ih + 0.5 and f.sizing_v != "hug" and f.scroll != "vertical":
+            self._diag("warning", f, f"строки не помещаются по высоте ({used:.0f} из {ih:.0f} px)")
 
     def _arrange_grid(self, f: Node, kids: list[Node], ix: float, iy: float, iw: float, ih: float) -> None:
         cols = max(1, f.grid_columns)

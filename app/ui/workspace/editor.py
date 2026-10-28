@@ -352,7 +352,7 @@ class Editor(QObject):
             b = tree.bounds(c)
             if b and point[axis] > b[axis] + b[axis + 2] / 2:
                 index += 1
-        if parent.layout == "grid":
+        if parent.layout in ("grid", "wrap"):  # по строкам: выше строки — раньше, в строке — по x
             index = 0
             for c in siblings:
                 b = tree.bounds(c)

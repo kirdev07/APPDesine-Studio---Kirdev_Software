@@ -250,7 +250,7 @@ def m3_search_bar(c: _Ctx) -> Node:
     return c.frame("Строка поиска", "horizontal",
                    [c.icon(24, color=c.s["onSurface"], glyph="search"),
                     c.text("Найти в сообщениях", 16, c.s["onSurfaceVariant"], name="Плейсхолдер", sizing_h="fill"),
-                    c.icon(30, "Аватар", c.s["primaryContainer"])],
+                    c.icon(30, "Аватар", c.s["onSurfaceVariant"], glyph="account_circle")],
                    x=c.d(16), w=c.width_dp - 32, h=56, radius=28, pad_l=16, pad_r=16, gap=16,
                    fill=c.s["surfaceContainerHigh"], cross_align="center", constraint_h="left_right",
                    role="m3.search_bar")
