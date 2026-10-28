@@ -55,6 +55,8 @@ class Appearance:
     density: str = "comfortable"
     app_theme: str = "design"     # тема готового приложения: design — как в дизайне, system — как в телефоне
     dynamic_color: bool = False   # цвета из обоев телефона (Android 12+)
+    app_icon: str = ""            # иконка приложения: ресурс-картинка 432×432 (пусто — стандартная)
+    app_icon_bg: str = ""         # подложка адаптивной иконки Android
 
     def to_dict(self) -> dict:
         return {
@@ -65,6 +67,7 @@ class Appearance:
             "density": self.density,
             "app_theme": self.app_theme,
             "dynamic_color": self.dynamic_color,
+            **({"app_icon": self.app_icon, "app_icon_bg": self.app_icon_bg} if self.app_icon else {}),
         }
 
     @classmethod
@@ -79,6 +82,8 @@ class Appearance:
             density=str(d.get("density", "comfortable")),
             app_theme="system" if d.get("app_theme") == "system" else "design",
             dynamic_color=bool(d.get("dynamic_color", False)),
+            app_icon=check_prop("asset_id", d.get("app_icon", ""), "image"),
+            app_icon_bg=check_prop("fill", d.get("app_icon_bg", "")),
         )
 
 

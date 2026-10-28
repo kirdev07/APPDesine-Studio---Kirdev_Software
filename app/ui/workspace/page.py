@@ -525,6 +525,8 @@ class WorkspacePage(QMainWindow):
             m.addAction(self.a_copy_style)
             if ed.style_clipboard:
                 m.addAction(self.a_paste_style)
+            if len(ed.selection) == 1 and hasattr(self.window(), "make_app_icon"):
+                m.addAction("Сделать иконкой приложения", self.window().make_app_icon)
             if self.a_replace_symbol.isEnabled():
                 m.addAction(self.a_replace_symbol)
             if len(ed.selection) == 1:

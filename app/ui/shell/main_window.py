@@ -270,7 +270,11 @@ class MainWindow(QMainWindow):
                     self.studio_actions.append(a)
                 sub.addSeparator()
             if title == "Экспорт":
-                for text, sc, slot in (("Проверка проекта", "F7", self.show_validator),
+                for text, sc, slot in (("Экраны в PNG…", "Ctrl+Shift+E", self.export_png),
+                                       ("Экраны в PDF…", None, self.export_pdf),
+                                       ("Показ на весь экран", "Shift+F5", self.present),
+                                       ("Иконка приложения из выделенного", None, self.make_app_icon),
+                                       ("Проверка проекта", "F7", self.show_validator),
                                        ("AI-экспорт для Claude Code…", "Ctrl+E", lambda: self.show_page(PAGE_EXPORT)),
                                        ("Задание для Claude Code (AI_TASK.md)", None, self.open_task)):
                     self.studio_actions.append(self._act(sub, text, QKeySequence(sc) if sc else None, slot))
@@ -521,6 +525,100 @@ class MainWindow(QMainWindow):
 
     def show_validator(self) -> None:
         self.show_page(PAGE_VALIDATE)
+
+    # ---------- экраны картинками и показ ----------
+    def _export_dir(self) -> str:
+        from pathlib import Path
+        base = Path(self.ctx.settings.get("general/projects_dir", str(Path.home()))) / "Экспорт"
+        return str(base / (self.doc.meta.title if self.doc else "проект"))
+
+    def export_png(self, folder: str | None = None, scale: float | None = None, all_screens: bool | None = None):
+        """Экраны в PNG: текущий или все, масштаб 0,5× – 3×; после — открывается папка."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QComboBox, QFormLayout, QFileDialog
+        ed = self.project_page.editor
+        if self.doc is None or ed.screen() is None:
+            return None
+        if folder is None:
+            d = QDialog(self)
+            d.setWindowTitle("Экраны в PNG")
+            f = QFormLayout(d)
+            which = QComboBox()
+            which.addItem(f"Текущий — «{ed.screen().name}»", False)
+            which.addItem(f"Все экраны ({len(self.doc.screens)})", True)
+            f.addRow("Что", which)
+            size = QComboBox()
+            for k, t in ((1.0, "1× — как в макете"), (2.0, "2× — для печати и Retina"), (3.0, "3×"),
+                         (0.5, "0,5× — лёгкий, для чатов")):
+                size.addItem(t, k)
+            f.addRow("Размер", size)
+            bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            bb.accepted.connect(d.accept)
+            bb.rejected.connect(d.reject)
+            f.addRow(bb)
+            if d.exec() != QDialog.DialogCode.Accepted:
+                return None
+            folder = QFileDialog.getExistingDirectory(self, "Папка для картинок", self._export_dir())
+            if not folder:
+                return None
+            scale, all_screens = size.currentData(), which.currentData()
+        from app.ui.workspace.render_export import save_pngs
+        screens = list(self.doc.screens) if all_screens else [ed.screen()]
+        try:
+            paths = save_pngs(screens, self.doc, ed.artboard_color(), folder, scale or 1.0)
+        except OSError as exc:
+            QMessageBox.warning(self, "Экраны в PNG", str(exc))
+            return None
+        self.statusBar().showMessage(f"Сохранено картинок: {len(paths)} — {folder}", 8000)
+        if not self._quiet:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        return paths
+
+    def export_pdf(self, path: str | None = None):
+        """Все экраны одним PDF: страница — экран, текст векторный."""
+        from PySide6.QtWidgets import QFileDialog
+        ed = self.project_page.editor
+        if self.doc is None or not self.doc.screens:
+            return None
+        if path is None:
+            from pathlib import Path
+            path, _ = QFileDialog.getSaveFileName(self, "Экраны в PDF",
+                                                  str(Path(self._export_dir()) / f"{self.doc.meta.title}.pdf"),
+                                                  "PDF (*.pdf)")
+            if not path:
+                return None
+        from pathlib import Path
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        from app.ui.workspace.render_export import save_pdf
+        pages = save_pdf(list(self.doc.screens), self.doc, ed.artboard_color(), path, self.doc.meta.title)
+        self.statusBar().showMessage(f"PDF: {pages} стр. — {path}", 8000)
+        if not self._quiet:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        return path
+
+    _quiet = False  # тесты: не открывать проводник и просмотрщик
+
+    def present(self):
+        """Экраны проекта на весь экран, с текущего; стрелки — листать, Esc — выход."""
+        from app.ui.studio.present import Presentation
+        ed = self.project_page.editor
+        if self.doc is None or not self.doc.screens:
+            return None
+        start = next((i for i, s in enumerate(self.doc.screens) if s.id == ed.screen_id), 0)
+        self._presentation = Presentation(self.doc.screens, self.doc, ed.artboard_color(), start)
+        self._presentation.showFullScreen()
+        self._presentation.setFocus()
+        return self._presentation
+
+    def make_app_icon(self) -> bool:
+        ed = self.project_page.editor
+        nodes = ed.selected_nodes()
+        if len(nodes) != 1:
+            QMessageBox.information(self, "Иконка приложения",
+                                    "Выделите один элемент (например, квадрат или круг со значком) — он станет "
+                                    "иконкой приложения. Держите главное в центре: Android обрезает края по форме "
+                                    "иконки телефона.")
+            return False
+        return ed.set_app_icon(nodes[0].id)
 
     def export_screens(self, screen_ids: list[str]) -> None:
         """AI-экспорт с заранее выбранными экранами (например, где используется компонент)."""

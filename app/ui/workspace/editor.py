@@ -894,6 +894,46 @@ class Editor(QObject):
 
     color_picker = None  # холст: функция(обратный_вызов) — следующий щелчок по холсту берёт цвет
 
+    def set_app_icon(self, node_id: str | None = None) -> bool:
+        """Выделенный элемент — иконка приложения (картинка 432×432 в ресурсах проекта); None — убрать."""
+        import hashlib
+        from dataclasses import replace
+        from PySide6.QtCore import QBuffer, QIODevice
+        from app.core.document.model import Asset
+        from app.ui.workspace.render_export import icon_background, icon_image
+        s = self.screen()
+        if not s or not self.doc:
+            return False
+        ap = self.doc.meta.appearance
+        if node_id is None:
+            new_ap = replace(ap, app_icon="", app_icon_bg="")
+
+            def clear(doc):
+                doc.meta.appearance = replace(new_ap)
+            return self.patch("Убрать иконку приложения", clear)
+        node = tree.find(s, node_id)[0]
+        img = icon_image(s, self.doc, self.artboard_color(), node)
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        img.save(buf, "PNG")
+        data = bytes(buf.data())
+        sha = hashlib.sha256(data).hexdigest()
+        old = next((a for a in self.doc.assets if a.sha256 == sha), None)
+        asset = old or Asset(kind="image", name=f"Иконка приложения ({node.name or node.type})", ext="png",
+                             sha256=sha, size=len(data), source="App Design Studio (из дизайна)",
+                             author="автор проекта", license="Собственная работа", redistribution="allowed")
+        bg = icon_background(img, node)
+
+        def mutate(doc):
+            if old is None:
+                doc.assets.append(Asset.from_dict(asset.to_dict()))
+                doc.asset_data[asset.id] = data
+            doc.meta.appearance = replace(doc.meta.appearance, app_icon=asset.id, app_icon_bg=bg)
+        ok = self.patch("Иконка приложения", mutate)
+        if ok:
+            self.message.emit("Иконка приложения готова — она попадёт в Android-проект и APK")
+        return ok
+
     def set_instance_variant(self, axis: str, value: str) -> None:
         """Выбрать значение свойства варианта у выделенных копий компонента."""
         s = self.screen()
@@ -1012,6 +1052,8 @@ class Editor(QObject):
     def asset_usage(self, asset_id: str) -> int:
         if not self.doc:
             return 0
+        if self.doc.meta.appearance.app_icon == asset_id:  # иконка приложения — тоже использование
+            return 1
         roots = [n for s in self.doc.screens for n in s.nodes] + [c.root for c in self.doc.components]
         n_nodes = sum(1 for n, _, _ in tree.walk(roots) if n.asset_id == asset_id)
         a = self.doc.asset(asset_id)

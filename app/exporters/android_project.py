@@ -821,11 +821,15 @@ dependencies {{
     debugImplementation(libs.androidx.ui.tooling)
 }}
 '''
+        has_icon = bool(self.doc.meta.appearance.app_icon
+                        and self.doc.asset_data.get(self.doc.meta.appearance.app_icon))
+        icon_attrs = ('\n        android:icon="@mipmap/ic_launcher"\n        android:roundIcon="@mipmap/ic_launcher_round"'
+                      if has_icon else "")
         out["app/src/main/AndroidManifest.xml"] = f'''<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
         android:allowBackup="true"
-        android:label="@string/app_name"
+        android:label="@string/app_name"{icon_attrs}
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
@@ -840,6 +844,23 @@ dependencies {{
 </manifest>
 '''
         esc = app_name.replace("&", "&amp;").replace("<", "&lt;").replace("'", "\\'").replace('"', '\\"')
+        icon = self.doc.meta.appearance.app_icon
+        data = self.doc.asset_data.get(icon) if icon else None
+        if data:  # иконка из дизайна: адаптивная (Android 8+), картинка в безопасной зоне на подложке
+            out["app/src/main/res/drawable-nodpi/ic_launcher_art.png"] = data
+            bg = self.doc.meta.appearance.app_icon_bg or "#FFFFFF"
+            out["app/src/main/res/values/ic_launcher_background.xml"] = (
+                '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
+                f'    <color name="ic_launcher_background">{bg}</color>\n</resources>\n')
+            xml = ('<?xml version="1.0" encoding="utf-8"?>\n'
+                   '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+                   '    <background android:drawable="@color/ic_launcher_background" />\n'
+                   '    <foreground>\n'
+                   '        <inset android:drawable="@drawable/ic_launcher_art" android:inset="16.7%" />\n'
+                   '    </foreground>\n'
+                   '</adaptive-icon>\n')
+            out["app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml"] = xml
+            out["app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml"] = xml
         out["app/src/main/res/values/strings.xml"] = f'<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <string name="app_name">{esc}</string>\n</resources>\n'
         for aid, (name, data, ext) in sorted(self._drawable_files.items()):
             out[f"app/src/main/res/drawable/{name}.{ext}"] = data
