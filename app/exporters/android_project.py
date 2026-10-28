@@ -141,6 +141,21 @@ class _Screen:
                 if d is not None and a["axis"] in d.variants:
                     self.variant_vars.setdefault(n.id, {}).setdefault(
                         a["axis"], ident(f"variant {n.name} {a['axis']}", False, self.used, "variant"))
+        # состояния своих компонентов: действие «Состояние компонента» и встроенное переключение по нажатию
+        self.state_vars: dict[str, str] = {}
+        self.state_toggle: dict[str, tuple[str, str]] = {}
+        for it in self.its:
+            for a in it.actions:
+                n = m.get(a.get("node_id", "")) if a["type"] == "set_state" else None
+                d = gen.doc.component(n.component_id) if n is not None and n.is_instance else None
+                if d is not None and a["state"] in ("default", *d.states) and n.id not in self.variant_vars:
+                    self.state_vars.setdefault(n.id, ident(f"state {n.name}", False, self.used, "state"))
+        for n, _, _ in tree.walk(s.nodes):
+            d = gen.doc.component(n.component_id) if n.is_instance and not n.ref else None
+            toggle = d.behavior.get("toggle", []) if d is not None else []
+            if len(toggle) == 2 and all(t in ("default", *d.states) for t in toggle) and n.id not in self.variant_vars:
+                self.state_vars.setdefault(n.id, ident(f"state {n.name}", False, self.used, "state"))
+                self.state_toggle[n.id] = (toggle[0], toggle[1])
         for n, _, _ in tree.walk(s.nodes):
             if n.type == "text" and n.editable:
                 self.inputs[n.id] = ident(f"input {n.name}", False, self.used, "input")
@@ -225,10 +240,12 @@ class _Screen:
                 else:  # следующее значение по кругу
                     steps = "; ".join(f"{kstr(v)} -> {kstr(vals[i + 1])}" for i, v in enumerate(vals[:-1]))
                     out.append(f"{var} = when ({var}) {{ {steps}; else -> {kstr(vals[0])} }}")
+            elif t == "set_state" and a["node_id"] in self.state_vars:
+                out.append(f"{self.state_vars[a['node_id']]} = {kstr(a['state'])}")
             elif t == "set_text" and a["node_id"] in self.texts:
                 out.append(f"{self.texts[a['node_id']]} = {self.template(str(a['text']))}")
             else:
-                out.append(f"// TODO: действие «{t}» (состояния компонентов и анимации — вручную)")
+                out.append(f"// TODO: действие «{t}» (анимации и элементы вне экрана — вручную)")
         return out
 
     def template(self, text: str) -> str:
@@ -242,24 +259,56 @@ class _Screen:
 
     def handlers(self, n, ind: str) -> list[str]:
         """Modifier-обработчики событий узла (нажатие, долгое, двойное)."""
-        mine = {}
+        mine, swipes = {}, {}
         for it in self.its:
             if it.node_id == n.id and it.trigger in ("tap", "long_press", "double_tap"):
                 mine.setdefault(it.trigger, []).append(it)
+            elif it.node_id == n.id and it.trigger.startswith("swipe_"):
+                swipes.setdefault(it.trigger, []).append(it)
+        toggle = self.state_toggle.get(n.id)
+        if toggle is not None and not any(a["type"] == "set_state" and a.get("node_id") == n.id
+                                          for it in mine.get("tap", []) for a in it.actions):
+            mine.setdefault("tap", [])  # своё переключение компонента по нажатию (как в прототипе)
+        else:
+            toggle = None
+        out_swipe = self.swipe_handler(swipes, ind) if swipes else []
         if not mine:
-            return []
+            return out_swipe
+
         def body(trig):
             lines = []
             for it in mine.get(trig, []):
                 lines += self.actions_code(it, ind + "        ")
+            if trig == "tap" and toggle is not None:
+                var, (a, b) = self.state_vars[n.id], toggle
+                lines.append(f"{ind}        {var} = if ({var} == {kstr(a)}) {kstr(b)} else {kstr(a)}")
             return lines
         if set(mine) == {"tap"}:
-            return [f"{ind}.clickable {{"] + body("tap") + [f"{ind}}}"]
+            return [f"{ind}.clickable {{"] + body("tap") + [f"{ind}}}"] + out_swipe
         out = [f"{ind}.combinedClickable("]
         for trig, arg in (("tap", "onClick"), ("long_press", "onLongClick"), ("double_tap", "onDoubleClick")):
             if trig in mine or trig == "tap":
                 out += [f"{ind}    {arg} = {{"] + body(trig) + [f"{ind}    }},"]
-        return out + [f"{ind})"]
+        return out + [f"{ind})"] + out_swipe
+
+    def swipe_handler(self, swipes: dict, ind: str) -> list[str]:
+        """Свайпы: провести пальцем дальше 48 dp — по главному направлению срабатывает свой жест."""
+        def branch(trig, i2):
+            lines = []
+            for it in swipes.get(trig, []):
+                lines += self.actions_code(it, i2)
+            return lines or [f"{i2}Unit"]
+        i1, i2, i3 = ind + "        ", ind + "            ", ind + "                "
+        out = [f"{ind}.pointerInput(Unit) {{", f"{ind}    var dx = 0f", f"{ind}    var dy = 0f",
+               f"{ind}    detectDragGestures(", f"{ind}        onDragStart = {{ dx = 0f; dy = 0f }},",
+               f"{ind}        onDragEnd = {{", f"{i2}val far = 48.dp.toPx()",
+               f"{i2}if (abs(dx) > abs(dy) && abs(dx) > far) {{",
+               f"{i3}if (dx < 0) {{"] + branch("swipe_left", i3 + "    ") + [f"{i3}}} else {{"] +             branch("swipe_right", i3 + "    ") + [f"{i3}}}", f"{i2}}} else if (abs(dy) > far) {{",
+                                               f"{i3}if (dy < 0) {{"] + branch("swipe_up", i3 + "    ") +             [f"{i3}}} else {{"] + branch("swipe_down", i3 + "    ") + [f"{i3}}}", f"{i2}}}",
+                                                                      f"{i1}}},",
+                                                                      f"{ind}    ) {{ change, d -> change.consume(); dx += d.x; dy += d.y }}",
+                                                                      f"{ind}}}"]
+        return out
 
     # ---------- элементы ----------
     def modifier(self, n, parent, mode: str, ind: str, handlers: bool = True) -> list[str]:
@@ -408,6 +457,8 @@ class _Screen:
             return out
         if n.id in self.variant_vars and n.id not in self._expanding:
             return self.variant_node(n, parent, mode, ind)
+        if n.id in self.state_vars and n.id not in self._expanding:
+            return self.state_node(n, parent, mode, ind)
         hidden = not n.visible
         if n.id in self.vis:  # показ и скрытие — с плавным появлением
             var = self.vis[n.id]
@@ -590,6 +641,30 @@ class _Screen:
         finally:
             self._expanding.discard(n.id)
 
+    def state_node(self, n, parent, mode: str, ind: str) -> list[str]:
+        """Свой компонент, у которого меняется состояние: when по состоянию, каждая ветка — свой вид."""
+        from app.core.document.model import Node
+        from app.engines.components import engine as ce
+        from app.engines.layout import LayoutEngine
+        d = self.g.doc.component(n.component_id)
+        states = list(dict.fromkeys(["default", *d.states]))[:12]  # «default» есть всегда
+        var = self.state_vars[n.id]
+        self._expanding.add(n.id)
+        try:
+            out = [f"{ind}// «{n.name}»: вид зависит от состояния ({', '.join(states)})", f"{ind}when ({var}) {{"]
+            engine = LayoutEngine()
+            for i, st in enumerate(states):
+                c = Node.from_dict(n.to_dict())
+                c.state = st
+                ce.materialize(d, c, engine)
+                head = "else" if i == len(states) - 1 else kstr(st)
+                out.append(f"{ind}    {head} -> {{")
+                out += self.node(c, parent, mode, ind + "        ")
+                out.append(f"{ind}    }}")
+            return out + [f"{ind}}}"]
+        finally:
+            self._expanding.discard(n.id)
+
     def behind(self, n) -> str:
         """Заливка ближайшего предка — то, на чём лежит текст."""
         try:
@@ -754,6 +829,8 @@ class _Screen:
                 L.append(f"    var {var} by remember {{ mutableStateOf({kstr(cur)}) }}")
         for nid, var in self.inputs.items():
             L.append(f"    var {var} by remember {{ mutableStateOf(\"\") }}")
+        for nid, var in self.state_vars.items():
+            L.append(f"    var {var} by remember {{ mutableStateOf({kstr(m[nid].state)}) }}")
         opens = [it for it in self.its if it.trigger == "screen_open"]
         if opens:
             L.append("    LaunchedEffect(Unit) {")
@@ -772,10 +849,10 @@ class _Screen:
             L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)"),
                      "// TODO: анимации, которые не переведены автоматически (размер, цвет, скругление, шрифт):\n"
                      + "\n".join(f"//   {t}" for t in self.motion.todo))
-        swipes = [it for it in self.its if it.trigger.startswith("swipe") or it.trigger in ("hover_enter", "hover_leave")]
-        if swipes:
-            L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)"), f"// TODO: жесты {sorted({i.trigger for i in swipes})} — добавьте "
-                                              "pointerInput / detectDragGestures по описанию в AI_TASK.md")
+        hovers = [it for it in self.its if it.trigger in ("hover_enter", "hover_leave")]
+        if hovers:
+            L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)"),
+                     "// Наведение мыши на телефоне не бывает — эти правила в приложение не перенесены")
         return "\n".join(L)
 
 
@@ -866,6 +943,8 @@ class AndroidProject:
             "androidx.compose.ui.graphics.drawOutline", "androidx.compose.ui.graphics.drawscope.inset",
             "androidx.compose.ui.unit.DpOffset", "androidx.compose.animation.slideInVertically",
             "androidx.compose.ui.unit.IntOffset", "androidx.compose.ui.zIndex",
+            "androidx.compose.foundation.gestures.detectDragGestures", "androidx.compose.ui.input.pointer.pointerInput",
+            "kotlin.math.abs",
             "androidx.compose.ui.platform.LocalDensity", "androidx.compose.foundation.pager.HorizontalPager",
             "androidx.compose.foundation.pager.rememberPagerState",
             "androidx.compose.animation.slideOutVertically",
@@ -1266,7 +1345,7 @@ val AppTypography = Typography({chr(10) + typo + "," + chr(10) if typo else ""})
                  "## Что доработать", "",
                  "- Эффекты (тени Material 3, градиенты, размытие), переходы между экранами, плавное появление и "
                  "анимации непрозрачности и положения из студии — рабочий код.",
-                 "- Места с `TODO`: состояния своих компонентов, анимации размера и цвета, свайпы, SVG-изображения.",
+                 "- Места с `TODO`: анимации размера и цвета, SVG-изображения.",
                  "- Абсолютные смещения → адаптивная раскладка, тексты → `strings.xml`, данные → ViewModel.",
                  "- Подробное задание для ИИ — `AI_TASK.md` в корне пакета.", "",
                  "## Экраны", ""]

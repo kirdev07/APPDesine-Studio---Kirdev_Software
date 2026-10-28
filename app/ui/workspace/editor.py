@@ -565,6 +565,156 @@ class Editor(QObject):
         return tree.find(self.screen(), holder["id"])[0]
 
     # ---------- простое действие при нажатии (без студии «Логика») ----------
+    # ---------- меню и вкладки: что переключают пункты ----------
+    def switch_items(self, root_id: str) -> list:
+        """Пункты нижнего меню, вкладок или сегментов (дочерние фреймы)."""
+        from app.engines.preview import live
+        s = self.screen()
+        n = tree.node_map(s).get(root_id) if s else None
+        return live._items(n) if n is not None else []
+
+    def nav_targets(self, nav_id: str) -> list[str]:
+        """Экран каждого пункта нижнего меню ("" — не назначен)."""
+        s = self.screen()
+        out = []
+        for it in self.switch_items(nav_id):
+            act = self.tap_action(it.id)
+            out.append(act["screen_id"] if isinstance(act, dict) and act.get("type") == "navigate" else "")
+        if s is not None:  # пункт, выбранный на этом экране, — и есть этот экран
+            from app.engines.preview import live
+            n = tree.node_map(s)[nav_id]
+            sel = live.selected(n)
+            if 0 <= sel < len(out) and not out[sel]:
+                out[sel] = s.id
+        return out
+
+    def link_nav_item(self, nav_id: str, index: int, screen_id: str) -> bool:
+        """Пункт нижнего меню ведёт на экран. На каждом назначенном экране — такое же меню, где выбран «свой» пункт,
+        и все пункты переходят на свои экраны. Меню, что уже было на экране, заменяется. Одна запись истории."""
+        from app.core.document.behavior import Interaction
+        from app.engines.material.color import scheme
+        from app.engines.preview import live
+        s = self.screen()
+        if not s or not self.doc:
+            return False
+        nav = tree.node_map(s).get(nav_id)
+        items = self.switch_items(nav_id)
+        if nav is None or nav.role != "m3.nav_bar" or not 0 <= index < len(items):
+            return False
+        if screen_id and self.doc.screen(screen_id) is None:
+            return False
+        targets = self.nav_targets(nav_id)
+        targets[index] = screen_id
+        ap = self.doc.meta.appearance
+        sch = scheme(ap.accent, ap.theme != "light")
+        master = nav.to_dict()
+        sid = s.id
+        added: list[str] = []
+
+        def mutate(doc):
+            added.clear()
+            for tid in dict.fromkeys(t for t in [sid, *targets] if t):
+                scr = doc.screen(tid)
+                if scr is None or scr.platform != s.platform:
+                    continue
+                if tid == sid:
+                    copy = tree.find(scr, nav_id)[0]
+                else:
+                    old = next((n for n in scr.nodes if n.role == "m3.nav_bar"), None)
+                    copy = Node.from_dict(Editor._reid(master))
+                    copy.y = scr.height - copy.h
+                    if old is not None:  # меню на экране уже было — новое встаёт на его место
+                        copy.x, copy.y, copy.w = old.x, old.y, old.w
+                        scr.nodes[scr.nodes.index(old)] = copy
+                    else:  # меню не было: всё, что у нижнего края, поднимается над ним, содержимое — короче
+                        line = scr.height - copy.h
+                        for n in scr.nodes:
+                            if n.y >= line - 0.5 or (n.constraint_v == "bottom" and n.y + n.h > line + 0.5):
+                                for d, _, _ in tree.walk([n]):
+                                    d.y -= copy.h
+                            elif n.y < line < n.y + n.h and n.is_frame:
+                                n.h = line - n.y
+                        scr.nodes.append(copy)
+                        added.append(scr.name)
+                its = live._items(copy)
+                if tid in targets:
+                    live.restyle(copy, targets.index(tid), sch)
+                ids = {it.id for it in its}
+                doc.interactions = [x for x in doc.interactions
+                                    if not (x.screen_id == tid and x.trigger == "tap" and x.node_id in ids)]
+                for it, target in zip(its, targets):
+                    if target and target != tid:
+                        doc.interactions.append(Interaction(
+                            screen_id=tid, trigger="tap", node_id=it.id,
+                            actions=[{"type": "navigate", "screen_id": target, "transition": "fade",
+                                      "duration": 200, "easing": "ease_out"}]))
+        ok = self.patch("Пункт меню → экран", mutate)
+        if ok and added:  # меню не было — оно встало внизу и может закрыть поле ввода или кнопки
+            self.message.emit("Меню добавлено внизу: " + ", ".join(f"«{x}»" for x in added) +
+                              " — нижние элементы подняты над ним, проверьте экран")
+        return ok
+
+    def tab_panels(self, tabs_id: str) -> list[str]:
+        """Панель, которую показывает каждая вкладка или сегмент ("" — не назначена)."""
+        out = []
+        for it in self.switch_items(tabs_id):
+            rules = self.tap_rules(it.id)
+            acts = rules[0].actions if len(rules) == 1 and not rules[0].condition else []
+            show = next((a["node_id"] for a in acts if a["type"] == "set_visible" and a["mode"] == "show"), "")
+            out.append(show)
+        return out
+
+    def panel_candidates(self, tabs_id: str) -> list:
+        """Что может быть панелью вкладки: фреймы экрана вне самих вкладок и не их предки, без меню и панелей."""
+        s = self.screen()
+        if not s:
+            return []
+        try:
+            skip = {a.id for a in tree.ancestors(s, tabs_id)}
+        except Exception:
+            skip = set()
+        inside = {d.id for d in tree.descendants(tree.node_map(s)[tabs_id])}
+        return [n for n, _, _ in tree.walk(s.nodes) if n.is_frame and n.id != tabs_id and n.id not in skip
+                and n.id not in inside and n.role not in ("m3.nav_bar", "m3.top_app_bar")
+                and not n.role.startswith("m3.top_app_bar")]
+
+    def link_tab_panel(self, tabs_id: str, index: int, panel_id: str) -> bool:
+        """Вкладка (сегмент) показывает свою панель и скрывает панели остальных; сначала видна панель выбранной.
+        Одна запись истории."""
+        from app.core.document.behavior import Interaction
+        from app.engines.preview import live
+        s = self.screen()
+        if not s or not self.doc:
+            return False
+        root = tree.node_map(s).get(tabs_id)
+        items = self.switch_items(tabs_id)
+        if root is None or root.role not in ("m3.tabs", "m3.segmented") or not 0 <= index < len(items):
+            return False
+        if panel_id and panel_id not in {n.id for n in self.panel_candidates(tabs_id)}:
+            return False
+        panels = self.tab_panels(tabs_id)
+        panels[index] = panel_id
+        sel = live.selected(root)
+        sid, item_ids = s.id, [it.id for it in items]
+
+        def mutate(doc):
+            scr = doc.screen(sid)
+            m = tree.node_map(scr)
+            doc.interactions = [x for x in doc.interactions
+                                if not (x.screen_id == sid and x.trigger == "tap" and x.node_id in item_ids)]
+            used = [p for p in panels if p]
+            for j, (iid, p) in enumerate(zip(item_ids, panels)):
+                if not p:
+                    continue
+                acts = [{"type": "set_visible", "node_id": p, "mode": "show"}] + \
+                       [{"type": "set_visible", "node_id": q, "mode": "hide"} for q in dict.fromkeys(used) if q != p]
+                doc.interactions.append(Interaction(screen_id=sid, trigger="tap", node_id=iid, actions=acts))
+            shown = panels[sel] if 0 <= sel < len(panels) and panels[sel] else (used[0] if used else "")
+            for p in used:  # сначала видна панель выбранной вкладки
+                if p in m:
+                    m[p].visible = p == shown
+        return self.patch("Вкладка → панель", mutate)
+
     def tap_rules(self, node_id: str) -> list:
         s = self.screen()
         if not s or not self.doc:

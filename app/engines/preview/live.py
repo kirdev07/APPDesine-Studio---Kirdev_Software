@@ -48,6 +48,34 @@ def toggle(live: dict, root, index: int | None = None, frac: float | None = None
         live[root.id] = max(0.0, min(1.0, frac))
 
 
+def selected(n) -> int:
+    """Какой пункт выбран в дизайне (по виду): меню — заливка индикатора, вкладки — полоска снизу,
+    сегменты — заливка пункта, радиокнопки — закрашенная точка. Не видно — первый."""
+    items = _items(n)
+    for i, it in enumerate(items):
+        if n.role == "m3.nav_bar":
+            pill = next((c for c in it.children if c.is_frame), None)
+            on = pill is not None and bool(pill.fill)
+        elif n.role == "m3.tabs":
+            rects = [c for c in it.children if c.type == "rect"]
+            on = bool(rects) and bool(rects[-1].fill)
+        elif n.role == "m3.segmented":
+            on = bool(it.fill)
+        elif n.role == "m3.radio_group":
+            on = any(d.type == "ellipse" and d.fill and d.w < 14 * 3 for d in tree.descendants(it))
+        else:
+            on = False
+        if on:
+            return i
+    return 0
+
+
+def restyle(n, index: int, sch: dict) -> None:
+    """Нарисовать пункт index выбранным прямо в дизайне (копия меню на другом экране)."""
+    if n.role in _APPLY and n.role in CHOICES:
+        _APPLY[n.role](n, index, sch, 1.0)
+
+
 def slider_fraction(root, x: float) -> float:
     thumb = next((c for c in root.children if c.type == "ellipse"), None)
     tw = thumb.w if thumb is not None else 0

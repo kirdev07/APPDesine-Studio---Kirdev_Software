@@ -438,6 +438,7 @@ class Inspector(QScrollArea):
         self._build_node()
         self._build_screen()
         self._build_dev()
+        self._build_switch()
         for combo in body.findChildren(QComboBox):  # длинные пункты не должны расширять панель
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
@@ -839,6 +840,74 @@ class Inspector(QScrollArea):
         f.addRow(label("Как элемент ведёт себя на экране другого размера или в растянутом контейнере.", "Muted", wrap=True))
 
     # --- вектор и экземпляр
+    # --- что переключают пункты меню, вкладок и сегментов
+    def _build_switch(self) -> None:
+        self.sec_switch, f = self._section(
+            "Что переключают пункты",
+            "Нижнее меню: пункт ведёт на экран — на том экране появится такое же меню, где выбран этот пункт.\n"
+            "Вкладки и сегменты: пункт показывает свою панель, остальные панели скрываются.")
+        self.lay.removeWidget(self.sec_switch)
+        self.lay.insertWidget(1, self.sec_switch)  # сразу под «Слоем» — на виду
+        self.switch_hint = label("", "Muted")
+        self.switch_hint.setWordWrap(True)
+        f.addRow(self.switch_hint)
+        self.switch_rows = QWidget()
+        self.switch_form = QFormLayout(self.switch_rows)
+        self.switch_form.setContentsMargins(0, 0, 0, 0)
+        f.addRow(self.switch_rows)
+        self.switch_combos: list[QComboBox] = []
+        self._switch_key = None
+
+    def _refresh_switch(self) -> None:
+        ed = self.editor
+        nodes = ed.selected_nodes()
+        n = nodes[0] if len(nodes) == 1 else None
+        role = n.role if n is not None else ""
+        nav, tabs = role == "m3.nav_bar", role in ("m3.tabs", "m3.segmented")
+        self.sec_switch.setVisible(nav or tabs)
+        if not (nav or tabs):
+            self._switch_key = None
+            return
+        s = ed.screen()
+        items = ed.switch_items(n.id)
+        if nav:
+            current = ed.nav_targets(n.id)
+            choices = [(x.id, x.name) for x in ed.doc.screens if x.platform == s.platform]
+            self.switch_hint.setText("Пункт ведёт на экран. На том экране появится это меню с выбранным пунктом.")
+        else:
+            current = ed.tab_panels(n.id)
+            choices = [(x.id, x.name) for x in ed.panel_candidates(n.id)]
+            self.switch_hint.setText("Пункт показывает свою панель, остальные скрываются. Сначала видна панель "
+                                     "выбранного пункта.")
+        key = (n.id, tuple(current), tuple(choices), tuple(it.name for it in items))
+        if key == self._switch_key:
+            return
+        self._switch_key = key
+        while self.switch_form.rowCount():
+            self.switch_form.removeRow(0)
+        self.switch_combos = []
+        for i, it in enumerate(items):
+            texts = [d.text for d in tree.descendants(it) if d.type == "text" and d.text]
+            combo = QComboBox()
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+            combo.addItem("— ничего", "")
+            for cid, name in choices:
+                combo.addItem(name, cid)
+            combo.setCurrentIndex(max(0, combo.findData(current[i])))
+            # применить после сигнала: перестройка строк удаляет этот же список
+            combo.currentIndexChanged.connect(
+                lambda _=0, c=combo, k=i, nid=n.id, is_nav=nav: None if self._loading else QTimer.singleShot(
+                    0, lambda t=c.currentData(): self._commit_switch(nid, k, t, is_nav)))
+            self.switch_form.addRow(texts[0] if texts else f"Пункт {i + 1}", combo)
+            self.switch_combos.append(combo)
+
+    def _commit_switch(self, nid: str, index: int, target: str, nav: bool) -> None:
+        ok = self.editor.link_nav_item(nid, index, target or "") if nav else \
+            self.editor.link_tab_panel(nid, index, target or "")
+        if not ok:
+            self.editor.message.emit("Не получилось связать пункт — выберите другой вариант")
+
     # --- для разработчика
     def _build_dev(self) -> None:
         self.sec_dev, f = self._section("Для разработчика", "Размеры в dp, цвета с ролью темы и код Jetpack Compose "
@@ -1335,6 +1404,7 @@ class Inspector(QScrollArea):
             for w in (self.stroke_look, self.stroke_align, self.stroke_side_row, self.corner_row, *self.shadow_rows, self.shadow_inset):
                 self._row_visible(w, not self.simple)  # простой режим: без тонкой настройки обводки, углов и тени
             self._refresh_dev()
+            self._refresh_switch()
         finally:
             self._loading = False
 

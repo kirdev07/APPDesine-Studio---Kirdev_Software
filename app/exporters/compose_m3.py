@@ -63,6 +63,9 @@ def _dp(v: float) -> str:
     return f"{round(v, 1):g}.dp"
 
 
+from app.engines.preview import live  # noqa: E402 — какой пункт выбран в дизайне
+
+
 class Material:
     """Перевод ролей для одного экрана; gen — генератор экрана (_Screen)."""
 
@@ -78,6 +81,8 @@ class Material:
                 init = ROLES[n.role]
                 if n.role == "m3.slider":
                     init = f"{self._slider_value(n):.2f}f"
+                elif n.role in live.CHOICES:  # выбран пункт, выделенный в дизайне (меню на другом экране — свой)
+                    init = str(live.selected(n))
                 self.state[n.id] = var
                 self.decls.append(f"    var {var} by remember {{ mutableStateOf({init}) }}")
                 if n.role == "m3.password_field":  # показать / скрыть пароль
@@ -115,10 +120,16 @@ class Material:
         return "\n".join(m)
 
     def taps(self, node_id: str, ind: str) -> list[str]:
-        out = []
+        out, sets_state = [], False
         for it in self.g.its:
             if it.node_id == node_id and it.trigger == "tap":
                 out += self.g.actions_code(it, ind)
+                sets_state |= any(a["type"] == "set_state" and a.get("node_id") == node_id for a in it.actions)
+        toggle = self.g.state_toggle.get(node_id)
+        if toggle is not None and not sets_state:  # свой компонент на основе стандартного: переключение по нажатию
+            var = self.g.state_vars[node_id]
+            out.append(f"{ind}{var} = if ({var} == {self.g.kstr(toggle[0])}) {self.g.kstr(toggle[1])} "
+                       f"else {self.g.kstr(toggle[0])}")
         return out
 
     def text(self, t) -> str:
@@ -145,7 +156,13 @@ class Material:
             if k != 1:
                 M += f".height({_dp(40 * k)})"
             out = [f"{ind}{_BUTTONS[r]}(", f"{i2}onClick = {{"] + self.taps(n.id, i3) + [f"{i2}}},",
-                                                                                      f"{i2}modifier = {M},", f"{ind}) {{"]
+                                                                                      f"{i2}modifier = {M},"]
+            if n.fill:  # заливка из дизайна (и из состояния своего компонента) — цвет кнопки
+                kind = {"Button": "buttonColors", "FilledTonalButton": "filledTonalButtonColors",
+                        "OutlinedButton": "outlinedButtonColors", "TextButton": "textButtonColors",
+                        "ElevatedButton": "elevatedButtonColors"}[_BUTTONS[r]]
+                out.append(f"{i2}colors = ButtonDefaults.{kind}(containerColor = {self.g.g.color(n.fill)}),")
+            out.append(f"{ind}) {{")
             if icons:
                 out += [f"{i2}{self.icon(icons[0], i2, round(18 * k))}", f"{i2}Spacer(Modifier.width({_dp(8 * k)}))"]
             size = f", fontSize = {round(14 * k, 1)}.sp" if k != 1 else ""

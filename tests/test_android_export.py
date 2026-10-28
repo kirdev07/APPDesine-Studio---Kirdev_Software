@@ -77,7 +77,7 @@ def test_android_project_structure_and_code():
     assert "BasicTextField(" in screen and "state.imya = it" in screen            # поле ввода → переменная
     assert "onDoubleClick" in screen and "${fmt(state.imya)}" in screen          # двойное нажатие → текст
     assert "visiblePodskazka = true" in screen                                    # «Изменение текста» → показать
-    assert "TODO: жесты" in screen                                                # свайп честно помечен
+    assert "TODO: жесты" not in screen and ".pointerInput(Unit) {" in screen        # свайп — настоящий жест
     assert "painterResource(R.drawable.foto_geroya)" in screen
     assert f[f"{ROOT}/app/src/main/res/drawable/foto_geroya.png"] == PNG
     nav = f[f"{base}/navigation/AppNavHost.kt"].decode()
