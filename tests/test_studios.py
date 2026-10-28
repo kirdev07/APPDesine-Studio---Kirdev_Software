@@ -135,7 +135,7 @@ def test_builder_states_preview_and_structure(app_win):
     assert tree.find(ed.screen(), inst.id)[0].opacity == pytest.approx(0.38)
     # вкладки Анимация/Действия честно помечены этапом
     titles = [b.tabs.tabText(i) for i in range(b.tabs.count())]
-    assert titles == ["Дизайн", "Состояния", "Анимация", "Действия"]
+    assert titles == ["Дизайн", "Состояния", "Варианты", "Анимация", "Действия"]
 
 
 def test_nested_component_isolation(app_win):

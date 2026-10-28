@@ -791,6 +791,50 @@ class Editor(QObject):
                     comp_engine.materialize(dep, inst, self.engine)
         self.patch(f"Состояние: {state}", mutate)
 
+    def set_instance_variant(self, axis: str, value: str) -> None:
+        """Выбрать значение свойства варианта у выделенных копий компонента."""
+        s = self.screen()
+        ids = [n.id for n in self.selected_instances()]
+        if not s or not ids:
+            return
+        sid = s.id
+
+        def mutate(doc):
+            for i in ids:
+                inst = tree.find(doc.screen(sid), i)[0]
+                inst.variant = {**inst.variant, axis: value}
+                dep = doc.component(inst.component_id)
+                if dep is not None:
+                    comp_engine.materialize(dep, inst, self.engine)
+        self.patch(f"{axis}: {value}", mutate)
+
+    def add_variant_preset(self, component_id: str, key: str) -> bool:
+        """Готовый набор вариантов компонента: size — Размер S / M / L, style — Стиль, theme — Тема."""
+        from app.engines.components import variants
+        from app.engines.preview.devices import screen_dpi
+        defn = self.doc.component(component_id) if self.doc else None
+        if defn is None:
+            return False
+        s = self.screen()
+        k = screen_dpi(s) / 160 if s is not None and s.platform == "android" else 1.0
+        ap = self.doc.meta.appearance
+
+        def mutate(doc):
+            d = doc.component(component_id)
+            variants.add_preset(d, key, ap, k)
+            d.version += 1
+            comp_engine.sync_instances(doc, self.engine)
+        return self.patch(f"Варианты «{variants.PRESET_AXES[key]}»", mutate)
+
+    def make_variant_component(self, name: str, presets: tuple[str, ...] = ("size", "style")) -> str | None:
+        """Из выделения — компонент с готовыми вариантами; выделение становится его копией. Отмена — по шагам."""
+        cid = self.create_component(name)
+        if cid is None:
+            return None
+        for key in presets:
+            self.add_variant_preset(cid, key)
+        return cid
+
     def update_component(self, defn: ComponentDef) -> bool:
         data = defn.to_dict()
 

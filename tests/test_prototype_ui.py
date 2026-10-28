@@ -289,7 +289,7 @@ def test_builder_actions_and_transition_saved(qtbot, app_win):
     assert b.save()
     d = ed.doc.component(cid)
     assert d.transition["duration"] == 400 and d.behavior["hover"] and d.behavior["toggle"] == ["default", "pressed"]
-    assert [b.tabs.tabText(i) for i in range(b.tabs.count())] == ["Дизайн", "Состояния", "Анимация", "Действия"]
+    assert [b.tabs.tabText(i) for i in range(b.tabs.count())] == ["Дизайн", "Состояния", "Варианты", "Анимация", "Действия"]
 
 
 def test_logic_diagnostics_and_persistence(qtbot, app_win):

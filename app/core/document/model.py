@@ -12,8 +12,9 @@ from datetime import datetime, timezone
 # 4 — векторы, изображения, компоненты и экземпляры, ресурсы, стили текста и цвета;
 # 5 — анимации, переменные, взаимодействия, переходы и поведение состояний компонентов;
 # 6 — сценарии предпросмотра, прокрутка, поля ввода; 7 — роль фрейма (вид компонента Material 3);
-# 8 — эффекты: уровень тени, градиент, размытие; 9 — масштаб и поворот (для анимаций).
-SCHEMA_VERSION = 9
+# 8 — эффекты: уровень тени, градиент, размытие; 9 — масштаб и поворот (для анимаций);
+# 10 — варианты компонентов (свойства «Размер», «Стиль» … и выбор варианта у копии).
+SCHEMA_VERSION = 10
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -88,7 +89,7 @@ ELEVATION_DP = (0, 1, 3, 6, 8, 12)  # уровни тени Material 3, dp
 GRADIENTS = ("none", "linear", "radial")
 # Значения по умолчанию, которые не записываются в файл (старые проекты и экспорт не меняются).
 _OMIT_DEFAULT = {"ref": "", "role": "", "elevation": 0, "gradient": "none", "fill2": "", "grad_angle": 180.0,
-                 "blur": 0.0, "scale": 1.0, "rotation": 0.0, "fit": "fill"}
+                 "blur": 0.0, "scale": 1.0, "rotation": 0.0, "fit": "fill", "variant": {}}
 TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style")
 # ref — идентификатор узла мастер-компонента, из которого получен узел экземпляра.
 COMMON_PROPS = ("name", "visible", "locked", "ref")
@@ -100,7 +101,9 @@ FRAME_PROPS = ("layout", "gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "
 # Текстовое поле ввода в предпросмотре: текст можно набирать, значение можно связать с текстовой переменной.
 INPUT_PROPS = ("editable", "input_var")
 VECTOR_PROPS = ("path", "vb_w", "vb_h", "fill_rule")
-INSTANCE_PROPS = ("component_id", "overrides", "state")
+INSTANCE_PROPS = ("component_id", "overrides", "state", "variant")
+# В вариантах компонента, кроме стиля и содержимого, можно менять размеры и отступы (варианты размера S / M / L).
+VARIANT_GEOMETRY = ("w", "h", "pad_t", "pad_r", "pad_b", "pad_l", "gap")
 _STYLE = STYLE_PROPS + EFFECT_PROPS
 LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + _STYLE + TEXT_PROPS + CHILD_PROPS + INPUT_PROPS
 ALLOWED_PROPS = {
@@ -179,6 +182,10 @@ def check_prop(name: str, value, node_type: str = "rect"):
             raise ModelError(f"Неверный путь: {exc}") from None
     if name == "overrides":
         return check_overrides(value)
+    if name == "variant":
+        if not isinstance(value, dict) or len(value) > 16:
+            raise ModelError("Вариант копии должен быть объектом")
+        return {check_prop("state", k, "instance"): check_prop("state", v, "instance") for k, v in value.items()}
     if name in ("name", "text", "font_family"):
         if not isinstance(value, str) or len(value) > 100_000:
             raise ModelError(f"«{name}» должно быть строкой")
@@ -209,8 +216,9 @@ def check_prop(name: str, value, node_type: str = "rect"):
     return int(round(value / 100) * 100) if name == "font_weight" else value
 
 
-def check_overrides(value) -> dict:
-    """{ref: {свойство: значение}} — только переопределяемые свойства, каждое проверяется."""
+def check_overrides(value, extra: tuple = ()) -> dict:
+    """{ref: {свойство: значение}} — только переопределяемые свойства, каждое проверяется.
+    extra — дополнительно разрешённые свойства (размеры и отступы в вариантах компонента)."""
     if not isinstance(value, dict) or len(value) > 10_000:
         raise ModelError("Переопределения должны быть объектом")
     out = {}
@@ -219,9 +227,10 @@ def check_overrides(value) -> dict:
             raise ModelError("Неверное переопределение")
         clean = {}
         for k, v in props.items():
-            if k not in OVERRIDABLE:
+            if k not in OVERRIDABLE and k not in extra:
                 raise ModelError(f"Свойство «{k}» нельзя переопределять")
-            node_type = "vector" if k == "path" else "image" if k == "asset_id" else "text"
+            node_type = "vector" if k == "path" else "image" if k == "asset_id" else \
+                "frame" if k in ("pad_t", "pad_r", "pad_b", "pad_l", "gap") else "text"
             clean[k] = check_prop(k, v, node_type)
         if clean:
             out[ref] = clean
@@ -294,6 +303,7 @@ class Node:
     component_id: str = ""
     overrides: dict = field(default_factory=dict)
     state: str = "default"
+    variant: dict = field(default_factory=dict)  # копия компонента: {свойство варианта: значение}
     ref: str = ""
     children: list[Node] = field(default_factory=list)
     id: str = field(default_factory=new_id)
@@ -614,6 +624,20 @@ class ColorToken:
         return cls(name=name, value=value, id=check_prop("ref", _str(d, "id"), "rect"))
 
 
+def check_variants(value) -> dict:
+    """{свойство: {значение: переопределения}}: до 8 свойств, до 16 значений у каждого."""
+    if not isinstance(value, dict) or len(value) > 8:
+        raise ModelError("Неверные варианты компонента")
+    out = {}
+    for axis, vals in value.items():
+        check_prop("state", axis, "instance")
+        if not isinstance(vals, dict) or not 1 <= len(vals) <= 16:
+            raise ModelError(f"У свойства «{axis}» должно быть от 1 до 16 значений")
+        out[axis] = {check_prop("state", v, "instance"): check_overrides(ov, VARIANT_GEOMETRY)
+                     for v, ov in vals.items()}
+    return out
+
+
 @dataclass
 class ComponentDef:
     """Мастер-компонент: корневой фрейм и состояния (переопределения поверх мастера)."""
@@ -626,6 +650,8 @@ class ComponentDef:
     version: int = 1
     transition: dict = field(default_factory=lambda: {"duration": 150, "easing": "ease_in_out"})
     behavior: dict = field(default_factory=lambda: {"hover": False, "press": False, "toggle": []})
+    # варианты: {свойство: {значение: переопределения}}; первое значение — по умолчанию (обычно пустое)
+    variants: dict = field(default_factory=dict)
     id: str = field(default_factory=new_id)
 
     def to_dict(self) -> dict:
@@ -634,6 +660,8 @@ class ComponentDef:
                 "states": {k: {r: dict(p) for r, p in v.items()} for k, v in self.states.items()},
                 "transition": dict(self.transition),
                 "behavior": {**self.behavior, "toggle": list(self.behavior.get("toggle", []))},
+                **({"variants": {ax: {v: {r: dict(p) for r, p in ov.items()} for v, ov in vals.items()}
+                                 for ax, vals in self.variants.items()}} if self.variants else {}),
                 "root": self.root.to_dict()}
 
     @classmethod
@@ -666,7 +694,8 @@ class ComponentDef:
         return cls(name=name, root=root, category=_str(d, "category", "Мои компоненты", 200), platform=platform,
                    description=_str(d, "description", limit=5000), states=clean, version=version,
                    transition=check_transition(d.get("transition", {})),
-                   behavior=check_behavior(d.get("behavior", {})), id=cid)
+                   behavior=check_behavior(d.get("behavior", {})), variants=check_variants(d.get("variants", {})),
+                   id=cid)
 
 
 @dataclass

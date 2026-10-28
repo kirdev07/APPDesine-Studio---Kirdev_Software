@@ -165,6 +165,9 @@ class WorkspacePage(QMainWindow):
         self.a_unwrap = self._action("Убрать контейнер / разгруппировать", ed.ungroup_selection)
         self.a_responsive = self._action("Проверка адаптивности…", self.show_responsive, "Ctrl+Alt+R")
         self.a_make_component = self._action("Создать компонент…", self.make_component, "Ctrl+Alt+K")
+        self.a_make_variants = self._action("Компонент с вариантами (размер и стиль)…", self.make_variant_component)
+        self.a_make_variants.setToolTip("Из выделения — компонент с вариантами «Размер» S / M / L и «Стиль»; "
+                                        "у копии они выбираются в свойствах")
         self.a_detach = self._action("Отвязать копию от компонента", ed.detach_selection)
         self.a_reset_over = self._action("Сбросить переопределения", ed.reset_overrides_selection)
         self.a_replace = self._action("Заменить на компонент…", self.replace_dialog, "Ctrl+R")
@@ -478,6 +481,7 @@ class WorkspacePage(QMainWindow):
                 m.addAction(a)
             m.addSeparator()
             m.addAction(self.a_make_component)
+            m.addAction(self.a_make_variants)
             if not self.simple:
                 m.addAction(self.a_group)
                 m.addAction(self.a_wrap_v)
@@ -556,6 +560,16 @@ class WorkspacePage(QMainWindow):
         target = sel[0].id if len(sel) == 1 and sel[0].type in ("image", "rect", "frame") else None
         if aid:
             ed.place_image(aid, size, target_id=target)
+
+    def make_variant_component(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        nodes = self.editor.selected_nodes()
+        if not nodes:
+            return
+        name, ok = QInputDialog.getText(self, "Компонент с вариантами", "Имя компонента:",
+                                        text=nodes[0].name or "Компонент")
+        if ok and name.strip():
+            self.editor.make_variant_component(name.strip())
 
     def theme_dialog(self) -> None:
         from app.ui.studio.theme import ThemeDialog
@@ -677,6 +691,7 @@ class WorkspacePage(QMainWindow):
         self.a_wrap_h.setEnabled(sel)
         self.a_responsive.setEnabled(has_doc)
         self.a_make_component.setEnabled(sel)
+        self.a_make_variants.setEnabled(sel)
         has_inst = bool(ed.selected_instances()) if has_doc else False
         self.a_detach.setEnabled(has_inst)
         self.a_reset_over.setEnabled(has_inst)

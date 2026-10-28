@@ -649,6 +649,16 @@ class Inspector(QScrollArea):
         self.inst_state = QComboBox()
         self.inst_state.activated.connect(lambda: self.editor.set_instance_state(self.inst_state.currentData()))
         f.addRow("Состояние", self.inst_state)
+        self.variant_box = QWidget()  # выбор значения у каждого свойства варианта (Размер, Стиль …)
+        self.variant_form = QFormLayout(self.variant_box)
+        self.variant_form.setContentsMargins(0, 0, 0, 0)
+        f.addRow(self.variant_box)
+        self.variant_presets = QPushButton("+ Варианты ▾")
+        self.variant_presets.setToolTip("Добавить компоненту готовые варианты: размер S / M / L, стиль, тема")
+        self.variant_menu = QMenu(self.variant_presets)
+        self.variant_menu.aboutToShow.connect(self._fill_variant_menu)
+        self.variant_presets.setMenu(self.variant_menu)
+        f.addRow(self.variant_presets)
         row = QHBoxLayout()
         for text, slot in (("Сбросить переопределения", self.editor.reset_overrides_selection),
                            ("Отсоединить", self.editor.detach_selection)):
@@ -691,6 +701,32 @@ class Inspector(QScrollArea):
             for st in (defn.states if defn else {}):
                 self.inst_state.addItem(st, st)
             self.inst_state.setCurrentIndex(max(0, self.inst_state.findData(inst.state)))
+            while self.variant_form.rowCount():
+                self.variant_form.removeRow(0)
+            for axis, vals in (defn.variants if defn else {}).items():
+                combo = QComboBox()
+                for v in vals:
+                    combo.addItem(v, v)
+                chosen = inst.variant.get(axis) if inst.variant.get(axis) in vals else next(iter(vals), "")
+                combo.setCurrentIndex(max(0, combo.findData(chosen)))
+                combo.activated.connect(lambda _i, a=axis, c=combo: self.editor.set_instance_variant(a, c.currentData()))
+                self.variant_form.addRow(axis, combo)
+            self.variant_box.setVisible(bool(defn and defn.variants))
+
+    def _fill_variant_menu(self) -> None:
+        from app.engines.components.variants import PRESET_AXES
+        m = self.variant_menu
+        m.clear()
+        insts = self.editor.selected_instances()
+        defn = self.editor.doc.component(insts[0].component_id) if insts and self.editor.doc else None
+        if defn is None:
+            return
+        for key, axis in PRESET_AXES.items():
+            title = {"size": "Размер (S / M / L)", "style": "Стиль (заливка / тональный / контур / текст)",
+                     "theme": "Тема (светлая / тёмная)"}[key]
+            a = m.addAction(title + (" — заменить" if axis in defn.variants else ""),
+                            lambda k=key, c=defn.id: self.editor.add_variant_preset(c, k))
+            a.setToolTip(f"Свойство «{axis}» у компонента «{defn.name}» и всех его копий")
 
     def _image_mask(self, mode: str) -> None:
         """Маска картинки: без скругления, скругление 16 dp или круг (квадрат с радиусом половины стороны)."""

@@ -76,7 +76,15 @@ def materialize(defn: ComponentDef, inst: Node, engine: LayoutEngine) -> None:
         if not n.is_group:
             n.x, n.y = n.x + dx, n.y + dy
     by_ref = {n.ref: n for n, _, _ in tree.walk(kids)}
-    for source in (defn.states.get(inst.state, {}) if inst.state != "default" else {}, inst.overrides):
+    # размеры корня, которые меняют варианты, сначала возвращаются к мастеру (иначе S → M оставит размер S)
+    for vals in defn.variants.values():
+        for ov in vals.values():
+            for k in ("w", "h"):
+                if k in ov.get(ROOT_REF, {}):
+                    setattr(inst, k, getattr(root, k))
+    sources = [variant_overrides(defn, inst.variant)]
+    sources += [defn.states.get(inst.state, {}) if inst.state != "default" else {}, inst.overrides]
+    for source in sources:
         for ref, props in source.items():
             target = inst if ref == ROOT_REF else by_ref.get(ref)
             if target is not None:
@@ -93,6 +101,18 @@ def materialize(defn: ComponentDef, inst: Node, engine: LayoutEngine) -> None:
     for nid, props in changes.items():
         for k, v in props.items():
             setattr(m[nid], k, v)
+
+
+def variant_overrides(defn: ComponentDef, chosen: dict) -> dict:
+    """Переопределения выбранных значений всех свойств варианта (по порядку свойств; без выбора — первое)."""
+    out: dict[str, dict] = {}
+    for axis, vals in defn.variants.items():
+        if not vals:
+            continue
+        value = chosen.get(axis) if chosen.get(axis) in vals else next(iter(vals))
+        for ref, props in vals[value].items():
+            out.setdefault(ref, {}).update(props)
+    return out
 
 
 def _instances(nodes: list[Node]) -> list[Node]:

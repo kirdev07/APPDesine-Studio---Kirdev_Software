@@ -2,7 +2,7 @@
 
 Слева — компактная библиотека с поиском; в центре — холст (сетка, направляющие, масштаб, прямое
 редактирование) и режимы Дизайн / Интерактивный просмотр / Структура; справа — один инспектор с вкладками
-Дизайн / Состояния / Анимация / Действия; снизу — сворачиваемый предпросмотр состояний.
+Дизайн / Состояния / Варианты / Анимация / Действия; снизу — сворачиваемый предпросмотр состояний.
 Двойной клик по вложенному экземпляру изолирует его компонент. Мастер редактируется в отдельном документе
 со своей историей и попадает в проект одной записью истории по кнопке «Сохранить компонент».
 """
@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
 
 from app.core.document import tree
 from app.core.document.model import (
-    OVERRIDABLE, ROOT_REF, STATE_NAMES, ComponentDef, ModelError, Node, Screen, check_prop,
+    OVERRIDABLE, ROOT_REF, STATE_NAMES, VARIANT_GEOMETRY, ComponentDef, ModelError, Node, Screen, check_prop,
+    check_variants,
 )
 from app.engines.components import engine as ce
 from app.engines.components.library import (
@@ -41,7 +42,9 @@ STATE_RU = {"default": "По умолчанию", "hover": "Наведение",
 PROP_RU = {"visible": "Видимость", "fill": "Заливка", "stroke": "Обводка", "stroke_width": "Толщина обводки",
            "opacity": "Непрозрачность", "radius": "Скругление", "text": "Текст", "text_color": "Цвет текста",
            "font_family": "Шрифт", "font_size": "Размер шрифта", "font_weight": "Насыщенность",
-           "align": "Выравнивание", "asset_id": "Ресурс", "path": "Путь"}
+           "align": "Выравнивание", "asset_id": "Ресурс", "path": "Путь", "w": "Ширина", "h": "Высота",
+           "pad_t": "Отступ сверху", "pad_r": "Отступ справа", "pad_b": "Отступ снизу", "pad_l": "Отступ слева",
+           "gap": "Промежуток"}
 COMPONENT_FILTER = f"Компонент App Design Studio (*{EXTENSION})"
 
 
@@ -49,7 +52,8 @@ def parse_value(prop: str, text: str):
     t = text.strip()
     if prop == "visible":
         return t.lower() in ("1", "да", "true", "yes", "вкл")
-    if prop in ("stroke_width", "opacity", "radius", "font_size", "font_weight"):
+    if prop in ("stroke_width", "opacity", "radius", "font_size", "font_weight", "w", "h", "pad_t", "pad_r", "pad_b",
+                "pad_l", "gap"):
         return float(t.replace(",", "."))
     return t
 
@@ -69,6 +73,7 @@ class ComponentBuilderPage(QWidget):
         self.current_id: str | None = None
         self.breadcrumb: list[str] = []
         self.states: dict = {}
+        self.variants: dict = {}  # {свойство: {значение: переопределения}}
         self._states_dirty = False
 
         root = QHBoxLayout(self)
@@ -334,6 +339,7 @@ class ComponentBuilderPage(QWidget):
         dl.addWidget(ai)
         self.tabs.addTab(design, "Дизайн")
         self.tabs.addTab(self._build_states(), "Состояния")
+        self.tabs.addTab(self._build_variants(), "Варианты")
         self.tabs.addTab(self._build_anim_tab(), "Анимация")
         self.tabs.addTab(self._build_actions_tab(), "Действия")
         self.tabs.setMinimumWidth(340)
@@ -472,6 +478,54 @@ class ComponentBuilderPage(QWidget):
         v.addWidget(self.states_error)
         return w
 
+    def _build_variants(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.addWidget(label("Варианты — как в Figma: у компонента есть свойства (Размер, Стиль …) со значениями. "
+                          "У копии на экране значение каждого свойства выбирается в свойствах справа. "
+                          "Первое значение — мастер без изменений.", "Muted", wrap=True))
+        row = QHBoxLayout()
+        row.addWidget(button("Размер S/M/L", lambda: self.preset_variants("size"), "Маленький, средний и большой"))
+        row.addWidget(button("Стиль", lambda: self.preset_variants("style"),
+                             "Заливка, тональный, контур, текст — как у кнопок Material 3"))
+        row.addWidget(button("Тема", lambda: self.preset_variants("theme"), "Как в проекте и противоположная тема"))
+        v.addLayout(row)
+        self.variant_list = QListWidget()
+        self.variant_list.setFixedHeight(170)
+        self.variant_list.currentItemChanged.connect(self.refresh_variant_overrides)
+        v.addWidget(self.variant_list)
+        row = QHBoxLayout()
+        row.addWidget(button("+ Свойство…", self.add_variant_axis, "Новое свойство и его значения через запятую"))
+        row.addWidget(button("+ Значение…", self.add_variant_value, "Ещё одно значение выбранного свойства"))
+        row.addWidget(button("Удалить", self.remove_variant, object_name="Danger"))
+        v.addLayout(row)
+        v.addWidget(label("Что меняет выбранное значение", "H2"))
+        self.var_table = QTableWidget(0, 3)
+        self.var_table.setHorizontalHeaderLabels(["Элемент", "Свойство", "Значение"])
+        self.var_table.horizontalHeader().setStretchLastSection(True)
+        self.var_table.verticalHeader().setVisible(False)
+        self.var_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        v.addWidget(self.var_table, 1)
+        form = QFormLayout()
+        self.v_node = QComboBox()
+        self.v_prop = QComboBox()
+        for p in OVERRIDABLE + VARIANT_GEOMETRY:
+            self.v_prop.addItem(PROP_RU.get(p, p), p)
+        self.v_value = QLineEdit()
+        self.v_value.setPlaceholderText("например #FF0000, 48, Купить")
+        form.addRow("Элемент", self.v_node)
+        form.addRow("Свойство", self.v_prop)
+        form.addRow("Значение", self.v_value)
+        v.addLayout(form)
+        row = QHBoxLayout()
+        row.addWidget(button("Добавить / заменить", self.add_variant_override))
+        row.addWidget(button("Удалить строку", self.remove_variant_override, object_name="Danger"))
+        v.addLayout(row)
+        self.variants_error = label("", "Error", wrap=True)
+        v.addWidget(self.variants_error)
+        return w
+
     # ---------- открытие / сохранение ----------
     def is_dirty(self) -> bool:
         st = self.editor.stack
@@ -522,6 +576,7 @@ class ComponentBuilderPage(QWidget):
         else:
             self.breadcrumb = [component_id]
         self.states = json.loads(json.dumps(defn.states))
+        self.variants = json.loads(json.dumps(defn.variants))
         self._states_dirty = False
         self.f_name.setText(defn.name)
         self.f_category.setText(defn.category)
@@ -534,6 +589,7 @@ class ComponentBuilderPage(QWidget):
         self.crumbs.setText("  ›  ".join(names) + ("   (двойной клик по вложенному компоненту — изолировать)"
                                                     if len(names) == 1 else "   ← назад: щелчок по компоненту слева"))
         self.refresh_states()
+        self.refresh_variants()
         self.refresh_library()
         self.set_mode(0)
         self.canvas.fit()
@@ -582,7 +638,7 @@ class ComponentBuilderPage(QWidget):
                             category=self.f_category.text().strip() or "Мои компоненты",
                             platform=old.platform if old else "", description=self.f_desc.toPlainText(),
                             states=json.loads(json.dumps(self.states)), version=old.version if old else 1,
-                            id=self.current_id)
+                            variants=json.loads(json.dumps(self.variants)), id=self.current_id)
 
     def save(self) -> bool:
         defn = self._current_def()
@@ -710,6 +766,148 @@ class ComponentBuilderPage(QWidget):
         self.refresh_preview()
         self._update_title()
 
+    # ---------- варианты ----------
+    def refresh_variants(self, keep: tuple | None = None) -> None:
+        self.variant_list.blockSignals(True)
+        self.variant_list.clear()
+        for axis, vals in self.variants.items():
+            head = QListWidgetItem(f"▾ {axis}")
+            head.setData(ROLE, (axis, None))
+            f = head.font()
+            f.setBold(True)
+            head.setFont(f)
+            self.variant_list.addItem(head)
+            for i, (val, ov) in enumerate(vals.items()):
+                n = sum(len(p) for p in ov.values())
+                it = QListWidgetItem(f"      {val}   ·   " + ("мастер" if i == 0 and not n else str(n)))
+                it.setData(ROLE, (axis, val))
+                self.variant_list.addItem(it)
+        self.variant_list.blockSignals(False)
+        row = next((i for i in range(self.variant_list.count())
+                    if keep and self.variant_list.item(i).data(ROLE) == keep), 0)
+        self.variant_list.setCurrentRow(row if self.variant_list.count() else -1)
+        self.v_node.clear()
+        self.v_node.addItem("Корень компонента", ROOT_REF)
+        s = self.editor.screen()
+        if s and s.nodes:
+            for n, _, depth in tree.walk(s.nodes[0].children):
+                self.v_node.addItem("  " * depth + (n.name or n.type), n.id)
+        self.refresh_variant_overrides()
+
+    def _variant(self) -> tuple:
+        it = self.variant_list.currentItem()
+        return it.data(ROLE) if it else (None, None)
+
+    def refresh_variant_overrides(self, *_):
+        axis, val = self._variant()
+        names = {self.v_node.itemData(i): self.v_node.itemText(i).strip() for i in range(self.v_node.count())}
+        rows = [(ref, k, v) for ref, props in self.variants.get(axis, {}).get(val, {}).items()
+                for k, v in props.items()] if val is not None else []
+        self.var_table.setRowCount(len(rows))
+        for r, (ref, k, v) in enumerate(rows):
+            a = QTableWidgetItem(names.get(ref, ref))
+            a.setData(ROLE, (ref, k))
+            self.var_table.setItem(r, 0, a)
+            self.var_table.setItem(r, 1, QTableWidgetItem(PROP_RU.get(k, k)))
+            self.var_table.setItem(r, 2, QTableWidgetItem(str(v)))
+        self.variants_error.clear()
+
+    def _changed_variants(self, keep: tuple | None = None) -> None:
+        self._states_dirty = True
+        self.refresh_variants(keep)
+        self.refresh_preview()
+        self._update_title()
+
+    def preset_variants(self, key: str) -> None:
+        from app.engines.components import variants
+        from app.engines.preview.devices import screen_dpi
+        defn = self._current_def()
+        if defn is None:
+            return
+        s = self.main.screen()
+        k = screen_dpi(s) / 160 if s is not None and s.platform == "android" else 1.0
+        variants.add_preset(defn, key, self.main.doc.meta.appearance, k)
+        self.variants = json.loads(json.dumps(defn.variants))
+        self._changed_variants((variants.PRESET_AXES[key], None))
+
+    def add_variant_axis(self) -> None:
+        name, ok = QInputDialog.getText(self, "Новое свойство", "Имя свойства (например «Размер»):")
+        if not ok or not name.strip():
+            return
+        vals, ok = QInputDialog.getText(self, "Значения", f"Значения свойства «{name.strip()}» через запятую:",
+                                        text="Обычный, Акцент")
+        if not ok:
+            return
+        values = [x.strip() for x in vals.split(",") if x.strip()] or ["Обычный"]
+        new = {**self.variants, name.strip(): {x: {} for x in values}}
+        try:
+            check_variants(new)
+        except ModelError as exc:
+            self.variants_error.setText(str(exc))
+            return
+        self.variants = new
+        self._changed_variants((name.strip(), None))
+
+    def add_variant_value(self) -> None:
+        axis, _ = self._variant()
+        if axis is None:
+            self.variants_error.setText("Сначала выберите или добавьте свойство")
+            return
+        val, ok = QInputDialog.getText(self, "Новое значение", f"Значение свойства «{axis}»:")
+        if not ok or not val.strip():
+            return
+        new = json.loads(json.dumps(self.variants))
+        new[axis].setdefault(val.strip(), {})
+        try:
+            check_variants(new)
+        except ModelError as exc:
+            self.variants_error.setText(str(exc))
+            return
+        self.variants = new
+        self._changed_variants((axis, val.strip()))
+
+    def remove_variant(self) -> None:
+        axis, val = self._variant()
+        if axis is None:
+            return
+        what = f"значение «{val}» свойства «{axis}»" if val is not None else f"свойство «{axis}» со всеми значениями"
+        if QMessageBox.question(self, "Варианты", f"Удалить {what}?") != QMessageBox.StandardButton.Yes:
+            return
+        if val is None or len(self.variants[axis]) <= 1:
+            self.variants.pop(axis, None)
+            self._changed_variants()
+        else:
+            self.variants[axis].pop(val, None)
+            self._changed_variants((axis, None))
+
+    def add_variant_override(self) -> None:
+        axis, val = self._variant()
+        if val is None:
+            self.variants_error.setText("Выберите значение свойства (строку под его названием)")
+            return
+        ref, prop = self.v_node.currentData(), self.v_prop.currentData()
+        try:
+            node_type = "vector" if prop == "path" else "image" if prop == "asset_id" else \
+                "frame" if prop in VARIANT_GEOMETRY[2:] else "text"
+            value = check_prop(prop, parse_value(prop, self.v_value.text()), node_type)
+        except (ModelError, ValueError) as exc:
+            self.variants_error.setText(f"Неверное значение: {exc}")
+            return
+        self.variants[axis][val].setdefault(ref, {})[prop] = value
+        self._changed_variants((axis, val))
+
+    def remove_variant_override(self) -> None:
+        row = self.var_table.currentRow()
+        axis, val = self._variant()
+        if row < 0 or val is None:
+            return
+        ref, prop = self.var_table.item(row, 0).data(ROLE)
+        props = self.variants[axis][val].get(ref, {})
+        props.pop(prop, None)
+        if not props:
+            self.variants[axis][val].pop(ref, None)
+        self._changed_variants((axis, val))
+
     # ---------- предпросмотр и структура ----------
     def refresh_preview(self) -> None:
         self.preview.clear()
@@ -719,14 +917,17 @@ class ComponentBuilderPage(QWidget):
         platform, bg = self.preview_device.currentData()
         tmp_doc = scratch_document(self.main.doc, Screen(name="p", platform=platform, width=10, height=10))
         tmp_doc.components = [c for c in tmp_doc.components if c.id != defn.id] + [defn]
-        for st in ["default"] + list(self.states):
+        cases = [(STATE_RU.get(st, st), st, {}) for st in ["default"] + list(self.states)]
+        cases += [(f"{axis}: {val}", "default", {axis: val}) for axis, vals in self.variants.items()
+                  for val in list(vals)[1:]]
+        for title, st, variant in cases:
             inst = ce.make_instance(defn, 24, 24, self.editor.engine)
-            inst.state = st
+            inst.state, inst.variant = st, variant
             ce.materialize(defn, inst, self.editor.engine)
             scr = Screen(name=st, platform=platform, width=max(1, math.ceil(inst.w + 48)),
                          height=max(1, math.ceil(inst.h + 48)), nodes=[inst])
             pm = render_thumbnail(scr, bg, 180, 110, tmp_doc, bg="#0B0B0B")
-            it = QListWidgetItem(pixmap_icon(pm), STATE_RU.get(st, st))
+            it = QListWidgetItem(pixmap_icon(pm), title)
             it.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
             self.preview.addItem(it)
 
