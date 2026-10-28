@@ -5,11 +5,16 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QPainter, QPainterPath, QPen, QTransform
-from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QInputDialog
+from PySide6.QtGui import (
+    QBrush, QColor, QCursor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient, QTransform,
+)
+from PySide6.QtWidgets import (
+    QGraphicsBlurEffect, QGraphicsDropShadowEffect, QGraphicsItem, QGraphicsScene, QGraphicsView, QInputDialog,
+)
 
 from app.core.document import tree
-from app.core.document.model import Node, Screen
+from app.core.document.model import ELEVATION_DP, Node, Screen
+from app.engines.preview.devices import screen_dpi
 from app.ui.themes.fusion_amoled import TOKENS
 from app.ui.workspace.editor import (
     TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_PEN, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor,
@@ -111,11 +116,51 @@ def _paint_missing(p: QPainter, rect: QRectF, text: str) -> None:
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
 
+def fill_brush(n: Node, rect: QRectF):
+    """Заливка узла: цвет или градиент от fill к fill2 (угол как в CSS: 180° — сверху вниз)."""
+    if not n.fill:
+        return Qt.BrushStyle.NoBrush
+    if n.gradient == "none" or not n.fill2 or n.type == "text":
+        return QBrush(qcolor(n.fill))
+    if n.gradient == "radial":
+        g = QRadialGradient(rect.center(), max(rect.width(), rect.height()) / 2)
+    else:
+        a = math.radians(n.grad_angle)
+        dx, dy = math.sin(a), -math.cos(a)
+        half = (abs(rect.width() * dx) + abs(rect.height() * dy)) / 2
+        c = rect.center()
+        g = QLinearGradient(c - QPointF(dx * half, dy * half), c + QPointF(dx * half, dy * half))
+    g.setColorAt(0, qcolor(n.fill))
+    g.setColorAt(1, qcolor(n.fill2))
+    return QBrush(g)
+
+
+def apply_effects(item: QGraphicsItem, n: Node, k: float) -> None:
+    """Тень уровня Material 3 или размытие слоя (у элемента сцены может быть один эффект; размытие важнее)."""
+    if n.blur > 0:
+        eff = item.graphicsEffect()
+        if not isinstance(eff, QGraphicsBlurEffect):
+            eff = QGraphicsBlurEffect()
+            item.setGraphicsEffect(eff)
+        eff.setBlurRadius(n.blur)
+    elif n.elevation > 0:
+        e = ELEVATION_DP[n.elevation] * k
+        eff = item.graphicsEffect()
+        if not isinstance(eff, QGraphicsDropShadowEffect):
+            eff = QGraphicsDropShadowEffect()
+            item.setGraphicsEffect(eff)
+        eff.setBlurRadius(2.2 * e + 2 * k)
+        eff.setOffset(0, max(1.0, 0.6 * e))
+        eff.setColor(QColor(0, 0, 0, 110))
+    elif item.graphicsEffect() is not None:
+        item.setGraphicsEffect(None)
+
+
 def paint_node(p: QPainter, n: Node, assets=None) -> None:
     rect = QRectF(n.x, n.y, n.w, n.h)
     p.save()
     p.setOpacity(p.opacity() * n.opacity)
-    p.setBrush(QBrush(qcolor(n.fill)) if n.fill else Qt.BrushStyle.NoBrush)
+    p.setBrush(fill_brush(n, rect))
     if n.stroke and n.stroke_width > 0:
         pen = QPen(qcolor(n.stroke), n.stroke_width)
         pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
@@ -157,11 +202,13 @@ def paint_node(p: QPainter, n: Node, assets=None) -> None:
 
 
 class NodeItem(QGraphicsItem):
-    def __init__(self, node: Node, assets=None):
+    def __init__(self, node: Node, assets=None, k: float = 1.0):
         super().__init__()
         self.node = node
         self.assets = assets
+        self.k = k  # пикселей в dp — для теней
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, False)
+        apply_effects(self, node, k)
 
     def boundingRect(self) -> QRectF:
         n = self.node
@@ -177,6 +224,7 @@ class NodeItem(QGraphicsItem):
 
     def sync(self) -> None:
         self.prepareGeometryChange()
+        apply_effects(self, self.node, self.k)
         self.update()
 
     def paint(self, painter, option, widget=None):
@@ -216,6 +264,7 @@ def build_scene(scene: QGraphicsScene, screen: Screen, artboard_color: str, asse
     scene.clear()
     scene.addItem(ArtboardItem(screen, artboard_color))
     items: dict[str, NodeItem] = {}
+    k = screen_dpi(screen) / 160 if screen.platform == "android" else 1.0
 
     def rec(nodes, visible, parent_item):
         for n in nodes:
@@ -223,7 +272,7 @@ def build_scene(scene: QGraphicsScene, screen: Screen, artboard_color: str, asse
             if n.is_group:
                 rec(n.children, v, parent_item)
             elif v:
-                item = NodeItem(n, assets)
+                item = NodeItem(n, assets, k)
                 if parent_item is not None:
                     item.setParentItem(parent_item)
                 else:
@@ -463,11 +512,25 @@ class CanvasView(QGraphicsView):
     def zoom(self) -> float:
         return self.transform().m11()
 
-    def set_zoom(self, value: float, anchor_under_mouse: bool = False) -> None:
+    def set_zoom(self, value: float, anchor_under_mouse: bool = False, view_pos=None) -> None:
+        """Масштаб с неподвижной точкой: под курсором (колесо с Ctrl) или в центре окна (кнопки, клавиши).
+
+        Точка привязки считается вручную: встроенная привязка Qt берёт последнее движение мыши, которое холст
+        не передаёт, и экран «уплывал» вправо при увеличении."""
         value = max(ZOOM_MIN, min(ZOOM_MAX, value))
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse if anchor_under_mouse
-                                     else QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        vp = self.viewport()
+        pos = vp.rect().center()
+        if anchor_under_mouse:
+            p = view_pos if view_pos is not None else vp.mapFromGlobal(QCursor.pos())
+            if vp.rect().contains(p):
+                pos = p
+        target = self.mapToScene(pos)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setTransform(QTransform.fromScale(value, value))
+        drift = self.mapFromScene(target) - pos
+        h, v = self.horizontalScrollBar(), self.verticalScrollBar()
+        h.setValue(h.value() + drift.x())
+        v.setValue(v.value() + drift.y())
         self.zoom_changed.emit(value)
         self._refresh_overlay()
 
@@ -787,8 +850,9 @@ class CanvasView(QGraphicsView):
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            factor = math.pow(1.0015, event.angleDelta().y())
-            self.set_zoom(self.zoom() * factor, anchor_under_mouse=True)
+            delta = event.angleDelta().y() or event.angleDelta().x()
+            factor = math.pow(1.0015, delta)
+            self.set_zoom(self.zoom() * factor, anchor_under_mouse=True, view_pos=event.position().toPoint())
             return
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             bar = self.horizontalScrollBar()

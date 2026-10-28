@@ -73,7 +73,7 @@ def test_android_project_structure_and_code():
     ET.fromstring(f[f"{ROOT}/app/src/main/AndroidManifest.xml"])
     ET.fromstring(f[f"{ROOT}/app/src/main/res/values/strings.xml"])
     screen = f[f"{base}/ui/screens/FormaScreen.kt"].decode()
-    assert "fun FormaScreen(state: AppState, onNavigate: (String) -> Unit, onBack: () -> Unit)" in screen
+    assert "fun FormaScreen(state: AppState, onNavigate: (String, NavMotion) -> Unit, onBack: () -> Unit)" in screen
     assert "BasicTextField(" in screen and "state.imya = it" in screen            # поле ввода → переменная
     assert "onDoubleClick" in screen and "${fmt(state.imya)}" in screen          # двойное нажатие → текст
     assert "visiblePodskazka = true" in screen                                    # «Изменение текста» → показать

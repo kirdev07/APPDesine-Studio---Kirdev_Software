@@ -22,6 +22,8 @@ from app.core.document.model import PLATFORM_ANDROID, Screen
 from app.engines.animation import engine as anim
 from app.engines.logic.engine import Interpreter, format_value
 from app.engines.logic.runtime import apply_samples, compose, state_transition
+from app.engines.material.color import scheme
+from app.engines.preview import live
 from app.engines.preview.devices import TITLE_BAR, ViewSpec, adapt, default_profile
 from app.ui.themes.fusion_amoled import TOKENS
 from app.ui.workspace.canvas import asset_lookup, build_scene
@@ -31,6 +33,7 @@ DOUBLE_TAP_MS = 300
 SWIPE_DP = 32         # минимальная длина свайпа
 SLOP_PX = 8           # экранных пикселей до начала перетаскивания
 WHEEL_DP = 48         # прокрутка колесом за один щелчок
+RIPPLE_MS = 450       # волна нажатия
 KEY_ROWS = ("йцукенгшщзхъ", "фывапролджэ", "ячсмитьбю")
 KEY_BACK, KEY_SPACE, KEY_DONE = "⌫", "␣", "⏎"
 TRANSITION_RU = {"none": "без перехода", "fade": "затухание", "slide_left": "сдвиг влево",
@@ -233,6 +236,9 @@ class PrototypePlayer(QWidget):
         self._cache: dict = {}
         self.scroll: dict[str, float] = {}
         self.scroll_max: dict[str, float] = {}
+        self.live: dict[str, object] = {}     # живые компоненты Material 3: корень → включено / пункт / доля
+        self.ripple: tuple[QPointF, QRectF, float, float] | None = None  # центр, область, скругление, начало
+        self._tap_pt: QPointF | None = None
         self.focus_id: str | None = None
         self.screen: Screen | None = None
         self.spec: ViewSpec | None = None
@@ -267,6 +273,9 @@ class PrototypePlayer(QWidget):
     def advance(self, ms: float) -> None:
         self.now += ms
         busy = bool(self.active) or self.transition is not None
+        rippling = self.ripple is not None
+        if rippling and self.now - self.ripple[3] > RIPPLE_MS:
+            self.ripple = None
         if self.transition is not None and self.transition.done(self.now):
             self.transition = None
         still = []
@@ -280,6 +289,8 @@ class PrototypePlayer(QWidget):
         self.active = still
         if busy:
             self.render()
+        elif rippling:
+            self.view.viewport().update()
 
     def samples(self) -> dict:
         out = copy.deepcopy(self.persist)
@@ -327,6 +338,9 @@ class PrototypePlayer(QWidget):
             self._cache[key] = hit
         screen = Screen.from_dict(hit[0])
         apply_samples(screen, self.samples())
+        if self.live:
+            ap = self.doc.meta.appearance
+            live.apply(screen, self.live, scheme(ap.accent, ap.theme != "light"), spec.units(screen))
         return screen, hit[1]
 
     # ---------- отрисовка ----------
@@ -434,6 +448,8 @@ class PrototypePlayer(QWidget):
             p.restore()
         if self.keyboard_visible():
             self._paint_keyboard(p, s, u)
+        if self.ripple is not None and t is None:
+            self._paint_ripple(p)
         if self.touch_mode and self._press_pos is not None:
             p.save()
             p.setPen(Qt.PenStyle.NoPen)
@@ -458,6 +474,40 @@ class PrototypePlayer(QWidget):
             device.addRect(fr)
         p.fillPath(outside.subtracted(device), STAGE_BG)
         paint_device(p, s, spec, self.editor.artboard_color(), self.doc.meta.title, self.show_safe)
+
+    def _paint_ripple(self, p: QPainter) -> None:
+        """Волна нажатия Material: круг расходится от точки касания в пределах элемента и гаснет."""
+        center, rect, radius, start = self.ripple
+        pr = min(1.0, max(0.0, (self.now - start) / RIPPLE_MS))
+        reach = max(QPointF(rect.left() - center.x(), rect.top() - center.y()).manhattanLength(),
+                    QPointF(rect.right() - center.x(), rect.bottom() - center.y()).manhattanLength())
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, radius, radius)
+        light = self.doc.meta.appearance.theme == "light"
+        c = QColor(0, 0, 0) if light else QColor(255, 255, 255)
+        c.setAlphaF(0.22 * (1 - pr * pr))
+        p.save()
+        p.setClipPath(clip)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(c)
+        r = reach * (0.25 + 0.75 * (1 - (1 - pr) ** 3))
+        p.drawEllipse(center, r, r)
+        p.restore()
+
+    def _ripple_target(self, nid: str):
+        """Нажимаемый элемент под касанием: компонент Material 3, экземпляр или узел с правилом нажатия."""
+        m = tree.node_map(self.screen)
+        below = None  # предыдущий фрейм цепочки: у вкладок, навигации и радиокнопок волна — на пункте
+        for c in self._chain(nid):
+            n = m.get(c)
+            if n is None or n.is_group:
+                continue
+            if n.role in live.CHOICES and below is not None and any(ch is below for ch in n.children):
+                return below
+            if n.role.startswith("m3.") or n.is_instance or self.interp.handles("tap", c):
+                return n
+            below = n if n.is_frame else below
+        return None
 
     # ---------- экранная клавиатура (Android) ----------
     def keyboard_visible(self) -> bool:
@@ -609,6 +659,10 @@ class PrototypePlayer(QWidget):
             self.view.viewport().update()
             return
         self.pressed = (nid, nid)
+        tgt = None if self.reduced_motion else self._ripple_target(nid)
+        if tgt is not None:
+            self.ripple = (QPointF(p), QRectF(tgt.x, tgt.y, tgt.w, tgt.h), min(tgt.radius, tgt.w / 2, tgt.h / 2),
+                           self.now)
         m = tree.node_map(self.screen)
         for c in self._chain(nid):
             n = m.get(c)
@@ -678,6 +732,7 @@ class PrototypePlayer(QWidget):
         nid = self.hit(p)
         if not self._long_fired and nid is not None and (nid == origin or origin in self._chain(nid)
                                                           or nid in self._chain(origin)):
+            self._tap_pt = QPointF(p)
             self.tap(nid)
         else:
             self.render()
@@ -689,6 +744,12 @@ class PrototypePlayer(QWidget):
             self.dispatch("double_tap", nid)
             return
         field = self.editable_at(nid)
+        if self.screen is not None:
+            root, idx = live.target(self.screen, self._chain(nid))
+            if root is not None:
+                frac = live.slider_fraction(root, self._tap_pt.x()) if self._tap_pt is not None else None
+                live.toggle(self.live, root, idx, frac)
+        self._tap_pt = None
         self.dispatch("tap", nid)
         self.focus(field if field and self.screen is not None and field in tree.node_map(self.screen) else None)
 
@@ -760,6 +821,7 @@ class PrototypePlayer(QWidget):
             if e.kind in ("navigate", "back"):
                 nav = e
                 self.active, self.persist, self.scroll, self.focus_id = [], {}, {}, None
+                self.live, self.ripple = {}, None
             elif e.kind == "animation":
                 a = self.doc.animation(e.data["animation_id"])
                 if a is not None:
@@ -785,6 +847,7 @@ class PrototypePlayer(QWidget):
     def restart(self) -> None:
         self.active, self.persist, self.transition, self.hover_id = [], {}, None, None
         self.scroll, self.focus_id, self._last_tap = {}, None, None
+        self.live, self.ripple = {}, None
         self.effect_log = []
         effects = self.interp.reset()
         self._after_effects(effects)

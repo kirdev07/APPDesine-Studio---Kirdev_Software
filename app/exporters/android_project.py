@@ -17,6 +17,7 @@ from app.engines.material.color import ROLES as COLOR_ROLES, scheme
 from app.engines.material.type_scale import TYPE_SCALE, role_of
 from app.engines.preview.devices import screen_dpi
 from app.exporters.compose_m3 import Material
+from app.exporters.compose_motion import GRADIENT_KT, NAV_MOTION, Motion, brush, effects
 
 ROOT = "android_project"
 VERSIONS = {"agp": "8.13.2", "kotlin": "2.2.10", "compose_bom": "2025.09.01", "activity_compose": "1.11.0",
@@ -100,6 +101,7 @@ class _Screen:
                 self.inputs[n.id] = ident(f"input {n.name}", False, self.used, "input")
         self.kstr = kstr
         self.m3 = Material(self)
+        self.motion = Motion(self)
 
     def ident(self, text: str) -> str:
         return ident(text, False, self.used, "value")
@@ -115,7 +117,9 @@ class _Screen:
             t = a["type"]
             if t == "navigate":
                 route = self.g.routes.get(a["screen_id"])
-                out.append(f"onNavigate({kstr(route)})" if route else
+                motion = (f'NavMotion("{a.get("transition", "none")}", {int(a.get("duration", 300))}, '
+                          f'"{a.get("easing", "ease_in_out")}")')
+                out.append(f"onNavigate({kstr(route)}, {motion})" if route else
                            "// TODO: переход на экран другой платформы или вне выбранных экранов")
             elif t == "back":
                 out.append("onBack()")
@@ -138,6 +142,8 @@ class _Screen:
                 out.append(f"{self.vis[a['node_id']]} = true")
             elif t == "close_overlay":
                 out += [f"{self.vis[nid]} = false" for nid in sorted(self.overlays)] or ["// окно не открыто"]
+            elif t == "play_animation" and self.motion.action(a["animation_id"]):
+                out.append(self.motion.action(a["animation_id"]))
             elif t == "set_text" and a["node_id"] in self.texts:
                 out.append(f"{self.texts[a['node_id']]} = {self.template(str(a['text']))}")
             else:
@@ -217,13 +223,16 @@ class _Screen:
             m.append(f"{ind}    .height({self.dp(n.h)})")
         elif n.type == "text" and n.sizing_v == "fixed":
             m.append(f"{ind}    .heightIn(min = {self.dp(n.h)})")
-        if n.opacity < 1:
+        if self.motion.animated(n):  # анимация из студии: непрозрачность и смещение — в graphicsLayer
+            m += self.motion.layer(n, ind + "    ")
+        elif n.opacity < 1:
             m.append(f"{ind}    .alpha({_num(n.opacity)}f)")
         shape = "CircleShape" if n.type == "ellipse" else (f"RoundedCornerShape({self.dp(n.radius)})" if n.radius
                                                            else "RectangleShape")
+        m += effects(n, self.dp, shape, ind + "    ")
         if n.fill and n.type not in ("text", "image", "vector"):
             m.append(f"{ind}    .clip({shape})")
-            m.append(f"{ind}    .background({kcolor(n.fill)})")
+            m.append(f"{ind}    .background({brush(n, kcolor) or kcolor(n.fill)})")
         if n.stroke and n.stroke_width and n.type not in ("text", "vector"):
             m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {kcolor(n.stroke)}, {shape})")
         if handlers:
@@ -240,8 +249,9 @@ class _Screen:
                 out += self.node(c, parent, mode, ind)
             return out
         hidden = not n.visible
-        if n.id in self.vis:
-            out.append(f"{ind}if ({self.vis[n.id]}) {{")
+        if n.id in self.vis:  # показ и скрытие — с плавным появлением
+            out.append(f"{ind}AnimatedVisibility(visible = {self.vis[n.id]}, enter = fadeIn(), "
+                       f"exit = fadeOut()) {{")
             ind2 = ind + "    "
         elif hidden:
             return [f"{ind}// скрыт в дизайне: «{n.name or n.type}»"]
@@ -356,8 +366,8 @@ class _Screen:
              f"/** Экран «{s.name}» ({_num(s.width / self.k)} × {_num(s.height / self.k)} dp). Сгенерирован App Design Studio. */",
              "@OptIn(ExperimentalMaterial3Api::class)",
              "@Composable",
-             f"fun {self.fn}(state: AppState, onNavigate: (String) -> Unit, onBack: () -> Unit) {{"]
-        L += self.m3.decls
+             f"fun {self.fn}(state: AppState, onNavigate: (String, NavMotion) -> Unit, onBack: () -> Unit) {{"]
+        L += self.m3.decls + self.motion.decls
         m = tree.node_map(s)
         for nid, var in self.vis.items():
             L.append(f"    var {var} by remember {{ mutableStateOf({'true' if m[nid].visible and nid not in self.overlays else 'false'}) }}")
@@ -381,7 +391,11 @@ class _Screen:
               f"@Preview(widthDp = {round(s.width / self.k)}, heightDp = {round(s.height / self.k)}, showBackground = true)",
               "@Composable",
               f"private fun {self.fn}Preview() {{",
-              f"    AppTheme {{ {self.fn}(AppState(), onNavigate = {{}}, onBack = {{}}) }}", "}", ""]
+              f"    AppTheme {{ {self.fn}(AppState(), onNavigate = {{ _, _ -> }}, onBack = {{}}) }}", "}", ""]
+        if self.motion.todo:
+            L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class)"),
+                     "// TODO: анимации, которые не переведены автоматически (размер, цвет, скругление, шрифт):\n"
+                     + "\n".join(f"//   {t}" for t in self.motion.todo))
         swipes = [it for it in self.its if it.trigger.startswith("swipe") or it.trigger in ("hover_enter", "hover_leave")]
         if swipes:
             L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class)"), f"// TODO: жесты {sorted({i.trigger for i in swipes})} — добавьте "
@@ -406,11 +420,19 @@ class AndroidProject:
 
     def imports(self) -> list[str]:
         return [f"import {x}" for x in (
+            "androidx.compose.animation.AnimatedVisibility",
+            "androidx.compose.animation.fadeIn", "androidx.compose.animation.fadeOut",
+            "androidx.compose.animation.core.Animatable",
+            "androidx.compose.animation.core.CubicBezierEasing", "androidx.compose.animation.core.LinearEasing",
+            "androidx.compose.animation.core.RepeatMode", "androidx.compose.animation.core.infiniteRepeatable",
+            "androidx.compose.animation.core.keyframes",
             "androidx.compose.foundation.*", "androidx.compose.foundation.layout.*",
             "androidx.compose.foundation.selection.selectable",
             "androidx.compose.foundation.shape.*", "androidx.compose.foundation.text.BasicTextField",
             "androidx.compose.material3.*", "androidx.compose.runtime.*", "androidx.compose.ui.Alignment",
-            "androidx.compose.ui.Modifier", "androidx.compose.ui.draw.alpha", "androidx.compose.ui.draw.clip",
+            "androidx.compose.ui.Modifier", "androidx.compose.ui.draw.alpha", "androidx.compose.ui.draw.blur",
+            "androidx.compose.ui.draw.clip", "androidx.compose.ui.draw.shadow", "androidx.compose.ui.graphics.Brush",
+            "androidx.compose.ui.graphics.graphicsLayer",
             "androidx.compose.ui.geometry.Offset", "androidx.compose.ui.graphics.Color",
             "androidx.compose.ui.graphics.PathFillType",
             "androidx.compose.ui.graphics.RectangleShape", "androidx.compose.ui.graphics.SolidColor",
@@ -420,7 +442,9 @@ class AndroidProject:
             "androidx.compose.ui.text.font.FontWeight", "androidx.compose.ui.text.style.TextAlign",
             "androidx.compose.ui.tooling.preview.Preview", "androidx.compose.ui.unit.dp",
             "androidx.compose.ui.unit.sp", f"{self.pkg}.AppState", f"{self.pkg}.R", f"{self.pkg}.fmt",
-            f"{self.pkg}.ui.components.DesignIcon", f"{self.pkg}.ui.theme.AppTheme")]
+            f"{self.pkg}.navigation.NavMotion", f"{self.pkg}.navigation.StepEasing",
+            f"{self.pkg}.ui.components.DesignIcon", f"{self.pkg}.ui.components.linearAngleBrush",
+            f"{self.pkg}.ui.theme.AppTheme", "kotlinx.coroutines.coroutineScope", "kotlinx.coroutines.launch")]
 
     def literal(self, var_type: str, value) -> str:
         from app.core.document.behavior import coerce
@@ -606,30 +630,43 @@ fun fmt(value: Any): String = if (value is Double && value % 1.0 == 0.0) value.t
 '''
         routes = "\n".join(f'            "{self.routes[s.id]}" -> {self.fns[s.id]}(state, go, back)'
                            for s in self.screens)
+        out[f"{src}/navigation/NavMotion.kt"] = NAV_MOTION.replace("{pkg}", pkg)
+        out[f"{src}/ui/components/Gradients.kt"] = GRADIENT_KT.replace("{pkg}", pkg)
         imports = "\n".join(f"import {pkg}.ui.screens.{self.fns[s.id]}" for s in self.screens)
         out[f"{src}/navigation/AppNavHost.kt"] = f'''package {pkg}.navigation
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import {pkg}.AppState
 {imports}
 
+private data class Entry(val route: String, val motion: NavMotion)
+
 /**
- * Навигация по экранам дизайна: стек маршрутов; системная «Назад» возвращает на предыдущий экран.
+ * Навигация по экранам дизайна: стек маршрутов с переходами из прототипа (затухание, сдвиги);
+ * системная «Назад» возвращает на предыдущий экран обратным переходом.
  * При росте приложения замените на Navigation Compose — маршруты уже названы.
  */
 @Composable
 fun AppNavHost() {{
     val state = remember {{ AppState() }}
-    val stack = remember {{ mutableStateListOf("{start}") }}
-    val go: (String) -> Unit = {{ stack.add(it) }}
-    val back: () -> Unit = {{ if (stack.size > 1) stack.removeAt(stack.lastIndex) }}
+    val stack = remember {{ mutableStateListOf(Entry("{start}", NavMotion("none", 0))) }}
+    var forward by remember {{ mutableStateOf(true) }}
+    val go: (String, NavMotion) -> Unit = {{ route, motion -> forward = true; stack.add(Entry(route, motion)) }}
+    val back: () -> Unit = {{ if (stack.size > 1) {{ forward = false; stack.removeAt(stack.lastIndex) }} }}
     BackHandler(enabled = stack.size > 1) {{ back() }}
-    Crossfade(targetState = stack.last(), label = "screen") {{ route ->
-        when (route) {{
+    AnimatedContent(
+        targetState = stack.last(),
+        transitionSpec = {{ screenTransition(if (forward) targetState.motion else initialState.motion, forward) }},
+        label = "screen",
+    ) {{ entry ->
+        when (entry.route) {{
 {routes}
         }}
     }}
@@ -738,7 +775,9 @@ val AppTypography = Typography({chr(10) + typo + "," + chr(10) if typo else ""})
                  "- `ui/screens/*Screen.kt` — экраны: Auto Layout → Column / Row, остальное — Box со смещениями; "
                  "нажатия, переходы, переменные, показ/скрытие и поля ввода — рабочий код.", "",
                  "## Что доработать", "",
-                 "- Места с `TODO`: состояния своих компонентов, анимации, свайпы, SVG-изображения.",
+                 "- Эффекты (тени Material 3, градиенты, размытие), переходы между экранами, плавное появление и "
+                 "анимации непрозрачности и положения из студии — рабочий код.",
+                 "- Места с `TODO`: состояния своих компонентов, анимации размера и цвета, свайпы, SVG-изображения.",
                  "- Абсолютные смещения → адаптивная раскладка, тексты → `strings.xml`, данные → ViewModel.",
                  "- Подробное задание для ИИ — `AI_TASK.md` в корне пакета.", "",
                  "## Экраны", ""]

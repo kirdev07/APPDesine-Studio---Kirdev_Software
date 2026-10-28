@@ -47,9 +47,14 @@ def _v6_to_v7(raw: dict) -> dict:
     return raw
 
 
+def _v7_to_v8(raw: dict) -> dict:
+    # Схема 8 добавила эффекты (тень, градиент, размытие); у старых узлов их нет — значения по умолчанию.
+    return raw
+
+
 # {исходная_версия: функция(raw) -> raw}
 MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5,
-                                                 5: _v5_to_v6, 6: _v6_to_v7}
+                                                 5: _v5_to_v6, 6: _v6_to_v7, 7: _v7_to_v8}
 
 
 def migrate(raw: dict, version: int) -> dict:

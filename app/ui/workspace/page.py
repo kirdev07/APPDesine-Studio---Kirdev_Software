@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
-    QComboBox, QDockWidget, QLabel, QMainWindow, QSizePolicy, QToolBar, QToolButton, QWidget,
+    QComboBox, QDockWidget, QFrame, QHBoxLayout, QLabel, QMainWindow, QSizePolicy, QToolBar, QToolButton, QWidget,
 )
 
 from app.context import AppContext
@@ -196,20 +196,55 @@ class WorkspacePage(QMainWindow):
         self.pos_label.setObjectName("Muted")
         self.pos_label.setMinimumWidth(110)
         bar.addWidget(self.pos_label)
-        self.a_zoom_out.setIconText("−")
-        bar.addAction(self.a_zoom_out)
-        self.zoom_combo = QComboBox()
-        self.zoom_combo.setEditable(True)
-        self.zoom_combo.setFixedWidth(96)
-        for z in ZOOMS:
-            self.zoom_combo.addItem(f"{z}%", z)
-        self.zoom_combo.addItem("Целиком", 0)
-        self.zoom_combo.activated.connect(self._zoom_chosen)
-        self.zoom_combo.lineEdit().editingFinished.connect(self._zoom_typed)
-        bar.addWidget(self.zoom_combo)
-        self.a_zoom_in.setIconText("+")
-        bar.addAction(self.a_zoom_in)
+        self._build_zoom_box()
         return bar
+
+    def _build_zoom_box(self) -> None:
+        """Масштаб — плавающая панель в углу холста: видна при любой ширине окна (на панели инструментов
+        кнопки уходили за край)."""
+        box = QFrame(self.canvas)
+        box.setObjectName("ZoomBox")
+        box.setStyleSheet("#ZoomBox{background:#141414;border:1px solid #2A2A2A;border-radius:8px}"
+                          "#ZoomBox QToolButton{padding:4px 9px;font-size:15px}")
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(4, 3, 4, 3)
+        lay.setSpacing(2)
+        for action, text in ((self.a_zoom_out, "−"), (None, ""), (self.a_zoom_in, "+"), (self.a_zoom_fit, "⤢")):
+            if action is None:
+                self.zoom_combo = QComboBox()
+                self.zoom_combo.setEditable(True)
+                self.zoom_combo.setFixedWidth(92)
+                for z in ZOOMS:
+                    self.zoom_combo.addItem(f"{z}%", z)
+                self.zoom_combo.addItem("Целиком", 0)
+                self.zoom_combo.activated.connect(self._zoom_chosen)
+                self.zoom_combo.lineEdit().editingFinished.connect(self._zoom_typed)
+                self.zoom_combo.setToolTip("Масштаб. Ctrl + колесо — увеличить под курсором; колесо — прокрутка, "
+                                           "Shift + колесо — вбок; пробел или средняя кнопка — перемещение")
+                lay.addWidget(self.zoom_combo)
+                continue
+            b = QToolButton()
+            b.setDefaultAction(action)
+            b.setText(text)
+            b.setAutoRaise(True)
+            lay.addWidget(b)
+        box.adjustSize()
+        self.zoom_box = box
+        self.canvas.installEventFilter(self)
+        self._place_zoom_box()
+
+    def _place_zoom_box(self) -> None:
+        box = getattr(self, "zoom_box", None)
+        if box is not None:
+            m = 12
+            vp = self.canvas.viewport().geometry()
+            box.move(vp.right() - box.width() - m, vp.bottom() - box.height() - m)
+            box.raise_()
+
+    def eventFilter(self, obj, event):
+        if obj is self.canvas and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self._place_zoom_box()
+        return super().eventFilter(obj, event)
 
     # ---------- состояние ----------
     def set_document(self, doc: ProjectDocument | None, dirty: bool = False) -> None:

@@ -11,8 +11,9 @@ from datetime import datetime, timezone
 # 1 — этап 1 (экраны без содержимого); 2 — узлы и направляющие; 3 — фреймы, Auto Layout и привязки;
 # 4 — векторы, изображения, компоненты и экземпляры, ресурсы, стили текста и цвета;
 # 5 — анимации, переменные, взаимодействия, переходы и поведение состояний компонентов;
-# 6 — сценарии предпросмотра, прокрутка, поля ввода; 7 — роль фрейма (вид компонента Material 3).
-SCHEMA_VERSION = 7
+# 6 — сценарии предпросмотра, прокрутка, поля ввода; 7 — роль фрейма (вид компонента Material 3);
+# 8 — эффекты: уровень тени, градиент, размытие.
+SCHEMA_VERSION = 8
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -75,6 +76,13 @@ class Appearance:
 NODE_TYPES = ("rect", "ellipse", "text", "group", "frame", "vector", "image", "instance")
 GEOMETRY_PROPS = ("x", "y", "w", "h")
 STYLE_PROPS = ("fill", "stroke", "stroke_width", "radius", "opacity")
+# Эффекты: уровень тени Material 3 (0–5), градиент заливки (от fill к fill2 под углом), размытие слоя.
+EFFECT_PROPS = ("elevation", "gradient", "fill2", "grad_angle", "blur")
+ELEVATION_DP = (0, 1, 3, 6, 8, 12)  # уровни тени Material 3, dp
+GRADIENTS = ("none", "linear", "radial")
+# Значения по умолчанию, которые не записываются в файл (старые проекты и экспорт не меняются).
+_OMIT_DEFAULT = {"ref": "", "role": "", "elevation": 0, "gradient": "none", "fill2": "", "grad_angle": 180.0,
+                 "blur": 0.0}
 TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style")
 # ref — идентификатор узла мастер-компонента, из которого получен узел экземпляра.
 COMMON_PROPS = ("name", "visible", "locked", "ref")
@@ -87,17 +95,18 @@ FRAME_PROPS = ("layout", "gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "
 INPUT_PROPS = ("editable", "input_var")
 VECTOR_PROPS = ("path", "vb_w", "vb_h", "fill_rule")
 INSTANCE_PROPS = ("component_id", "overrides", "state")
-LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + TEXT_PROPS + CHILD_PROPS + INPUT_PROPS
+_STYLE = STYLE_PROPS + EFFECT_PROPS
+LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + _STYLE + TEXT_PROPS + CHILD_PROPS + INPUT_PROPS
 ALLOWED_PROPS = {
     "group": COMMON_PROPS,
-    "frame": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + FRAME_PROPS,
-    "instance": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + FRAME_PROPS + INSTANCE_PROPS,
-    "vector": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + VECTOR_PROPS,
-    "image": COMMON_PROPS + GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS + ("asset_id",),
+    "frame": COMMON_PROPS + GEOMETRY_PROPS + _STYLE + CHILD_PROPS + FRAME_PROPS,
+    "instance": COMMON_PROPS + GEOMETRY_PROPS + _STYLE + CHILD_PROPS + FRAME_PROPS + INSTANCE_PROPS,
+    "vector": COMMON_PROPS + GEOMETRY_PROPS + _STYLE + CHILD_PROPS + VECTOR_PROPS,
+    "image": COMMON_PROPS + GEOMETRY_PROPS + _STYLE + CHILD_PROPS + ("asset_id",),
 }
 # Свойства, которые экземпляр может переопределить у узлов мастера (и состояния компонента).
 OVERRIDABLE = ("visible", "fill", "stroke", "stroke_width", "opacity", "radius", "text", "text_color", "font_family",
-               "font_size", "font_weight", "align", "asset_id", "path")
+               "font_size", "font_weight", "align", "asset_id", "path", "elevation", "fill2", "blur")
 ROOT_REF = "__root__"  # ключ переопределений самого корня компонента
 STATE_NAMES = ("default", "hover", "focus", "pressed", "disabled", "loading", "empty", "error")
 ALIGNMENTS = ("left", "center", "right")
@@ -113,6 +122,7 @@ ENUMS = {
     "cross_align": ("start", "center", "end", "stretch"),
     "fill_rule": ("nonzero", "evenodd"),
     "scroll": ("none", "vertical", "horizontal"),
+    "gradient": GRADIENTS,
 }
 MAX_DEPTH = 32
 MAX_COORD = 1_000_000.0
@@ -129,6 +139,10 @@ def check_prop(name: str, value, node_type: str = "rect"):
     if name in ENUMS:
         if value not in ENUMS[name]:
             raise ModelError(f"Недопустимое значение «{name}»: {value!r}")
+        return value
+    if name == "elevation":
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < len(ELEVATION_DP):
+            raise ModelError("Уровень тени должен быть от 0 до 5")
         return value
     if name == "grid_columns":
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 64:
@@ -162,7 +176,7 @@ def check_prop(name: str, value, node_type: str = "rect"):
         if not isinstance(value, str) or len(value) > 100_000:
             raise ModelError(f"«{name}» должно быть строкой")
         return value
-    if name in ("fill", "stroke", "text_color"):
+    if name in ("fill", "stroke", "text_color", "fill2"):
         if not isinstance(value, str) or (value and not _COLOR.match(value)):
             raise ModelError(f"Неверный цвет «{name}»: {value!r}")
         return value.upper()
@@ -178,6 +192,8 @@ def check_prop(name: str, value, node_type: str = "rect"):
     for k in ("gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "min_w", "max_w", "min_h", "max_h"):
         limits[k] = (0, MAX_COORD)  # для max_* ноль означает «без ограничения»
     limits["vb_w"] = limits["vb_h"] = (0.001, MAX_COORD)
+    limits["grad_angle"] = (-360, 360)
+    limits["blur"] = (0, 250)
     lo, hi = limits.get(name, (-MAX_COORD, MAX_COORD))
     if not lo <= value <= hi:
         raise ModelError(f"«{name}» вне диапазона {lo}…{hi}")
@@ -218,6 +234,12 @@ class Node:
     stroke_width: float = 0.0
     radius: float = 0.0
     opacity: float = 1.0
+    # эффекты
+    elevation: int = 0
+    gradient: str = "none"
+    fill2: str = ""
+    grad_angle: float = 180.0     # как в CSS: 180 — сверху вниз, 90 — слева направо
+    blur: float = 0.0
     text: str = ""
     font_family: str = "Segoe UI"
     font_size: float = 16.0
@@ -288,7 +310,7 @@ class Node:
     def _props(self) -> tuple[str, ...]:
         props = COMMON_PROPS
         if not self.is_group:
-            props += GEOMETRY_PROPS + STYLE_PROPS + CHILD_PROPS
+            props += GEOMETRY_PROPS + _STYLE + CHILD_PROPS
         if self.type == "text":
             props += TEXT_PROPS + INPUT_PROPS
         if self.is_frame:
@@ -304,7 +326,7 @@ class Node:
     def to_dict(self) -> dict:
         d = {"id": self.id, "type": self.type}
         for k in self._props():
-            if k in ("ref", "role") and not getattr(self, k):
+            if k in _OMIT_DEFAULT and getattr(self, k) == _OMIT_DEFAULT[k]:
                 continue
             v = getattr(self, k)
             d[k] = dict(v) if isinstance(v, dict) else v

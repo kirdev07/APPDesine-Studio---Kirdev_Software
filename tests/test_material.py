@@ -100,14 +100,14 @@ def test_compose_export_real_material_components():
     assert _balanced(src)
     for call in ("TopAppBar(", "Switch(checked = ", "Checkbox(checked = ", "RadioButton(selected = ", "Slider(value = ",
                  "FilterChip(", "FloatingActionButton(", "FilledTonalButton(", "PrimaryTabRow(", "SegmentedButton(",
-                 "Snackbar(", "BadgedBox(", "LinearProgressIndicator(", "OutlinedTextField(", "NavigationBar(",
+                 "BadgedBox(", "LinearProgressIndicator(", "OutlinedTextField(", "NavigationBar(",
                  "NavigationBarItem(", "DesignIcon(", "@OptIn(ExperimentalMaterial3Api::class)",
                  "contentColor = MaterialTheme.colorScheme.onBackground", ".align(Alignment.BottomStart)"):
         assert call in src, call
-    snack = src[src.index("Snackbar("):]
+    snack = src[src.index("// Всплывающее сообщение"):]
     assert ".padding(start = 16.dp, end = 16.dp)" in snack[:400] and ".fillMaxWidth()" in snack[:400]
     items = src.split("NavigationBarItem(")
-    assert 'onNavigate("screen2")' not in items[1] and 'onNavigate("screen2")' in items[2]  # переход у второго пункта
+    assert 'onNavigate("screen2"' not in items[1] and 'onNavigate("screen2", NavMotion("none", 0, ' in items[2]  # переход у второго пункта
     assert "Column(" in src and "Удалить черновик?" in src                    # диалог — общей раскладкой
     theme = f[f"{base}/ui/theme/Theme.kt"].decode()
     assert "lightColorScheme(" in theme and "darkColorScheme(" in theme and "surfaceContainerHighest = " in theme

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.document import tree
-from app.core.document.model import Screen
+from app.core.document.model import ELEVATION_DP, Screen
 from app.libraries import components
 from app.libraries.catalog import DEVICES
 from app.ui.widgets import glyph_icon, label, pixmap_icon, separator
@@ -398,6 +398,30 @@ class Inspector(QScrollArea):
         self.opacity.valueChanged.connect(lambda v: self._commit_leaves("opacity", v / 100, "Непрозрачность"))
         f.addRow("Непрозрачность", self.opacity)
 
+        self.sec_fx, f = self._section("Эффекты")
+        self.elevation = QComboBox()
+        for lvl, dp in enumerate(ELEVATION_DP):
+            self.elevation.addItem("Нет" if lvl == 0 else f"Уровень {lvl} · {dp} dp", lvl)
+        self.elevation.setToolTip("Тень по уровням возвышения Material 3; в Android-проекте — Modifier.shadow")
+        self.elevation.currentIndexChanged.connect(
+            lambda: self._commit_leaves("elevation", self.elevation.currentData(), "Тень"))
+        f.addRow("Тень", self.elevation)
+        self.gradient = _combo([("none", "Нет"), ("linear", "Линейный"), ("radial", "Радиальный")])
+        self.gradient.setToolTip("Градиент от цвета заливки ко второму цвету")
+        self.gradient.currentIndexChanged.connect(self._commit_gradient)
+        f.addRow("Градиент", self.gradient)
+        self.fill2 = ColorField()
+        self.fill2.committed.connect(lambda v: self._commit_leaves("fill2", v, "Второй цвет градиента"))
+        f.addRow("Второй цвет", self.fill2)
+        self.grad_angle = _spin(-360, 360, 0, "°")
+        self.grad_angle.setToolTip("Направление линейного градиента: 180° — сверху вниз, 90° — слева направо")
+        self.grad_angle.valueChanged.connect(lambda v: self._commit_leaves("grad_angle", v, "Угол градиента"))
+        f.addRow("Угол", self.grad_angle)
+        self.blur = _spin(0, 250, 1, " px")
+        self.blur.setToolTip("Размытие слоя вместе с содержимым (на Android 12+ — Modifier.blur)")
+        self.blur.valueChanged.connect(lambda v: self._commit_leaves("blur", v, "Размытие"))
+        f.addRow("Размытие", self.blur)
+
         self.sec_text, f = self._section("Текст")
         self.text = QPlainTextEdit()
         self.text.setFixedHeight(80)
@@ -714,6 +738,7 @@ class Inspector(QScrollArea):
                       self.sec_inst):
                 w.setVisible(has)
             self.sec_style.setVisible(has)
+            self.sec_fx.setVisible(has)
             texts = [n for n in leaves if n.type == "text"]
             self.sec_text.setVisible(bool(texts))
             for w in (self.sec_screen, self.sec_guides, self.sec_project):
@@ -736,6 +761,14 @@ class Inspector(QScrollArea):
                     self.stroke_w.setValue(l0.stroke_width)
                     self.radius.setValue(l0.radius)
                     self.opacity.setValue(round(l0.opacity * 100))
+                    self.elevation.setCurrentIndex(l0.elevation)
+                    self.gradient.setCurrentIndex(max(0, self.gradient.findData(l0.gradient)))
+                    self.fill2.set_value(l0.fill2)
+                    self.grad_angle.setValue(l0.grad_angle)
+                    self.blur.setValue(l0.blur)
+                    linear = l0.gradient == "linear"
+                    self.fill2.setEnabled(l0.gradient != "none")
+                    self.grad_angle.setEnabled(linear)
                 if texts:
                     t0 = texts[0]
                     if self.text.toPlainText() != t0.text and not self.text.hasFocus():
@@ -810,6 +843,21 @@ class Inspector(QScrollArea):
         changes = {n.id: {prop: value} for n in leaves if getattr(n, prop) != value}
         if changes and not self.editor.set_props(changes, label_):
             self.refresh()  # неверное значение — вернуть показ к данным модели
+
+    def _commit_gradient(self) -> None:
+        """Градиент без второго цвета не виден: подставляется более тёмный вариант заливки."""
+        if self._loading:
+            return
+        kind = self.gradient.currentData()
+        changes = {}
+        for n in self.editor.selected_leaves():
+            props = {"gradient": kind} if n.gradient != kind else {}
+            if kind != "none" and not n.fill2:
+                props["fill2"] = QColor(n.fill or "#2F7BFF").darker(160).name().upper()
+            if props:
+                changes[n.id] = props
+        if changes:
+            self.editor.set_props(changes, "Градиент")
 
     def _commit_screen_size(self) -> None:
         s = self.editor.screen()

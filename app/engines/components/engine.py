@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from app.core.document import tree
 from app.core.document.model import (
-    FRAME_PROPS, OVERRIDABLE, ROOT_REF, STYLE_PROPS, ComponentDef, ModelError, Node, ProjectDocument, Screen,
+    EFFECT_PROPS, FRAME_PROPS, OVERRIDABLE, ROOT_REF, STYLE_PROPS, ComponentDef, ModelError, Node, ProjectDocument, Screen,
     check_prop, new_id,
 )
 from app.engines.layout import LayoutEngine
@@ -64,7 +64,7 @@ def _apply(target: Node, props: dict) -> None:
 def materialize(defn: ComponentDef, inst: Node, engine: LayoutEngine) -> None:
     """Пересобирает содержимое экземпляра из мастера с учётом состояния и переопределений."""
     root = defn.root
-    for k in STYLE_PROPS + FRAME_PROPS:
+    for k in STYLE_PROPS + EFFECT_PROPS + FRAME_PROPS:
         setattr(inst, k, getattr(root, k))
     if inst.w <= 0 or inst.h <= 0:
         inst.w, inst.h = root.w, root.h

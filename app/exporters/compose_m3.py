@@ -3,7 +3,7 @@
 Корневой фрейм заготовки несёт роль (m3.switch, m3.button_filled, …). Для роли из ROLES экран получает
 вызов компонента Compose (Switch, Button, NavigationBar, …) с подписями и значками из дизайна, состоянием
 (включено, выбранный пункт, значение ползунка) и обработчиками нажатий из логики прототипа. Остальные роли
-(карточки, диалог, меню, листы) переводятся общим способом — Column / Row по Auto Layout.
+(карточки, диалог, меню, листы, всплывающее сообщение) переводятся общим способом — Column / Row по Auto Layout.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ ROLES: dict[str, str | None] = {
     "m3.icon_button": None, "m3.fab": None, "m3.fab_extended": None, "m3.switch": "true", "m3.checkbox": "true",
     "m3.radio_group": "0", "m3.slider": "0.4f", "m3.chip_assist": None, "m3.chip_filter": "true",
     "m3.text_field": '""', "m3.progress_linear": None, "m3.progress_circular": None, "m3.divider": None,
-    "m3.snackbar": None, "m3.badge": None, "m3.tabs": "0", "m3.segmented": "0", "m3.nav_bar": "0",
+    "m3.badge": None, "m3.tabs": "0", "m3.segmented": "0", "m3.nav_bar": "0",
     "m3.top_app_bar": None,
 }
 # компоненты с собственным размером: ширина из дизайна не задаётся
@@ -177,14 +177,6 @@ class Material:
             return [f"{ind}CircularProgressIndicator(modifier = {M})"]
         if r == "m3.divider":
             return [f"{ind}HorizontalDivider(modifier = {M})"]
-        if r == "m3.snackbar":
-            msg = texts[0] if texts else None
-            act = texts[1] if len(texts) > 1 else None
-            out = [f"{ind}Snackbar(", f"{i2}modifier = {M},"]
-            if act is not None:
-                out += [f"{i2}action = {{", f"{i3}TextButton(onClick = {{"] + self.taps(act.id, i3 + "    ") + \
-                       [f"{i3}}}) {{ Text({self.text(act)}) }}", f"{i2}}},"]
-            return out + [f"{ind}) {{", f"{i2}Text({self.text(msg) if msg else EMPTY})", f"{ind}}}"]
         if r == "m3.badge":
             num = texts[0] if texts else None
             badge = f"Badge {{ Text({self.text(num)}) }}" if num else "Badge()"
