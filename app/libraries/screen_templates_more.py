@@ -114,11 +114,12 @@ def checkout(s: Screen, ap) -> list[Node]:
     _set_text(addr, "Плейсхолдер", "Адрес доставки")
     _set_text(addr, "Подсказка", "Улица, дом, квартира")
     date = _fill(_b(s, ap, "m3_date_field"))
+    _set_text(date, "Подсказка", "Дата доставки")
     radio = _fill(_b(s, ap, "m3_radio"))
     for i, t in enumerate(("Картой онлайн", "Наличными курьеру", "СБП")):
         _set_text(radio, "Подпись", t, i)
     total = c.frame("Итого", "horizontal", [_text(c, "К оплате", 18, c.s["onSurface"], 500, "Подпись"),
-                                             c.text("3 680 ₽", 22, c.s["onSurface"], 600, "Сумма")],
+                                             c.text("4 270 ₽", 22, c.s["onSurface"], 600, "Сумма")],
                     cross_align="center", sizing_h="fill", sizing_v="hug")
     kids = [steps, _text(c, "Доставка", 16, c.s["primary"], 500, "Раздел"), addr, date,
             _text(c, "Оплата", 16, c.s["primary"], 500, "Раздел"), radio, _fill(_b(s, ap, "m3_divider")), total]
