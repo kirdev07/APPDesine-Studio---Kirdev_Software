@@ -355,7 +355,7 @@ class _Screen:
         """Верхняя панель, нижняя навигация и плавающая кнопка экрана — в слоты Scaffold (без смещений)."""
         s = self.s
         free = [n for n in s.nodes if n.visible and n.id not in self.vis]
-        top = next((n for n in free if n.role == "m3.top_app_bar" and n.y <= 1), None)
+        top = next((n for n in free if n.role.startswith("m3.top_app_bar") and n.y <= 1), None)
         nav = next((n for n in free if n.role == "m3.nav_bar" and n.y + n.h >= s.height - 1), None)
         fab = next((n for n in free if n.role in ("m3.fab", "m3.fab_extended") and n.x + n.w >= s.width * 0.7
                     and n.y >= s.height * 0.55), None)

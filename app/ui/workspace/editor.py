@@ -441,6 +441,37 @@ class Editor(QObject):
             return n
         return None
 
+    def insert_symbol(self, name: str, style: str = "outlined", filled: bool = False, size_dp: float = 24,
+                      at: tuple[float, float] | None = None) -> Node | None:
+        """Значок Material Symbols на экран (по центру или в точку), цвет — «на поверхности» схемы проекта."""
+        from app.engines.material.color import scheme
+        from app.engines.preview.devices import screen_dpi
+        from app.libraries import symbols
+        s = self.screen()
+        d = symbols.path(name, style, filled)
+        if not s or not self.doc or not d:
+            return None
+        k = screen_dpi(s) / 160 if s.platform == "android" else 1.0
+        side = round(size_dp * k, 2)
+        ap = self.doc.meta.appearance
+        x, y = at if at is not None else ((s.width - side) / 2, s.height * 0.35)
+        node = Node(type="vector", name=symbols.russian_name(name), x=round(x, 2), y=round(y, 2), w=side, h=side,
+                    path=d, vb_w=symbols.VIEWBOX, vb_h=symbols.VIEWBOX,
+                    fill=scheme(ap.accent, ap.theme != "light")["onSurface"])
+        if self.execute(AddNodes(s.id, [node], self._container_id(), label=f"Значок: {name}")):
+            self.select([node.id])
+            return node
+        return None
+
+    def replace_symbol(self, node_id: str, name: str, style: str = "outlined", filled: bool = False) -> bool:
+        """Сменить рисунок значка (размер, цвет и место остаются)."""
+        from app.libraries import symbols
+        d = symbols.path(name, style, filled)
+        if not d:
+            return False
+        return self.set_props({node_id: {"path": d, "vb_w": float(symbols.VIEWBOX), "vb_h": float(symbols.VIEWBOX),
+                                         "name": symbols.russian_name(name)}}, f"Значок: {name}")
+
     def replace_selection(self, kind: str) -> Node | None:
         """Заменить выделенный элемент заготовкой: новый встаёт на то же место (родитель, порядок, положение),
         старый удаляется; одна запись истории."""

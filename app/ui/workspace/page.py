@@ -167,6 +167,9 @@ class WorkspacePage(QMainWindow):
         self.a_detach = self._action("Отвязать копию от компонента", ed.detach_selection)
         self.a_reset_over = self._action("Сбросить переопределения", ed.reset_overrides_selection)
         self.a_replace = self._action("Заменить на компонент…", self.replace_dialog, "Ctrl+R")
+        self.a_symbols = self._action("Значки Material…", self.symbols_dialog, "Ctrl+Shift+I")
+        self.a_symbols.setToolTip("Около 3900 значков Google Material Symbols: поиск по-русски, три стиля, заливка")
+        self.a_replace_symbol = self._action("Заменить значок…", self.replace_symbol_dialog)
         self.a_add_component = self._action("Добавить компонент…", self.add_dialog, "Ctrl+Shift+N")
         self.a_simple = self._action("Простой режим", self.set_simple, checkable=True)
         self.a_simple.setToolTip("Только основные кнопки и свойства. Выключите, чтобы видеть поведение при изменении размера, "
@@ -174,7 +177,7 @@ class WorkspacePage(QMainWindow):
         self.a_run = self._action("▶ Просмотр", lambda: self.window().run_prototype()
                                   if hasattr(self.window(), "run_prototype") else None)
         self.a_run.setToolTip("Интерактивный предпросмотр на устройстве с текущего экрана (F5)")
-        self.edit_actions[8:8] = [self.a_replace, self.a_add_component]
+        self.edit_actions[8:8] = [self.a_replace, self.a_add_component, self.a_symbols, self.a_replace_symbol]
         self.view_actions += [None, self.a_simple]
         self.tools_actions = [self.a_wrap_v, self.a_wrap_h, self.a_unwrap, None, self.a_make_component,
                               self.a_detach, self.a_reset_over, None, self.a_responsive]
@@ -273,7 +276,8 @@ class WorkspacePage(QMainWindow):
         self.tap_button.setMenu(self.tap_menu)
         lay.addWidget(self.tap_button)
         self.sel_buttons = []
-        for action, text, danger in ((self.a_replace, "Заменить…", False), (self.a_dup, "Дублировать", False),
+        for action, text, danger in ((self.a_replace_symbol, "Значок…", False),
+                                     (self.a_replace, "Заменить…", False), (self.a_dup, "Дублировать", False),
                                      (self.a_delete, "Удалить", True)):
             b = QToolButton()  # своя короткая подпись: setDefaultAction подставил бы длинное имя команды
             b.setText(text)
@@ -315,6 +319,7 @@ class WorkspacePage(QMainWindow):
                                                                                200))
                 self.sel_label.setToolTip(text)
                 self.tap_button.setVisible(len(nodes) == 1)
+                self.sel_buttons[0].setVisible(len(nodes) == 1 and nodes[0].type == "vector")
                 if len(nodes) == 1:
                     self.tap_button.setText(self._tap_text(nodes[0].id))
                 bar.adjustSize()
@@ -403,6 +408,8 @@ class WorkspacePage(QMainWindow):
         if ed.selection:
             for a in (self.a_replace, self.a_dup, self.a_copy, self.a_delete):
                 m.addAction(a)
+            if self.a_replace_symbol.isEnabled():
+                m.addAction(self.a_replace_symbol)
             if len(ed.selection) == 1:
                 self._fill_tap_menu()
                 sub = self._submenu(m, self._tap_text(ed.selection[0]))
@@ -418,6 +425,7 @@ class WorkspacePage(QMainWindow):
                 m.addAction(self.a_wrap_v)
         else:
             m.addAction(self.a_add_component)
+            m.addAction(self.a_symbols)
             m.addAction(self.a_paste)
             m.addSeparator()
             m.addAction(self.a_zoom_fit)
@@ -434,6 +442,22 @@ class WorkspacePage(QMainWindow):
         kind = self._pick_component("Заменить выделенный элемент на…")
         if kind:
             self.editor.replace_selection(kind)
+
+    def symbols_dialog(self) -> None:
+        from app.ui.workspace.symbol_picker import SymbolPicker
+        dlg = SymbolPicker("Значки Material", self)
+        if dlg.exec() and dlg.name:
+            self.editor.insert_symbol(dlg.name, dlg.style_key, dlg.is_filled, dlg.size_dp)
+
+    def replace_symbol_dialog(self) -> None:
+        from app.ui.workspace.symbol_picker import SymbolPicker
+        ed = self.editor
+        nodes = ed.selected_nodes()
+        if len(nodes) != 1 or nodes[0].type != "vector":
+            return
+        dlg = SymbolPicker("Заменить значок", self, replace=True)
+        if dlg.exec() and dlg.name:
+            ed.replace_symbol(nodes[0].id, dlg.name, dlg.style_key, dlg.is_filled)
 
     def add_dialog(self) -> None:
         kind = self._pick_component("Добавить компонент")
@@ -516,6 +540,9 @@ class WorkspacePage(QMainWindow):
                   self.a_up, self.a_down, self.a_top, self.a_bottom):
             a.setEnabled(sel)
         self.a_replace.setEnabled(len(ed.selection) == 1)
+        one = ed.selected_nodes() if len(ed.selection) == 1 else []
+        self.a_replace_symbol.setEnabled(bool(one) and one[0].type == "vector")
+        self.a_symbols.setEnabled(ed.screen() is not None)
         self.a_add_component.setEnabled(ed.screen() is not None)
         self.a_ungroup.setEnabled(any(n.is_container for n in ed.selected_nodes()))
         self.a_unwrap.setEnabled(any(n.is_container for n in ed.selected_nodes()))

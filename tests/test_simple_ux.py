@@ -47,7 +47,7 @@ def test_gallery_has_pictures_categories_and_search(qtbot, ws):
     g.search.setText("fab")
     assert g.visible_names() == ["Плавающая кнопка (FAB)"]
     g.search.setText("плавающая")
-    assert len(g.visible_names()) == 2
+    assert len(g.visible_names()) >= 2 and all("Плавающая" in n for n in g.visible_names())
     g.search.clear()
     assert all("\n" not in n for n in g.visible_names())
     assert any("\n" in g.tiles.item(i).text() for i in range(g.tiles.count()))  # длинные подписи — в 2 строки

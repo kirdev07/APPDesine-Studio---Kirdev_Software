@@ -174,6 +174,6 @@ def test_scheme_tokens_typography_and_component_search(qtbot, app_win, monkeypat
     lp = win.findChildren(LayersPanel)[0]
     lp.comp_filter.setText("переключ")
     shown = lp.gallery.visible_names()
-    assert shown == ["Переключатель"]
+    assert "Переключатель" in shown and all("ереключат" in n for n in shown)
     lp.comp_filter.clear()
     assert all(not lp.components.item(i).isHidden() for i in range(lp.components.count()))

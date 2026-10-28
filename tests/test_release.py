@@ -20,7 +20,7 @@ def test_smoke_self_check_passes(tmp_path):  # S23/S24: тот же сценар
     data = json.loads(report.read_text(encoding="utf-8"))
     assert data["ok"] and [s["step"] for s in data["steps"]] == [
         "Запуск окна", "Создание проекта", "Сохранение и открытие", "Проверка проекта",
-        "Интерактивный предпросмотр", "AI-экспорт"]
+        "Интерактивный предпросмотр", "AI-экспорт", "Значки"]
 
 
 @pytest.fixture

@@ -107,9 +107,16 @@ def run(report_path: str | None = None) -> int:
             raise RuntimeError("архив не прошёл проверку: " + bad[0].message)
         return f"{path.name}, {path.stat().st_size} байт"
 
+    def icons():
+        from app.libraries import symbols
+        n = len(symbols.names())
+        if n < 3000 or not symbols.path("home") or not symbols.LICENSE.exists():
+            raise RuntimeError(f"значки Material Symbols не найдены в сборке ({n})")
+        return f"{n} значков Material Symbols {symbols.version()}"
+
     for name, fn in (("Запуск окна", start_window), ("Создание проекта", create),
                      ("Сохранение и открытие", save_reopen), ("Проверка проекта", validate),
-                     ("Интерактивный предпросмотр", preview), ("AI-экспорт", export)):
+                     ("Интерактивный предпросмотр", preview), ("AI-экспорт", export), ("Значки", icons)):
         step(name, fn)
         if not steps[-1]["ok"]:
             break
@@ -120,7 +127,7 @@ def run(report_path: str | None = None) -> int:
         win.preview.deactivate()
         win.close()
     ctx.close()
-    ok = all(s["ok"] for s in steps) and len(steps) == 6
+    ok = all(s["ok"] for s in steps) and len(steps) == 7
     report = {"app": APP_NAME, "version": APP_VERSION, "ok": ok, "python": sys.version.split()[0],
               "frozen": bool(getattr(sys, "frozen", False)), "os": platform.platform(),
               "total_ms": round((time.perf_counter() - t0) * 1000), "steps": steps}

@@ -90,6 +90,14 @@ class _Ctx:
 
     def icon(self, size: float = 24, name: str = "Значок", color: str | None = None, glyph: str = "") -> Node:
         """Значок из набора m3_icons; без glyph — круглая заглушка (аватар)."""
+        if glyph and glyph not in ICONS:  # любой значок Material Symbols по имени
+            from app.libraries import symbols
+            d = symbols.path(glyph)
+            if d:
+                return Node(type="vector", name=symbols.russian_name(glyph) if name == "Значок" else name,
+                            w=self.d(size), h=self.d(size), path=d, vb_w=symbols.VIEWBOX, vb_h=symbols.VIEWBOX,
+                            fill=color or self.p["muted"])
+            glyph = "star"
         if glyph:
             ru, path, rule = ICONS[glyph]
             return Node(type="vector", name=ru if name == "Значок" else name, w=self.d(size), h=self.d(size),
@@ -523,16 +531,21 @@ SPECS: tuple[ComponentSpec, ...] = (
 
 
 _ALL: tuple[ComponentSpec, ...] | None = None
+CATEGORY_ORDER = ("Кнопки", "Поля", "Выбор", "Вход и регистрация", "Карточки", "Профиль и люди", "Магазин",
+                  "Навигация", "Обратная связь", "Состояния", "Окна")
 
 
 def all_specs() -> tuple[ComponentSpec, ...]:
     """Все заготовки в порядке галереи: Material 3, дополнительные (вход, формы, магазин…), значки, Windows."""
     global _ALL
     if _ALL is None:
-        from app.libraries.components_more import SPECS as MORE  # модуль использует _Ctx отсюда
-        android = [s for s in SPECS if s.platform == _A and s.category != "Значки"]
+        from app.libraries.components_m3x import SPECS as M3X  # модули используют _Ctx отсюда
+        from app.libraries.components_more import SPECS as MORE
+        android = [s for s in SPECS if s.platform == _A and s.category != "Значки"] + list(M3X) + list(MORE)
+        order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
+        android.sort(key=lambda s: order.get(s.category, len(order)))  # одна категория — подряд
         icons = [s for s in SPECS if s.category == "Значки"]
-        _ALL = tuple(android + list(MORE) + icons + [s for s in SPECS if s.platform != _A])
+        _ALL = tuple(android + icons + [s for s in SPECS if s.platform != _A])
     return _ALL
 
 

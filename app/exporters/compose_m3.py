@@ -20,18 +20,30 @@ ROLES: dict[str, str | None] = {
     "m3.radio_group": "0", "m3.slider": "0.4f", "m3.chip_assist": None, "m3.chip_filter": "true",
     "m3.text_field": '""', "m3.progress_linear": None, "m3.progress_circular": None, "m3.divider": None,
     "m3.badge": None, "m3.tabs": "0", "m3.segmented": "0", "m3.nav_bar": "0",
-    "m3.top_app_bar": None, "m3.password_field": '""',
+    "m3.top_app_bar": None, "m3.password_field": '""', "m3.button_elevated": None,
+    "m3.icon_button_filled": None, "m3.icon_button_tonal": None, "m3.icon_button_outlined": None,
+    "m3.fab_small": None, "m3.fab_large": None, "m3.top_app_bar_center": None, "m3.top_app_bar_medium": None,
+    "m3.top_app_bar_large": None, "m3.chip_suggestion": None, "m3.chip_input": None,
+    "m3.text_field_filled": '""',
 }
 # компоненты с собственным размером: ширина из дизайна не задаётся
 _INTRINSIC = {"m3.button_filled", "m3.button_tonal", "m3.button_outlined", "m3.button_text", "m3.icon_button",
-              "m3.fab", "m3.fab_extended", "m3.checkbox", "m3.chip_assist", "m3.chip_filter",
+              "m3.fab", "m3.fab_extended", "m3.button_elevated", "m3.icon_button_filled", "m3.icon_button_tonal",
+              "m3.icon_button_outlined", "m3.fab_small", "m3.fab_large", "m3.chip_suggestion", "m3.chip_input", "m3.checkbox", "m3.chip_assist", "m3.chip_filter",
               "m3.progress_circular", "m3.badge", "m3.segmented"}
 _BUTTONS = {"m3.button_filled": "Button", "m3.button_tonal": "FilledTonalButton",
-            "m3.button_outlined": "OutlinedButton", "m3.button_text": "TextButton"}
+            "m3.button_outlined": "OutlinedButton", "m3.button_text": "TextButton",
+            "m3.button_elevated": "ElevatedButton"}
+_ICON_BUTTONS = {"m3.icon_button": "IconButton", "m3.icon_button_filled": "FilledIconButton",
+                 "m3.icon_button_tonal": "FilledTonalIconButton", "m3.icon_button_outlined": "OutlinedIconButton",
+                 "m3.fab": "FloatingActionButton", "m3.fab_small": "SmallFloatingActionButton",
+                 "m3.fab_large": "LargeFloatingActionButton"}
+_TOP_BARS = {"m3.top_app_bar": "TopAppBar", "m3.top_app_bar_center": "CenterAlignedTopAppBar",
+             "m3.top_app_bar_medium": "MediumTopAppBar", "m3.top_app_bar_large": "LargeTopAppBar"}
 STATE_PREFIX = {"m3.switch": "checked", "m3.checkbox": "checked", "m3.radio_group": "selected",
                 "m3.slider": "value", "m3.chip_filter": "selected", "m3.text_field": "input", "m3.tabs": "tab",
                 "m3.segmented": "segment", "m3.nav_bar": "navItem",
-                "m3.password_field": "password"}
+                "m3.password_field": "password", "m3.text_field_filled": "input"}
 
 
 def _texts(n):
@@ -123,8 +135,8 @@ class Material:
             if icons:
                 out += [f"{i2}{self.icon(icons[0], i2, 18)}", f"{i2}Spacer(Modifier.width(8.dp))"]
             return out + [f"{i2}Text({label})", f"{ind}}}"]
-        if r in ("m3.icon_button", "m3.fab"):
-            comp = "IconButton" if r == "m3.icon_button" else "FloatingActionButton"
+        if r in _ICON_BUTTONS:
+            comp = _ICON_BUTTONS[r]
             body = [f"{i2}{self.icon(icons[0], i2)}"] if icons else []
             return ([f"{ind}{comp}(", f"{i2}onClick = {{"] + self.taps(n.id, i3) +
                     [f"{i2}}},", f"{i2}modifier = {M},", f"{ind}) {{"] + body + [f"{ind}}}"])
@@ -196,6 +208,26 @@ class Material:
                           f"{i3}    DesignIcon(if ({show}) {eye_off} else {eye}, contentDescription = "
                           f"if ({show}) \"Скрыть пароль\" else \"Показать пароль\", evenOdd = true)",
                           f"{i3}}}", f"{i2}}},", f"{i2}modifier = {M},", f"{ind})"]
+        if r in ("m3.chip_suggestion", "m3.chip_input"):
+            lbl = next((t for t in texts if t.name == "Подпись"), texts[0] if texts else None)
+            if r == "m3.chip_suggestion":
+                return [f"{ind}SuggestionChip(", f"{i2}onClick = {{"] + self.taps(n.id, i3) + [
+                    f"{i2}}},", f"{i2}label = {{ Text({self.text(lbl) if lbl else EMPTY}) }},", f"{i2}modifier = {M},",
+                    f"{ind})"]
+            close = next((v for v in icons if v.name in ("Закрыть", "close")), icons[-1] if icons else None)
+            trail = [f"{i2}trailingIcon = {{ {self.icon(close, i2, 18)} }},"] if close else []
+            return [f"{ind}InputChip(", f"{i2}selected = false,", f"{i2}onClick = {{"] + self.taps(n.id, i3) + [
+                f"{i2}}},", f"{i2}label = {{ Text({self.text(lbl) if lbl else EMPTY}) }},"] + trail + [
+                f"{i2}modifier = {M},", f"{ind})"]
+        if r == "m3.text_field_filled":
+            label = next((t for t in texts if t.name == "Метка"), None)
+            hint = next((t for t in texts if t.name == "Подсказка"), None)
+            out = [f"{ind}TextField(", f"{i2}value = {var},", f"{i2}onValueChange = {{ {var} = it }},"]
+            if label is not None:
+                out.append(f"{i2}label = {{ Text({self.g.kstr(label.text)}) }},")
+            if hint is not None:
+                out.append(f"{i2}supportingText = {{ Text({self.text(hint)}) }},")
+            return out + [f"{i2}singleLine = true,", f"{i2}modifier = {M},", f"{ind})"]
         if r == "m3.progress_linear":
             part = [c for c in n.children if c.type == "rect"]
             p = max(0.0, min(1.0, part[0].w / n.w)) if part and n.w else 0.5
@@ -240,10 +272,10 @@ class Material:
                     out.append(f"{i3}label = {{ Text({self.text(t[0])}) }},")
                 out.append(f"{i2})")
             return out + [f"{ind}}}"]
-        if r == "m3.top_app_bar":
+        if r in _TOP_BARS:
             title = next((t for t in texts), None)
-            vecs = [c for c in n.children if c.type == "vector" and c.path]
-            out = [f"{ind}TopAppBar(", f"{i2}title = {{ Text({self.text(title) if title else EMPTY}) }},"]
+            vecs = [d for d in tree.descendants(n) if d.type == "vector" and d.path]
+            out = [f"{ind}{_TOP_BARS[r]}(", f"{i2}title = {{ Text({self.text(title) if title else EMPTY}) }},"]
             if vecs:
                 v = vecs[0]
                 out += [f"{i2}navigationIcon = {{", f"{i3}IconButton(onClick = {{"] + self.taps(v.id, i3 + "    ") + \
