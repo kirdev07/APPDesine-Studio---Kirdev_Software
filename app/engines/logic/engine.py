@@ -319,9 +319,11 @@ class Interpreter:
             return [Effect("variable", {"var_id": var.id, "value": new})]
         s = screens.get(st.screen_id)
         nodes = tree.node_map(s) if s else {}
-        if t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay") and \
+        if t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay", "scroll_to") and \
                 a["node_id"] not in nodes:
             return [Effect("error", {"message": f"{ACTION_NAMES[t]}: элемент не на текущем экране"})]
+        if t == "scroll_to":
+            return [Effect("scroll_to", {"node_id": a["node_id"]})]
         if t == "set_variant":
             n = nodes[a["node_id"]]
             defn = self.doc.component(n.component_id) if n.is_instance else None
@@ -431,7 +433,7 @@ def validate(doc: ProjectDocument) -> list[Diagnostic]:
                 elif a["value"] and a["value"] not in vals:
                     diags.append(Diagnostic("warning", n.id, f"{where}: у свойства «{a['axis']}» нет значения "
                                                              f"«{a['value']}»"))
-            if t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay") and \
+            if t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay", "scroll_to") and \
                     a["node_id"] not in nodes:
                 diags.append(Diagnostic("warning", it.node_id, f"{where}: {label} — элемент не на этом экране"))
             if t == "set_state" and a["node_id"] in nodes:

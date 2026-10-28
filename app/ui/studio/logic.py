@@ -403,8 +403,8 @@ class LogicPage(QWidget):
         if t == "set_variable":
             v = doc.variable(a.get("var_id", ""))
             return f"«{v.name if v else '?'}»: {MODE_RU[a['mode']].lower()} {a.get('value', '')}"
-        if t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay"):
-            extra = {"set_state": a.get("state", ""), "set_variant": f"{a.get('axis', '')} → "
+        if t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay", "scroll_to"):
+            extra = {"scroll_to": "", "set_state": a.get("state", ""), "set_variant": f"{a.get('axis', '')} → "
                      f"{a.get('value') or 'следующее'}", "set_visible": MODE_RU.get(a.get("mode"), ""),
                      "set_text": f"«{a.get('text', '')[:24]}»", "open_overlay": ""}[t]
             return f"«{names.get(a.get('node_id'), '?')}» {extra}"
@@ -436,7 +436,7 @@ class LogicPage(QWidget):
         if t == "navigate":
             other = [x for x in doc.screens if x.id != s.id]
             a["screen_id"] = (other or doc.screens)[0].id
-        if t in ("set_state", "set_visible", "set_text", "open_overlay"):
+        if t in ("set_state", "set_visible", "set_text", "open_overlay", "scroll_to"):
             sel = self.main.selected_nodes()
             a["node_id"] = sel[0].id if sel else (s.nodes[0].id if s.nodes else "")
         if t == "set_variant":

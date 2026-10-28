@@ -246,6 +246,7 @@ class PrototypePlayer(QWidget):
         self.layout_diags: list = []
         self.effect_log: list[str] = []
         self.waits: list[tuple[float, object]] = []  # (когда, эффект «Подождать») — продолжение действий
+        self.scroll_anims: dict[str, tuple] = {}  # контейнер → (откуда, куда, начало, длительность)
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         self.view = PlayerView(self)
@@ -274,6 +275,14 @@ class PrototypePlayer(QWidget):
 
     def advance(self, ms: float) -> None:
         self.now += ms
+        if self.scroll_anims:  # плавная прокрутка: к элементу и доводка страницы
+            for fid, (a, b, start, dur) in list(self.scroll_anims.items()):
+                t = min(1.0, (self.now - start) / dur)
+                t = 1 - (1 - t) ** 3
+                self.scroll[fid] = a + (b - a) * t
+                if t >= 1.0:
+                    del self.scroll_anims[fid]
+            self.render()
         due = [w for w in self.waits if w[0] <= self.now]
         if due:
             self.waits = [w for w in self.waits if w[0] > self.now]
@@ -399,8 +408,85 @@ class PrototypePlayer(QWidget):
                                 c.y -= off
                             else:
                                 c.x -= off
+                    if n.scroll == "vertical":  # липкие: дальше верхнего края контейнера не уходят
+                        top = n.y
+                        sticky = [c for c in n.children if c.sticky and c.y < top]
+                        for c in sticky:
+                            dy = top - c.y
+                            for d, _, _ in tree.walk([c]):
+                                d.y += dy
+                        for c in sticky:  # поверх остального содержимого
+                            n.children.remove(c)
+                            n.children.append(c)
+                    if n.paging and n.scroll == "horizontal":
+                        self._sync_dots(screen, n, off)
                 rec(n.children)
         rec(screen.nodes)
+
+    def page_offsets(self, frame) -> list[float]:
+        """Положения страниц листаемого контейнера: начало каждого дочернего элемента."""
+        src = tree.node_map(self.interp.screen()).get(frame.id) if self.interp.screen() else None
+        base = src or frame
+        return [max(0.0, c.x - base.x - base.pad_l) for c in base.children]
+
+    def _sync_dots(self, screen, frame, off: float) -> None:
+        """Точки страниц сразу после листаемого контейнера показывают текущую страницу."""
+        pages = self.page_offsets(frame)
+        if not pages:
+            return
+        page = min(range(len(pages)), key=lambda i: abs(pages[i] - off))
+        try:
+            _, parent, idx = tree.find(screen, frame.id)
+        except Exception:
+            return
+        siblings = parent.children if parent is not None else screen.nodes
+        nxt = siblings[idx + 1] if idx + 1 < len(siblings) else None  # точки — следующий элемент или внутри него
+        dots = next((d for d, _, _ in tree.walk([nxt]) if d.role == "m3.page_dots"), None) if nxt else None
+        if dots is None or not dots.children:
+            return
+        active = max(dots.children, key=lambda d: d.w)  # текущая точка — самая широкая
+        other = min(dots.children, key=lambda d: d.w)
+        look_a = (active.w, active.fill, active.radius, active.type)
+        look_o = (other.w, other.fill, other.radius, other.type)
+        x = dots.children[0].x
+        for i, d in enumerate(dots.children):
+            w, fill, radius, kind = look_a if i == page else look_o
+            d.w, d.fill, d.radius, d.type, d.x = w, fill, radius, "rect", x
+            d.radius = min(d.h / 2, d.w / 2)
+            x += w + dots.gap
+
+    def snap_page(self, frame_id: str) -> None:
+        """После перетаскивания листаемый контейнер доводится до ближайшей страницы."""
+        n = tree.node_map(self.screen).get(frame_id) if self.screen else None
+        if n is None or not n.paging:
+            return
+        pages = self.page_offsets(n)
+        if pages:
+            cur = self.scroll.get(frame_id, 0.0)
+            self.scroll_to_offset(frame_id, min(pages, key=lambda v: abs(v - cur)))
+
+    def scroll_to_offset(self, frame_id: str, target: float, ms: float = 280.0) -> None:
+        self.scroll_anims[frame_id] = (self.scroll.get(frame_id, 0.0), target, self.now, ms)
+        self.render()
+
+    def scroll_into_view(self, node_id: str) -> None:
+        """Действие «Прокрутить к элементу»: ближайший прокручиваемый предок плавно доводит элемент до верха."""
+        src = self.interp.screen()
+        if src is None:
+            return
+        try:
+            chain = list(reversed(tree.ancestors(src, node_id)))
+        except Exception:
+            return
+        target = tree.node_map(src).get(node_id)
+        frame = next((a for a in chain if a.is_frame and a.scroll != "none"), None)
+        if frame is None or target is None:
+            return
+        if frame.scroll == "vertical":
+            off = target.y - frame.y - frame.pad_t
+        else:
+            off = target.x - frame.x - frame.pad_l
+        self.scroll_to_offset(frame.id, max(0.0, off))
 
     def fit(self) -> None:
         if self.screen is not None and self.spec is not None:
@@ -722,6 +808,8 @@ class PrototypePlayer(QWidget):
         pressed, self.pressed, self._press_state = self.pressed, None, None
         if self._dragging:
             self._dragging = False
+            if self._drag is not None and self._drag[2] == "horizontal":
+                self.snap_page(self._drag[0])
             scrolled, self._drag = self._drag is not None, None
             d = p - start if start is not None else QPointF()
             u = self.spec.units(self.screen) if self.spec and self.screen else 1.0
@@ -833,6 +921,8 @@ class PrototypePlayer(QWidget):
                 self.live, self.ripple = {}, None
             elif e.kind == "wait":
                 self.waits.append((self.now + max(0, e.data["ms"]), e))
+            elif e.kind == "scroll_to":
+                self.scroll_into_view(e.data["node_id"])
             elif e.kind == "animation":
                 a = self.doc.animation(e.data["animation_id"])
                 if a is not None:
@@ -920,6 +1010,8 @@ def describe(doc, e) -> str:
         return f"анимация «{a.name if a else '?'}»"
     if e.kind == "wait":
         return f"пауза {d['ms'] / 1000:g} с"
+    if e.kind == "scroll_to":
+        return "прокрутка к элементу"
     if e.kind == "overlay_open":
         return "открыто окно"
     if e.kind == "overlay_close":

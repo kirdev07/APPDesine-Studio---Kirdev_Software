@@ -113,7 +113,23 @@ class _Screen:
         self.overlays = overlays
         self.scrims = {a["node_id"] for it in self.its for a in it.actions
                        if a["type"] == "open_overlay" and a.get("scrim")}
-        self.waits = any(a["type"] == "wait" for it in self.its for a in it.actions)
+        self.waits = any(a["type"] in ("wait", "scroll_to") for it in self.its for a in it.actions)
+        self.scroll_to = any(a["type"] == "scroll_to" for it in self.its for a in it.actions)
+        # прокрутка: у каждого прокручиваемого контейнера — своё состояние (липкие элементы, «прокрутить к»)
+        self.scroll_states = {n.id: ident(f"scroll {n.name}", False, self.used, "scroll")
+                              for n, _, _ in tree.walk(s.nodes)
+                              if n.is_frame and n.scroll != "none" and not n.paging and n.children}
+        # листание страницами: контейнер → состояние HorizontalPager; точки страниц сразу после него
+        self.pagers, self.dots_for = {}, {}
+        for n, _, _ in tree.walk(s.nodes):
+            if n.is_frame and n.paging and n.children:
+                self.pagers[n.id] = ident(f"pager {n.name}", False, self.used, "pager")
+                _, parent, idx = tree.find(s, n.id)
+                sib = parent.children if parent is not None else s.nodes
+                nxt = sib[idx + 1] if idx + 1 < len(sib) else None  # точки — следующий элемент или внутри него
+                dots = next((d for d, _, _ in tree.walk([nxt]) if d.role == "m3.page_dots"), None) if nxt else None
+                if dots is not None:
+                    self.dots_for[dots.id] = (self.pagers[n.id], len(n.children), dots)
         self.smart = {name: n.id for name, n in smart_keys(s).items() if name in gen.smart_names}
         # переключение вариантов: node_id копии → {свойство: имя переменной}
         self.variant_vars: dict[str, dict[str, str]] = {}
@@ -154,6 +170,18 @@ class _Screen:
         st = self.g.state_names
         for i, a in enumerate(actions):
             t = a["type"]
+            if t == "scroll_to":  # плавно прокрутить ближайший прокручиваемый контейнер к элементу
+                target = tree.node_map(self.s).get(a["node_id"])
+                chain = list(reversed(tree.ancestors(self.s, a["node_id"]))) if target is not None else []
+                frame = next((f for f in chain if f.id in self.scroll_states), None)
+                if frame is None:
+                    out.append("// прокрутка к элементу: он не в прокручиваемом контейнере")
+                    continue
+                off = (target.y - frame.y - frame.pad_t) if frame.scroll == "vertical" else \
+                    (target.x - frame.x - frame.pad_l)
+                out.append(f"scope.launch {{ {self.scroll_states[frame.id]}.animateScrollTo("
+                           f"with(density) {{ {self.dp(max(0.0, off))}.roundToPx() }}) }}")
+                continue
             if t == "wait":  # пауза: остальные действия — в корутине после delay
                 rest = self._acts(actions[i + 1:])
                 out += [f"scope.launch {{", f"    delay({int(a.get('duration', 0))})"] + \
@@ -241,6 +269,11 @@ class _Screen:
         if mode == "abs":
             m += self._place(n, parent, ind)
             fill_w, fill_h = self._fills
+        if n.sticky and parent is not None and parent.id in self.scroll_states and parent.scroll == "vertical":
+            top = self.dp(max(0.0, n.y - parent.y))  # липкий: прилипает к верхнему краю контейнера (поля — внутри)
+            st = self.scroll_states[parent.id]
+            m.append(f"{ind}    .zIndex(1f)")
+            m.append(f"{ind}    .offset {{ IntOffset(0, ({st}.value - {top}.roundToPx()).coerceAtLeast(0)) }}")
         if self.smart.get(n.name) == n.id:  # умный переход: одноимённый элемент на другом экране
             m.append(f"{ind}    .smart({kstr(n.name)})")
         main_fill = (mode == "col" and n.sizing_v == "fill") or (mode == "row" and n.sizing_h == "fill")
@@ -309,8 +342,8 @@ class _Screen:
                 m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {self.g.color(n.stroke)}, {shape})")
         if handlers:
             m += self.handlers(n, ind + "    ")
-        if n.is_frame and n.scroll in ("vertical", "horizontal"):
-            m.append(f"{ind}    .{n.scroll}Scroll(rememberScrollState())")
+        if n.is_frame and n.scroll in ("vertical", "horizontal") and not n.paging:  # пейджер листает сам
+            m.append(f"{ind}    .{n.scroll}Scroll({self.scroll_states.get(n.id, 'rememberScrollState()')})")
         if n.is_frame and n.layout != "none" and (n.pad_t or n.pad_r or n.pad_b or n.pad_l):
             m.append(f"{ind}    .padding(start = {self.dp(n.pad_l)}, top = {self.dp(n.pad_t)}, "
                      f"end = {self.dp(n.pad_r)}, bottom = {self.dp(n.pad_b)})")
@@ -401,6 +434,16 @@ class _Screen:
             ind2 = ind
         close = ([f"{ind}    }}"] if n.id in self.vis and mode == "abs" else []) + [f"{ind}}}"]
         out.append(f"{ind2}// {n.name or n.type}" + (f" — экземпляр компонента" if n.is_instance else ""))
+        if n.id in self.pagers:  # листание страницами
+            out += self.pager(n, parent, mode, ind2)
+            if n.id in self.vis:
+                out += close
+            return out
+        if n.id in self.dots_for:  # точки страниц, связанные с листаемым контейнером
+            out += self.pager_dots(n, parent, mode, ind2)
+            if n.id in self.vis:
+                out += close
+            return out
         if self.m3.handles(n):  # стандартный компонент Material 3 → компонент Compose
             out += self.m3.node(n, parent, mode, ind2)
             if n.id in self.vis:
@@ -447,6 +490,41 @@ class _Screen:
         if n.id in self.vis:
             out += close
         return out
+
+    def pager(self, n, parent, mode: str, ind: str) -> list[str]:
+        """Контейнер «листать страницами» → HorizontalPager: каждая страница — свой дочерний элемент."""
+        from app.core.document.model import Node
+        var = self.pagers[n.id]
+        mod = self.modifier(n, parent, mode, ind + "    ")
+        mod[0] = mod[0].lstrip()
+        out = [f"{ind}HorizontalPager(", f"{ind}    state = {var},", f"{ind}    modifier = " + "\n".join(mod) + ",",
+               f"{ind}    pageSpacing = {self.dp(n.gap)},",
+               f"{ind}    contentPadding = PaddingValues(start = {self.dp(n.pad_l)}, end = {self.dp(n.pad_r)}),",
+               f"{ind}) {{ page ->", f"{ind}    when (page) {{"]
+        for i, c in enumerate(n.children):
+            box = Node(type="frame", x=c.x, y=c.y, w=c.w, h=c.h)  # страница занимает всё место пейджера
+            c = Node.from_dict(c.to_dict())  # копия: проект при выгрузке не меняется
+            c.constraint_h, c.constraint_v = "left_right", "top_bottom"  # на любом телефоне — во всю ширину
+            out.append(f"{ind}        {i} -> Box(Modifier.fillMaxSize()) {{")
+            out += self.node(c, box, "abs", ind + "            ")
+            out.append(f"{ind}        }}")
+        return out + [f"{ind}    }}", f"{ind}}}"]
+
+    def pager_dots(self, n, parent, mode: str, ind: str) -> list[str]:
+        """Точки страниц, которые следят за текущей страницей пейджера."""
+        var, count, dots = self.dots_for[n.id]
+        active = max(dots.children, key=lambda d: d.w)
+        other = min(dots.children, key=lambda d: d.w)
+        mod = self.modifier(n, parent, mode, ind + "    ")
+        mod[0] = mod[0].lstrip()
+        on, off = self.g.color(active.fill), self.g.color(other.fill)
+        return [f"{ind}Row(modifier = " + "\n".join(mod) + f", horizontalArrangement = Arrangement.spacedBy("
+                f"{self.dp(n.gap)}), verticalAlignment = Alignment.CenterVertically) {{",
+                f"{ind}    repeat({count}) {{ i ->",
+                f"{ind}        val current = {var}.currentPage == i",
+                f"{ind}        Box(Modifier.size(if (current) {self.dp(active.w)} else {self.dp(other.w)}, "
+                f"{self.dp(active.h)}).clip(CircleShape).background(if (current) {on} else {off}))",
+                f"{ind}    }}", f"{ind}}}"]
 
     def under_glass(self, glass) -> list:
         """Картинки и фигуры с заливкой, которые лежат под стеклом (раньше по порядку) и перекрываются с ним."""
@@ -638,6 +716,12 @@ class _Screen:
         L += self.m3.decls + self.motion.decls
         if self.waits and "    val scope = rememberCoroutineScope()" not in L:
             L.append("    val scope = rememberCoroutineScope()")
+        if self.scroll_to:
+            L.append("    val density = LocalDensity.current")
+        for _nid, var in self.scroll_states.items():
+            L.append(f"    val {var} = rememberScrollState()")
+        for nid, var in self.pagers.items():
+            L.append(f"    val {var} = rememberPagerState {{ {len(tree.find(s, nid)[0].children)} }}")
         m = tree.node_map(s)
         for nid, var in self.vis.items():
             L.append(f"    var {var} by remember {{ mutableStateOf({'true' if m[nid].visible and nid not in self.overlays else 'false'}) }}")
@@ -751,6 +835,9 @@ class AndroidProject:
             "androidx.compose.ui.graphics.PathEffect", "androidx.compose.ui.graphics.StrokeCap",
             "androidx.compose.ui.graphics.drawOutline", "androidx.compose.ui.graphics.drawscope.inset",
             "androidx.compose.ui.unit.DpOffset", "androidx.compose.animation.slideInVertically",
+            "androidx.compose.ui.unit.IntOffset", "androidx.compose.ui.zIndex",
+            "androidx.compose.ui.platform.LocalDensity", "androidx.compose.foundation.pager.HorizontalPager",
+            "androidx.compose.foundation.pager.rememberPagerState",
             "androidx.compose.animation.slideOutVertically",
             "androidx.compose.foundation.interaction.MutableInteractionSource", "kotlinx.coroutines.delay",
             f"{self.pkg}.navigation.smart",

@@ -18,8 +18,9 @@ from datetime import datetime, timezone
 # градиента, интервалы, курсив, подчёркивание, регистр и число строк текста;
 # 12 — комментарии на экранах (заметки к месту макета, можно отметить решёнными);
 # 13 — данные графика у контейнера (data: числа через пробел);
-# 14 — матовое стекло (размытие фона под элементом), слой поверх с режимом наложения, маска любой формой.
-SCHEMA_VERSION = 14
+# 14 — матовое стекло (размытие фона под элементом), слой поверх с режимом наложения, маска любой формой;
+# 15 — липкий элемент в прокрутке (sticky) и листание страницами (paging).
+SCHEMA_VERSION = 15
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -115,16 +116,18 @@ _OMIT_DEFAULT = {"ref": "", "role": "", "elevation": 0, "gradient": "none", "fil
                  "radius_tl": -1.0, "radius_tr": -1.0, "radius_br": -1.0, "radius_bl": -1.0, "fill3": "",
                  "letter_spacing": 0.0, "line_height": 0.0, "italic": False, "decoration": "none",
                  "text_case": "none", "max_lines": 0, "data": "",
-                 "backdrop_blur": 0.0, "overlay": "", "overlay_blend": "normal", "clip_path": ""}
+                 "backdrop_blur": 0.0, "overlay": "", "overlay_blend": "normal", "clip_path": "",
+                 "sticky": False, "paging": False}
 TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style") + \
     TEXT_LOOK_PROPS
 # ref — идентификатор узла мастер-компонента, из которого получен узел экземпляра.
 COMMON_PROPS = ("name", "visible", "locked", "ref")
 # Поведение узла внутри родителя: размер в Auto Layout и привязки в обычном контейнере.
-CHILD_PROPS = ("sizing_h", "sizing_v", "min_w", "max_w", "min_h", "max_h", "constraint_h", "constraint_v")
+CHILD_PROPS = ("sizing_h", "sizing_v", "min_w", "max_w", "min_h", "max_h", "constraint_h", "constraint_v",
+               "sticky")  # sticky — в прокрутке по вертикали остаётся сверху
 # Свойства контейнера-фрейма.
 FRAME_PROPS = ("layout", "gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "main_align", "cross_align",
-               "grid_columns", "clip", "scroll", "role", "data")
+               "grid_columns", "clip", "scroll", "role", "data", "paging")  # paging — листать страницами
 # Текстовое поле ввода в предпросмотре: текст можно набирать, значение можно связать с текстовой переменной.
 INPUT_PROPS = ("editable", "input_var")
 VECTOR_PROPS = ("path", "vb_w", "vb_h", "fill_rule")
@@ -202,7 +205,7 @@ def check_prop(name: str, value, node_type: str = "rect"):
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 64:
             raise ModelError("Число колонок должно быть от 1 до 64")
         return value
-    if name in ("visible", "locked", "clip", "editable", "shadow_inset", "italic"):
+    if name in ("visible", "locked", "clip", "editable", "shadow_inset", "italic", "sticky", "paging"):
         if not isinstance(value, bool):
             raise ModelError(f"«{name}» должно быть логическим")
         return value
@@ -365,6 +368,7 @@ class Node:
     max_h: float = 0.0
     constraint_h: str = "left"
     constraint_v: str = "top"
+    sticky: bool = False          # в прокручиваемом столбце остаётся сверху, когда до него докрутили
     # фрейм
     layout: str = "none"
     gap: float = 0.0
@@ -380,6 +384,7 @@ class Node:
     scroll: str = "none"          # прокрутка содержимого фрейма в предпросмотре
     role: str = ""                # вид стандартного компонента (m3.switch, …) — для экспорта в Compose
     data: str = ""                # числа графика (chart.*) через пробел
+    paging: bool = False          # горизонтальная прокрутка листается страницами (по одному элементу)
     # поле ввода (текст)
     editable: bool = False
     input_var: str = ""

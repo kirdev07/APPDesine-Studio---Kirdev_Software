@@ -1030,6 +1030,28 @@ class Editor(QObject):
             doc.screen(sid).comments[:] = [c for c in doc.screen(sid).comments if c.id != comment_id]
         return self.patch("Удалить комментарий", mutate)
 
+    # ---------- прокрутка: листание страницами ----------
+    def set_paging(self, frame_id: str, on: bool) -> bool:
+        """Горизонтальный контейнер листается страницами: прокрутка по горизонтали, каждая страница — на всю
+        ширину контейнера. Одна запись истории."""
+        s = self.screen()
+        f = tree.find(s, frame_id)[0] if s else None
+        if f is None or not f.is_frame:
+            return False
+        sid = s.id
+
+        def mutate(doc):
+            fr = tree.find(doc.screen(sid), frame_id)[0]
+            fr.paging = on
+            if on:
+                fr.scroll, fr.clip = "horizontal", True
+                if fr.layout == "none":
+                    fr.layout = "horizontal"
+                inner = fr.w - fr.pad_l - fr.pad_r
+                for c in fr.children:
+                    c.sizing_h, c.w = "fixed", inner
+        return self.patch("Листать страницами" if on else "Без листания", mutate)
+
     # ---------- графики ----------
     def set_chart_data(self, node_id: str, text: str) -> bool:
         """Новые числа графика: содержимое перестраивается под размер, цвета сохраняются."""

@@ -383,6 +383,9 @@ class WorkspacePage(QMainWindow):
             return "При нажатии: окно «" + ((n.name if n else "?")[:14]) + "»"
         if a["type"] == "close_overlay":
             return "При нажатии: закрыть окно"
+        if a["type"] == "scroll_to":
+            n = tree.node_map(ed.screen()).get(a.get("node_id"))
+            return "При нажатии: прокрутить к «" + ((n.name if n else "?")[:14]) + "»"
         if a["type"] == "set_variant":
             return f"При нажатии: «{a.get('axis', '')[:14]}» → {a.get('value') or 'следующий'}"
         return "При нажатии: своё правило"
@@ -433,6 +436,17 @@ class WorkspacePage(QMainWindow):
             a.setChecked(isinstance(cur, dict) and cur.get("type") == "open_overlay" and cur.get("node_id") == n.id)
         if not targets:
             win.addAction("На экране нет других элементов").setEnabled(False)
+        scrollable = [(n, f) for f, _, _ in tree.walk(s.nodes) if f.is_frame and f.scroll == "vertical"
+                      for n in f.children if n.id != nid]
+        to = self._submenu(m, "Прокрутить к…")
+        to.setToolTip("Плавно прокрутить экран так, чтобы элемент оказался наверху (оглавление, «к отзывам»)")
+        for n, _ in scrollable[:40]:
+            a = to.addAction(n.name or TYPE_NAMES.get(n.type, ""),
+                             lambda tid=n.id: ed.set_tap_action(nid, {"type": "scroll_to", "node_id": tid}))
+            a.setCheckable(True)
+            a.setChecked(isinstance(cur, dict) and cur.get("type") == "scroll_to" and cur.get("node_id") == n.id)
+        if not scrollable:
+            to.addAction("На экране нет прокручиваемого содержимого").setEnabled(False)
         close = m.addAction("Закрыть окно", lambda: ed.set_tap_action(nid, {"type": "close_overlay"}))
         close.setCheckable(True)
         close.setChecked(isinstance(cur, dict) and cur.get("type") == "close_overlay")

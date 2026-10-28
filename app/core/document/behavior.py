@@ -196,12 +196,14 @@ ACTION_FIELDS = {
     "play_animation": ("animation_id",),
     "open_overlay": ("node_id", "scrim"),   # scrim — затемнить экран под окном (нажатие по нему закрывает)
     "wait": ("duration",),
+    "scroll_to": ("node_id",),  # прокрутить ближайший прокручиваемый контейнер так, чтобы элемент был сверху
     "close_overlay": (),
 }
 ACTION_NAMES = {"navigate": "Перейти на экран", "back": "Назад", "set_variable": "Изменить переменную",
                 "set_state": "Состояние компонента", "set_variant": "Переключить вариант", "set_visible": "Показать / скрыть", "set_text": "Задать текст",
                 "play_animation": "Запустить анимацию", "open_overlay": "Открыть всплывающее окно",
-                "close_overlay": "Закрыть окно", "wait": "Подождать"}
+                "close_overlay": "Закрыть окно", "wait": "Подождать",
+                "scroll_to": "Прокрутить к элементу"}
 VAR_MODES = ("set", "toggle", "increment", "decrement")
 VIS_MODES = ("show", "hide", "toggle")
 

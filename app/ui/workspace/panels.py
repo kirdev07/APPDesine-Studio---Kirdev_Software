@@ -482,6 +482,16 @@ class Inspector(QScrollArea):
         flags.addWidget(self.visible)
         flags.addWidget(self.locked)
         f.addRow(flags)
+        self.sticky = QCheckBox("Липкий — остаётся сверху при прокрутке")
+        self.sticky.setToolTip("Шапка раздела, вкладки, строка поиска: когда до них докрутили, они не уходят вверх. "
+                               "Дайте элементу заливку — иначе под ним будет просвечивать содержимое")
+        self.sticky.clicked.connect(self._commit_sticky)
+        f.addRow(self.sticky)
+        self.paging = QCheckBox("Листать страницами (с точками)")
+        self.paging.setToolTip("Горизонтальный ряд листается пальцем по одной странице; «Точки страниц» сразу после "
+                               "него показывают текущую. В Android — HorizontalPager")
+        self.paging.clicked.connect(lambda v: self.editor.set_paging(self.editor.selected_nodes()[0].id, v))
+        f.addRow(self.paging)
 
         self.sec_geom, f = self._section("Положение и размер", HELP["geom"])
         self.gx, self.gy, self.gw, self.gh = _spin(), _spin(), _spin(0, 100000), _spin(0, 100000)
@@ -1138,6 +1148,13 @@ class Inspector(QScrollArea):
                 self.name.setEnabled(len(nodes) == 1)
                 self.visible.setChecked(all(n.visible for n in nodes))
                 self.locked.setChecked(all(n.locked for n in nodes))
+                parent = tree.find(ed.screen(), n0.id)[1] if len(nodes) == 1 else None
+                in_scroll = parent is not None and parent.is_frame and parent.scroll == "vertical"
+                self._row_visible(self.sticky, in_scroll)
+                self.sticky.setChecked(n0.sticky)
+                pageable = len(nodes) == 1 and n0.is_frame and len(n0.children) > 1 and n0.layout != "vertical"
+                self._row_visible(self.paging, pageable)
+                self.paging.setChecked(n0.paging)
                 self._refresh_geometry()
                 self._refresh_layout(nodes)
                 self._refresh_extra(nodes)
@@ -1336,6 +1353,18 @@ class Inspector(QScrollArea):
             self.refresh()
             return
         self._commit_leaves("stroke_sides", sides, "Стороны обводки")
+
+    def _commit_sticky(self, on: bool) -> None:
+        """Липкий без заливки просвечивал бы: такой элемент получает цвет фона экрана."""
+        if self._loading:
+            return
+        changes = {}
+        for n in self.editor.selected_nodes():
+            props = {"sticky": on}
+            if on and not n.fill and n.type != "text":
+                props["fill"] = self.editor.artboard_color()
+            changes[n.id] = props
+        self.editor.set_props(changes, "Липкий элемент")
 
     def _commit_overlay(self, value: str) -> None:
         """Слой поверх без прозрачности закрыл бы всё: цвету без альфы ставится 40 %."""

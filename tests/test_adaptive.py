@@ -54,7 +54,8 @@ def test_scaffold_slots_scroll_and_tablet_rail():
                  "floatingActionButton = {", "FloatingActionButton(", "Row(modifier = Modifier.fillMaxSize().padding(inner))",
                  "if (wide) {", "NavigationRail {", "NavigationRailItem(",
                  "LocalConfiguration.current.screenWidthDp >= 600", "Modifier.widthIn(max = 600.dp).fillMaxSize()",
-                 ".verticalScroll(rememberScrollState())", '@Preview(name = "Планшет"',
+                 ".verticalScroll(scroll", "= rememberScrollState()",  # 1.21: состояние прокрутки по имени
+                 '@Preview(name = "Планшет"',
                  '@Preview(name = "Маленький телефон"'):
         assert code in src, code
     assert "windowInsets = WindowInsets(0, 0, 0, 0)" not in src     # в слотах — системные отступы Scaffold

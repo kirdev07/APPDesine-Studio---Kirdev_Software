@@ -82,9 +82,14 @@ def _v13_to_v14(raw: dict) -> dict:
     return raw
 
 
+def _v14_to_v15(raw: dict) -> dict:
+    # Схема 15 добавила липкие элементы и листание страницами — у старых проектов их нет.
+    return raw
+
+
 # {исходная_версия: функция(raw) -> raw}
 MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5,
-                                                 5: _v5_to_v6, 6: _v6_to_v7, 7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10, 10: _v10_to_v11, 11: _v11_to_v12, 12: _v12_to_v13, 13: _v13_to_v14}
+                                                 5: _v5_to_v6, 6: _v6_to_v7, 7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10, 10: _v10_to_v11, 11: _v11_to_v12, 12: _v12_to_v13, 13: _v13_to_v14, 14: _v14_to_v15}
 
 
 def migrate(raw: dict, version: int) -> dict:
