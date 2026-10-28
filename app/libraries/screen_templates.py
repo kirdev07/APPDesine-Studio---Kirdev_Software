@@ -34,6 +34,11 @@ def _field(c, s, ap, placeholder: str, hint: str = "") -> Node:
 def _fill(n: Node) -> Node:
     n.sizing_h = "fill"
     n.constraint_h = "left"
+    if n.role == "m3.segmented":  # растянутый переключатель: сегменты делят ширину поровну
+        for seg in n.children:
+            if seg.is_frame:
+                seg.sizing_h = "fill"
+                seg.pad_l, seg.pad_r, seg.gap = seg.pad_l / 2, seg.pad_r / 2, seg.gap / 2  # галочка + текст влезают
     return n
 
 

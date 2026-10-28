@@ -352,7 +352,7 @@ class WorkspacePage(QMainWindow):
                 self.sel_buttons[1].setVisible(len(nodes) == 1 and nodes[0].type in ("image", "rect", "frame")
                                                and not nodes[0].role.startswith("m3.button"))
                 if len(nodes) == 1:
-                    self.tap_button.setText(self._tap_text(nodes[0].id))
+                    self.tap_button.setText(self._tap_text(nodes[0].id) + " ▾")  # стрелка — в тексте кнопки
                 bar.adjustSize()
             bar.setVisible(bool(nodes))
         hint = getattr(self, "start_hint", None)

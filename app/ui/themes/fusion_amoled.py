@@ -41,6 +41,7 @@ QLabel#Error {{ color: {danger}; }}
 
 QPushButton, QToolButton {{ background: {surface_2}; border: 1px solid {border}; border-radius: {radius};
     padding: 6px 12px; }}
+QPushButton::menu-indicator, QToolButton::menu-indicator {{ image: none; width: 0px; }}
 QPushButton:hover, QToolButton:hover {{ background: {surface_3}; border-color: {border_strong}; }}
 QPushButton:pressed, QToolButton:pressed {{ background: #262626; }}
 QPushButton:focus, QToolButton:focus {{ border: 1px solid {accent}; }}

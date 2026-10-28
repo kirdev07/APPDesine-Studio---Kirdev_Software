@@ -154,7 +154,7 @@ def kpi_card(c: _Ctx) -> Node:
                     gap=4, cross_align="center", sizing_h="hug", sizing_v="hug")
     return c.frame("Карточка показателя", "vertical",
                    [c.text("Выручка", 14, c.s["onSurfaceVariant"], name="Подпись"),
-                    c.text("128 400 ₽", 28, c.s["onSurface"], 600, "Число"), delta, spark],
+                    c.text("128 400 ₽", 28, c.s["onSurface"], 600, "Число", sizing_h="fill"), delta, spark],
                    w=180, gap=6, pad_l=16, pad_r=16, pad_t=16, pad_b=16, radius=20, fill=c.s["surfaceContainerLow"],
                    sizing_v="hug")
 

@@ -796,7 +796,7 @@ class CanvasView(QGraphicsView):
         if not s:
             return
         vp = self.viewport().rect()
-        side, top = 16, 60  # сверху — место для плавающей панели выделенного, чтобы она не закрывала экран
+        side, top = 16, 84  # сверху — место для плавающей панели выделенного и подписи экрана над рамкой
         z = min((vp.width() - 2 * side) / s.width, (vp.height() - top - side) / s.height)
         z = max(ZOOM_MIN, min(ZOOM_MAX, z))
         self.setTransform(QTransform.fromScale(z, z))

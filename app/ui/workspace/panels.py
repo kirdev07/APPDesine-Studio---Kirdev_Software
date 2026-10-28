@@ -489,6 +489,7 @@ class Inspector(QScrollArea):
         for row, (a, b, la, lb) in ((r1, (self.gx, self.gy, "X", "Y")), (r2, (self.gw, self.gh, "Ш", "В"))):
             row.addWidget(label(la, "Muted"))
             row.addWidget(a)
+            row.addSpacing(8)  # подпись второго поля не липнет к первому
             row.addWidget(label(lb, "Muted"))
             row.addWidget(b)
         f.addRow(r1)
@@ -1028,6 +1029,7 @@ class Inspector(QScrollArea):
         f.addRow("Имя", self.s_name)
         self.s_w, self.s_h = QSpinBox(), QSpinBox()
         for s in (self.s_w, self.s_h):
+            s.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)  # стрелки в тёмной теме не рисуются — без них
             s.setRange(1, 20000)
             s.setKeyboardTracking(False)
             s.valueChanged.connect(self._commit_screen_size)
@@ -1375,7 +1377,7 @@ class ScreensStrip(QWidget):
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._menu)
         lay.addWidget(self.list, 1)
-        add = QPushButton("+  Экран")
+        add = QPushButton("+  Экран ▾")
         add.setToolTip("Добавить пустой или готовый экран (вход, список, профиль, настройки, чат, корзина)")
         self.add_menu = QMenu(add)
         self.add_menu.aboutToShow.connect(self._fill_add_menu)

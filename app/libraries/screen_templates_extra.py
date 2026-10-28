@@ -38,8 +38,8 @@ def calendar(s: Screen, ap) -> list[Node]:
         label = str(day) if 1 <= day <= 30 else ""
         kids = [c.text(label, 14, c.s["onPrimary"] if today else c.s["onSurface"], 600 if today else 400,
                        "Число", align="center")]
-        if day in events:
-            kids.append(c.dot("Событие", 5, c.s["onPrimary"] if today else c.s["primary"]))
+        # место точки есть у каждого дня (без события — прозрачная): числа в ряду стоят на одной линии
+        kids.append(c.dot("Событие", 5, (c.s["onPrimary"] if today else c.s["primary"]) if day in events else ""))
         cells.append(c.frame(f"День {label or '—'}", "vertical", kids, h=44, radius=22 if today else 0,
                              fill=c.s["primary"] if today else "", main_align="center", cross_align="center",
                              gap=2, sizing_h="fill"))

@@ -84,7 +84,9 @@ def home(s: Screen, ap) -> list[Node]:
     _set_text(chips.children[0], "Подпись", "Кафе рядом")
     _set_text(chips.children[1], "Подпись", "План")
     title = _text(c, "Рекомендации", 22, c.s["onSurface"], name="Раздел")
-    kids = [hello, search, tiles, chips, title, _fill(_b(s, ap, "m3_carousel")),
+    carousel = _fill(_b(s, ap, "m3_carousel"))
+    carousel.pad_l = carousel.pad_r = 0  # левый край — вровень с остальными блоками
+    kids = [hello, search, tiles, chips, title, carousel,
             _list_item(s, ap, "Утренняя пробежка", "Завтра, 7:00 · 5 км")]
     return [_content(c, s, kids, 0, 80, gap=16), _b(s, ap, "m3_nav_bar")]
 
@@ -94,7 +96,7 @@ def product(s: Screen, ap) -> list[Node]:
     photo = c.frame("Фото товара", "horizontal", [c.icon(72, color=c.s["onSurfaceVariant"], glyph="headphones")],
                     h=280, radius=28, fill=c.s["surfaceContainerHighest"], main_align="center", cross_align="center",
                     sizing_h="fill")
-    seg = _b(s, ap, "m3_segmented")
+    seg = _fill(_b(s, ap, "m3_segmented"))
     for i, t in enumerate(("Чёрный", "Белый", "Синий")):
         _set_text(seg, "Подпись", t, i)
     buy = _fill(_b(s, ap, "m3_button_filled"))
@@ -171,7 +173,7 @@ def player(s: Screen, ap) -> list[Node]:
 
 def notifications(s: Screen, ap) -> list[Node]:
     c = _Ctx(s, ap)
-    tabs = _b(s, ap, "m3_segmented")
+    tabs = _fill(_b(s, ap, "m3_segmented"))
     for i, t in enumerate(("Все", "Заказы", "Акции")):
         _set_text(tabs, "Подпись", t, i)
     items = []

@@ -48,7 +48,7 @@ def test_tap_action_from_selection_bar(qtbot, win):
     second = ed.add_blank_screen()
     ed.set_screen(ed.doc.screens[0].id)
     ed.select([btn.id])
-    assert page.tap_button.isVisible() and page.tap_button.text() == "При нажатии…"
+    assert page.tap_button.isVisible() and page.tap_button.text() == "При нажатии… ▾"
     page._fill_tap_menu()
     go = next(a for a in page.tap_menu.actions() if a.text() == "Открыть экран").menu()
     next(a for a in go.actions() if a.text() == second.name).trigger()
@@ -56,9 +56,9 @@ def test_tap_action_from_selection_bar(qtbot, win):
     rules = ed.tap_rules(btn.id)
     assert len(rules) == 1 and rules[0].actions[0]["transition"] == "slide_left"
     ed.set_tap_action(btn.id, {"type": "back"})
-    assert len(ed.tap_rules(btn.id)) == 1 and page.tap_button.text() == "При нажатии ← назад"
+    assert len(ed.tap_rules(btn.id)) == 1 and page.tap_button.text() == "При нажатии ← назад ▾"
     ed.set_tap_action(btn.id, None)
-    assert ed.tap_rules(btn.id) == [] and page.tap_button.text() == "При нажатии…"
+    assert ed.tap_rules(btn.id) == [] and page.tap_button.text() == "При нажатии… ▾"
     # сложное правило из «Логики» простыми кнопками не перезаписывается
     from app.core.document.behavior import Interaction
     ed.patch("rule", lambda doc: doc.interactions.append(Interaction(
