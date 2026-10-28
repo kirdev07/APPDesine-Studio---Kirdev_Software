@@ -259,9 +259,12 @@ class ExportPage(QWidget):
                             "Собрать отладочный APK на этом компьютере (Android SDK, JDK и Gradle из Android Studio)")
         self.b_play = button("Google Play (AAB)…", self.build_release,
                              "Подписанный пакет AAB для загрузки в Google Play и подписанный APK")
+        self.b_windows = button("Приложение Windows…", self.save_windows,
+                                "Экраны Windows — готовое приложение на Python + PySide6 (запуск: python main.py)")
         row.addWidget(self.b_android)
         row.addWidget(self.b_apk)
         row.addWidget(self.b_play)
+        row.addWidget(self.b_windows)
         lay.addLayout(row)
         self.steps = label("", "Muted", wrap=True)
         lay.addWidget(self.steps)
@@ -518,6 +521,49 @@ class ExportPage(QWidget):
             return None
         write_project(self._android_files(), target, find_toolchain().sdk)
         self.steps.setText(f"✓ Android-проект сохранён: {target}\nОткройте папку в Android Studio (File → Open).")
+        return target
+
+    def save_windows(self, folder: str | None = None) -> Path | None:
+        """Экраны Windows → папка приложения PySide6 (ui.json, среда выполнения, main.py, картинки)."""
+        from app.exporters import windows_app
+        if self.main.doc is None:
+            return None
+        import shutil
+        doc, o = self.main.doc, self.options()
+        everything = [s for s in doc.screens if s.platform == "windows"]
+        screens = [s for s in everything if o.screen_ids is None or s.id in o.screen_ids]
+        if not screens:
+            QMessageBox.information(self, "Приложение Windows", (
+                "Отметьте экраны Windows в списке экранов." if everything else
+                "В проекте нет экранов Windows — добавьте экран для окна Windows («+ Экран → Пустой экран для "
+                "другого устройства…»)."))
+            return None
+        if not folder:
+            folder = QFileDialog.getExistingDirectory(self, "Папка для приложения Windows", self.folder.text())
+            if not folder:
+                return None
+        target = Path(folder) / f"{slug(doc.meta.title, 'app')}_windows"
+        if target.exists() and any(target.iterdir()) and QMessageBox.question(
+                self, "Приложение Windows", f"Папка {target} не пуста. Перезаписать файлы приложения? Ваши другие "
+                                           "файлы в ней не удаляются.") != QMessageBox.StandardButton.Yes:
+            return None
+        prefix = windows_app.ROOT + "/"
+        try:
+            shutil.rmtree(target / "assets", ignore_errors=True)  # картинки прошлой выгрузки не остаются
+            for path, data in windows_app.files(doc, screens).items():
+                out = (target / path[len(prefix):]).resolve()
+                if target.resolve() not in out.parents:
+                    raise ValueError(f"небезопасный путь: {path}")
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(data)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Приложение Windows", f"Не удалось сохранить приложение: {exc}")
+            return None
+        skipped = windows_app.skipped_triggers(doc, screens)
+        note = (f"\nВ приложение попали нажатия и открытие экранов; правил с другими событиями (двойное нажатие, "
+                f"удержание, наведение): {skipped} — они работают только в прототипе.") if skipped else ""
+        self.steps.setText(f"✓ Приложение Windows сохранено: {target}\nЗапуск: pip install -r requirements.txt, "
+                           f"затем python main.py (нужен Python 3.10+).{note}")
         return target
 
     def build_apk(self):

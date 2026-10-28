@@ -236,6 +236,9 @@ def build_package(doc: ProjectDocument, opts: ExportOptions, issues: list[Issue]
         files.update(proj.files())
         android = {"root": A_ROOT, "package": proj.pkg, "versions": VERSIONS,
                    "screens": {s.id: {"composable": proj.fns[s.id], "route": proj.routes[s.id]} for s in proj.screens}}
+    if "windows" in opts.platforms and any(s.platform == "windows" for s in screens):
+        from app.exporters import windows_app  # экраны Windows — готовое приложение на PySide6
+        files.update(windows_app.files(doc, screens))
     files["schemas/manifest.schema.json"] = _dump(schema.MANIFEST_SCHEMA)
     files["schemas/screen.schema.json"] = _dump(schema.SCREEN_SCHEMA)
     manifest = {
