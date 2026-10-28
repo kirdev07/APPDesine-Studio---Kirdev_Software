@@ -33,7 +33,11 @@ def compose_snippet(doc: ProjectDocument, screen: Screen, node_id: str) -> str:
     proj = _project(doc, screen)
     gen = _Screen(proj, screen, proj.fns[screen.id])
     mode = _MODES.get(parent.layout, "abs") if parent is not None and parent.is_frame else "abs"
-    return "\n".join(gen.node(n, parent, mode, ""))
+    code = "\n".join(gen.node(n, parent, mode, ""))
+    if proj.strings:  # тексты — строковые ресурсы: строки для res/values/strings.xml рядом с кодом
+        code += "\n\n// res/values/strings.xml:\n" + "\n".join(
+            f'// <string name="{k}">{proj.xml_string(t)}</string>' for t, k in proj.strings.items())
+    return code
 
 
 def _color(c: str, tokens: dict[str, str], roles: dict[str, str], role: str | None = None) -> str:

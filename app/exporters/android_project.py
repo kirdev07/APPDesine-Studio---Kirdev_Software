@@ -31,6 +31,14 @@ _KW = {"as", "break", "class", "continue", "do", "else", "false", "for", "fun", 
        "val", "var", "when", "while"}
 
 
+_JAVA_KW = {"abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue",
+            "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "goto", "if",
+            "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private",
+            "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this",
+            "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false", "null", "var", "val",
+            "fun", "object", "typealias", "is", "in", "as"}
+
+
 def _translit(text: str) -> str:
     from app.exporters.ai_export import _RU
     return "".join(_RU.get(ch, ch) for ch in text.lower())
@@ -283,8 +291,11 @@ class _Screen:
                 var, (a, b) = self.state_vars[n.id], toggle
                 lines.append(f"{ind}        {var} = if ({var} == {kstr(a)}) {kstr(b)} else {kstr(a)}")
             return lines
-        if set(mine) == {"tap"}:
-            return [f"{ind}.clickable {{"] + body("tap") + [f"{ind}}}"] + out_swipe
+        if set(mine) == {"tap"}:  # подпись действия для TalkBack — видимая надпись элемента (имя слоя — нет)
+            shown = next((d.text.strip() for d in tree.descendants(n) if d.type == "text" and d.text.strip()), "") \
+                if n.is_container else (n.text.strip() if n.type == "text" else "")
+            label = f"onClickLabel = {kstr(shown[:60])}" if shown else ""
+            return [f"{ind}.clickable({label}) {{"] + body("tap") + [f"{ind}}}"] + out_swipe
         out = [f"{ind}.combinedClickable("]
         for trig, arg in (("tap", "onClick"), ("long_press", "onLongClick"), ("double_tap", "onDoubleClick")):
             if trig in mine or trig == "tap":
@@ -708,14 +719,23 @@ class _Screen:
                      f"{ind}        inner()", f"{ind}    }},", f"{ind})"])
         value = self.texts.get(n.id)
         if value is None:
-            value = kstr(_cased(n.text, n.text_case))
+            value = self.res_text(_cased(n.text, n.text_case))
         elif n.text_case != "none":  # текст меняется при работе — регистр в коде
             value += {"upper": ".uppercase()", "lower": ".lowercase()",
                       "title": '.split(" ").joinToString(" ") { it.replaceFirstChar(Char::titlecase) }'}[n.text_case]
         lines = ([f"{ind}    maxLines = {n.max_lines},", f"{ind}    overflow = TextOverflow.Ellipsis,"]
                  if n.max_lines else [])
+        if n.font_size / self.k >= 22 and re.search(r"[A-Za-zА-Яа-яЁё]{3,}", n.text):  # крупный текст со словами —
+            # заголовок: TalkBack переходит по заголовкам (цена «1 470 ₽» и «12 минут» — не заголовок)
+            modtxt += f"\n{ind}        .semantics {{ heading() }}"
         return [f"{ind}Text(", f"{ind}    text = {value},", f"{ind}    {style},"] + lines + \
             [f"{ind}    modifier = {modtxt},", f"{ind})"]
+
+    def res_text(self, text: str) -> str:
+        """Неизменный текст — строковый ресурс (stringResource); пустой — как есть."""
+        if not text.strip():
+            return kstr(text)
+        return f"stringResource(R.string.{self.g.string_key(text)})"
 
     def slots(self):
         """Верхняя панель, нижняя навигация и плавающая кнопка экрана — в слоты Scaffold (без смещений)."""
@@ -876,6 +896,8 @@ class AndroidProject:
         from app.exporters.glance import is_widget
         self.widget_screens = [s for s in screens if is_widget(s)]  # виджеты рабочего стола — Glance, не экраны
         self.widget_previews = {k: v for k, v in (widget_previews or {}).items() if v}  # картинка в списке виджетов
+        self.strings: dict[str, str] = {}   # текст → имя ресурса (values/strings.xml — для перевода приложения)
+        self._string_names: set[str] = {"app_name"}
         screens = [s for s in screens if not is_widget(s)]
         self._font_files = fonts or {}
         # семейство шрифта → имя FontFamily в коде и начертания (ресурс, насыщенность, курсив)
@@ -894,6 +916,7 @@ class AndroidProject:
             self.faces.setdefault(fam, []).append((name, w, it))
         self.screens = [s for s in screens if s.platform == PLATFORM_ANDROID]
         self.pkg = package_name(doc.meta.title)
+        self.link_scheme = re.sub(r"[^a-z0-9]", "", self.pkg.rsplit(".", 1)[-1]) or "app"  # ссылки на экраны
         self.artboard = ARTBOARD_COLORS.get(doc.meta.appearance.theme, "#000000")
         self.drawables = {aid: name for aid, (name, _, _) in drawables.items()}
         self._drawable_files = drawables
@@ -976,6 +999,8 @@ class AndroidProject:
             "androidx.compose.ui.unit.DpOffset", "androidx.compose.animation.slideInVertically",
             "androidx.compose.ui.unit.IntOffset", "androidx.compose.ui.zIndex",
             "androidx.compose.foundation.gestures.detectDragGestures", "androidx.compose.ui.input.pointer.pointerInput",
+            "androidx.compose.ui.res.stringResource", "androidx.compose.ui.semantics.heading",
+            "androidx.compose.ui.semantics.semantics",
             "kotlin.math.abs",
             "androidx.compose.ui.platform.LocalDensity", "androidx.compose.foundation.pager.HorizontalPager",
             "androidx.compose.foundation.pager.rememberPagerState",
@@ -1128,6 +1153,7 @@ dependencies {{
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     debugImplementation(libs.androidx.ui.tooling){glance_dep}
+    implementation("androidx.core:core-splashscreen:1.0.1")
 }}
 '''
         has_icon = bool(self.doc.meta.appearance.app_icon
@@ -1145,19 +1171,44 @@ dependencies {{
         android:allowBackup="true"
         android:label="@string/app_name"{icon_attrs}
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name=".MainActivity"
+            android:theme="@style/Theme.App.Starting"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="{self.link_scheme}" />
+            </intent-filter>
         </activity>
 {receivers}    </application>
 </manifest>
 '''
-        esc = app_name.replace("&", "&amp;").replace("<", "&lt;").replace("'", "\\'").replace('"', '\\"')
+        esc = self.xml_string(app_name)
+        # заставка запуска (Splash Screen API): фон — цвет фона дизайна, значок — иконка приложения
+        light = self.doc.meta.appearance.theme == "light"
+        icon_item = ('        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>\n'
+                     if has_icon else "")  # без своей иконки — иконка приложения по умолчанию
+        post = "@android:style/Theme.Material.Light.NoActionBar" if light else "@android:style/Theme.Material.NoActionBar"
+
+        def splash(bg: str) -> str:
+            return ('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
+                    f'    <color name="splash_background">{bg}</color>\n'
+                    '    <style name="Theme.App.Starting" parent="Theme.SplashScreen">\n'
+                    '        <item name="windowSplashScreenBackground">@color/splash_background</item>\n'
+                    + icon_item +
+                    f'        <item name="postSplashScreenTheme">{post}</item>\n'
+                    '    </style>\n</resources>\n')
+        out["app/src/main/res/values/splash.xml"] = splash(self.artboard)
+        if self.doc.meta.appearance.app_theme == "system":  # тёмная тема телефона — без белой вспышки
+            out["app/src/main/res/values-night/splash.xml"] = splash("#121212" if light else self.artboard)
         icon = self.doc.meta.appearance.app_icon
         data = self.doc.asset_data.get(icon) if icon else None
         if data:  # иконка из дизайна: адаптивная (Android 8+), картинка в безопасной зоне на подложке
@@ -1175,8 +1226,8 @@ dependencies {{
                    '</adaptive-icon>\n')
             out["app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml"] = xml
             out["app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml"] = xml
-        wstr = "".join(f'    <string name="{w.res}_widget_label">{w.title().replace("&", "&amp;").replace("<", "&lt;")}</string>\n'
-                       f'    <string name="{w.res}_widget_description">{w.s.name.replace("&", "&amp;").replace("<", "&lt;")}</string>\n'
+        wstr = "".join(f'    <string name="{w.res}_widget_label">{self.xml_string(w.title())}</string>\n'
+                       f'    <string name="{w.res}_widget_description">{self.xml_string(w.s.name)}</string>\n'
                        for w in widgets)
         out["app/src/main/res/values/strings.xml"] = f'<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <string name="app_name">{esc}</string>\n{wstr}</resources>\n'
         for aid, (name, data, ext) in sorted(self._drawable_files.items()):
@@ -1196,16 +1247,20 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import {pkg}.navigation.AppNavHost
 import {pkg}.ui.theme.AppTheme
 
 class MainActivity : ComponentActivity() {{
     override fun onCreate(savedInstanceState: Bundle?) {{
+        installSplashScreen()  // заставка запуска, затем — тема приложения
         super.onCreate(savedInstanceState)
         enableEdgeToEdge({bars})
+        // ссылка «{self.link_scheme}://screen2» открывает нужный экран (маршрут — в README_ANDROID.md)
+        val link = intent?.data?.host
         setContent {{
             AppTheme {{
-                AppNavHost()
+                AppNavHost(startRoute = link)
             }}
         }}
     }}
@@ -1234,6 +1289,7 @@ fun fmt(value: Any): String = if (value is Double && value % 1.0 == 0.0) value.t
         out[f"{src}/navigation/NavMotion.kt"] = NAV_MOTION.replace("{pkg}", pkg)
         out[f"{src}/ui/components/Gradients.kt"] = GRADIENT_KT.replace("{pkg}", pkg)
         imports = "\n".join(f"import {pkg}.ui.screens.{self.fns[s.id]}" for s in self.screens)
+        routes_set = ", ".join(f'"{self.routes[s.id]}"' for s in self.screens)
         out[f"{src}/navigation/AppNavHost.kt"] = f'''package {pkg}.navigation
 
 import androidx.activity.compose.BackHandler
@@ -1252,6 +1308,9 @@ import {pkg}.AppState
 
 private data class Entry(val route: String, val motion: NavMotion)
 
+/** Маршруты экранов (для ссылок вида схема://маршрут). */
+val ROUTES = setOf({routes_set})
+
 /**
  * Навигация по экранам дизайна: стек маршрутов с переходами из прототипа (затухание, сдвиги);
  * системная «Назад» возвращает на предыдущий экран обратным переходом.
@@ -1259,9 +1318,10 @@ private data class Entry(val route: String, val motion: NavMotion)
  */
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
-fun AppNavHost() {{
+fun AppNavHost(startRoute: String? = null) {{
     val state = remember {{ AppState() }}
-    val stack = remember {{ mutableStateListOf(Entry("{start}", NavMotion("none", 0))) }}
+    val first = if (startRoute in ROUTES) startRoute!! else "{start}"  // ссылка на неизвестный экран — первый
+    val stack = remember {{ mutableStateListOf(Entry(first, NavMotion("none", 0))) }}
     var forward by remember {{ mutableStateOf(true) }}
     var smartOn by remember {{ mutableStateOf(false) }}  // умный переход: общие элементы перетекают
     val go: (String, NavMotion) -> Unit = {{ route, motion ->
@@ -1300,6 +1360,11 @@ fun AppNavHost() {{
         out[f"{src}/ui/components/DesignIcon.kt"] = DESIGN_ICON.replace("{pkg}", pkg)
         for s in self.screens:
             out[f"{src}/ui/screens/{self.fns[s.id]}.kt"] = _Screen(self, s, self.fns[s.id]).source()
+        if self.strings:  # тексты экранов — ресурсы: приложение можно перевести (values-en/strings.xml и т. п.)
+            extra = "".join(f'    <string name="{k}"{" formatted=\"false\"" if "%" in t else ""}>{self.xml_string(t)}</string>\n'
+                            for t, k in self.strings.items())
+            key = "app/src/main/res/values/strings.xml"
+            out[key] = out[key].replace("</resources>", extra + "</resources>")
         out["README_ANDROID.md"] = self.readme()
         return {f"{ROOT}/{p}": (b if isinstance(b, bytes) else b.encode("utf-8")) for p, b in sorted(out.items())}
 
@@ -1365,6 +1430,30 @@ fun AppTheme(
 }}
 """
 
+    def string_key(self, text: str) -> str:
+        """Имя строкового ресурса для текста (один ресурс на одинаковый текст)."""
+        if text not in self.strings:
+            base = re.sub(r"[^a-z0-9_]+", "_", _translit(text)).strip("_")[:40] or "text"
+            if not base[0].isalpha() or base in _KW or base in _JAVA_KW:  # имя поля R.string — не ключевое слово
+                base = "text_" + base
+            name, i = base, 2
+            while name in self._string_names:
+                name, i = f"{base}_{i}", i + 1
+            self._string_names.add(name)
+            self.strings[text] = name
+        return self.strings[text]
+
+    @staticmethod
+    def xml_string(text: str) -> str:
+        """Текст для values/strings.xml: экранирование правил Android."""
+        t = text.replace("\\", "\\\\").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        t = t.replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n")
+        if t[:1] in ("@", "?"):
+            t = "\\" + t
+        if text != text.strip() or "  " in text or "\t" in text:  # пробелы сохраняются только в кавычках
+            t = '"' + t.replace("\t", "\\t") + '"'
+        return t
+
     def fonts_kt(self) -> str:
         """Свои шрифты проекта: FontFamily для каждого семейства из файлов в res/font."""
         lines = [f"package {self.pkg}.ui.theme", "", "import androidx.compose.ui.text.font.Font",
@@ -1428,8 +1517,15 @@ val AppTypography = Typography({chr(10) + typo + "," + chr(10) if typo else ""})
                  "- Эффекты (тени Material 3, градиенты, размытие), переходы между экранами, плавное появление и "
                  "анимации непрозрачности и положения из студии — рабочий код.",
                  "- Места с `TODO`: анимации, которые не переводятся автоматически; картинки, не включённые в пакет.",
-                 "- Абсолютные смещения → адаптивная раскладка, тексты → `strings.xml`, данные → ViewModel.",
+                 "- Абсолютные смещения → адаптивная раскладка, данные → ViewModel.",
                  "- Подробное задание для ИИ — `AI_TASK.md` в корне пакета.", "",
+                 "## Уже сделано", "",
+                 "- Тексты экранов — в `res/values/strings.xml`: для перевода добавьте `res/values-en/strings.xml` "
+                 "с теми же именами.",
+                 "- Заставка запуска (Splash Screen API, `res/values/splash.xml`), жест «назад» с предпросмотром "
+                 "(Android 14+), крупные заголовки и подписи нажатий для TalkBack.",
+                 f"- Ссылки на экраны: `{self.link_scheme}://маршрут` открывает экран (например, "
+                 f"`{self.link_scheme}://screen2` — второй экран); неизвестный маршрут открывает первый экран.", "",
                  "## Экраны", ""]
         lines += [f"- `{self.fns[s.id]}` — «{s.name}» (маршрут `{self.routes[s.id]}`)" for s in self.screens]
         return "\n".join(lines) + "\n"

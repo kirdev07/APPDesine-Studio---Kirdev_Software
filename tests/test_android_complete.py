@@ -118,3 +118,30 @@ def test_release_signing(tmp_path, doc):
     props = (project / "release.properties").read_text(encoding="utf-8")
     assert "versionCode=2" in props and "versionName=1.3" in props and "\\" not in props
     assert apk_builder.signing_key(t, keys, "com.design.test").version_code == 2   # номер помнится
+
+
+def test_strings_resources_escaping_and_a11y(doc):
+    """1.30: тексты — строковые ресурсы с правильным экранированием; подписи нажатий — видимая надпись;
+    заголовок — крупный текст со словами, а не цена."""
+    from app.core.document.behavior import Interaction
+    from app.exporters.android_project import AndroidProject
+    assert AndroidProject.xml_string("  отступ") == '"  отступ"'
+    assert AndroidProject.xml_string("it's") == "it\\'s" and AndroidProject.xml_string("@имя").startswith("\\@")
+    s = doc.screens[0]
+    card = Node(type="frame", name="Rectangle 1", layout="vertical", x=10, y=10, w=300, h=80, fill="#EEEEEE",
+                children=[Node(type="text", name="Подпись", text="Открыть заказ", fill="", w=200, h=30)])
+    price = Node(type="text", name="Цена", text="1 470 ₽", font_size=80, fill="", x=10, y=200, w=300, h=90)
+    title = Node(type="text", name="Заголовок", text="Мои заказы", font_size=80, fill="", x=10, y=320, w=600, h=90)
+    s.nodes += [card, price, title]
+    doc.interactions.append(Interaction(screen_id=s.id, trigger="tap", node_id=card.id,
+                                        actions=[{"type": "set_visible", "node_id": price.id, "mode": "toggle"}]))
+    files = build_package(doc, ExportOptions()).files
+    src, _ = _screen_src(files, doc)
+    assert 'onClickLabel = "Открыть заказ"' in src and '"Rectangle 1"' not in src
+    strings = files[f"{ROOT}/app/src/main/res/values/strings.xml"].decode()
+    assert ">Открыть заказ<" in strings and "stringResource(R.string." in src
+    assert src.count("heading()") == 1                                            # «Мои заказы» — да, цена — нет
+    manifest = files[f"{ROOT}/app/src/main/AndroidManifest.xml"].decode()
+    assert "enableOnBackInvokedCallback" in manifest and "Theme.App.Starting" in manifest
+    assert "android.intent.action.VIEW" in manifest
+

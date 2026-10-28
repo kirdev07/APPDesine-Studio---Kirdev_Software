@@ -97,6 +97,8 @@ def test_compose_export_real_material_components():
     p = package_name(doc.meta.title).replace(".", "/")
     base = f"{ROOT}/app/src/main/java/{p}"
     src = f[f"{base}/ui/screens/FormaScreen.kt"].decode()
+    from tests.conftest import inline_strings
+    src = inline_strings(src, f)
     assert _balanced(src)
     for call in ("TopAppBar(", "Switch(checked = ", "Checkbox(checked = ", "RadioButton(selected = ", "Slider(value = ",
                  "FilterChip(", "FloatingActionButton(", "FilledTonalButton(", "PrimaryTabRow(", "SegmentedButton(",

@@ -108,7 +108,7 @@ def test_dev_section_spec_and_code(win, qtbot):
     rows = dict(dev_info.spec_rows(ed.doc, ed.screen(), t))
     assert rows["Положение"].startswith("x 16 dp") and "22 sp" in rows["Шрифт"] and "Medium" in rows["Шрифт"]
     code = dev_info.compose_snippet(ed.doc, ed.screen(), t.id)
-    assert "Text(" in code and "\"Привет\"" in code
+    assert "Text(" in code and "stringResource(R.string." in code and ">Привет<" in code  # строка — ресурсом
     ed.select([t.id])
     insp = page.inspector
     insp.refresh()

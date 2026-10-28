@@ -45,6 +45,8 @@ def test_password_field_is_real_compose_field():
     base = f"{ROOT}/app/src/main/java/{package_name(doc.meta.title).replace('.', '/')}"
     src = f[f"{base}/ui/screens/FormaScreen.kt"].decode()
     assert _balanced(src)
+    from tests.conftest import inline_strings
+    src = inline_strings(src, f)
     for code in ("OutlinedTextField(", "PasswordVisualTransformation()", "VisualTransformation.None",
                  'placeholder = { Text("Пароль") }', 'supportingText = { Text("Не меньше 8 символов") }',
                  "trailingIcon = {", "mutableStateOf(false)", "Показать пароль"):

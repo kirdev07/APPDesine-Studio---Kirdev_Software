@@ -146,7 +146,7 @@ class Material:
         return out
 
     def text(self, t) -> str:
-        return self.g.texts.get(t.id) or self.g.kstr(t.text)
+        return self.g.texts.get(t.id) or self.g.res_text(t.text)  # неизменный текст — строковый ресурс
 
     def icon(self, v, ind: str, size: int = 24) -> str:
         args = [self.g.kstr(v.path), f"contentDescription = {self.g.kstr(v.name)}"]
@@ -242,8 +242,8 @@ class Material:
             field, look = self._field_kind(n)
             out = [f"{ind}{field}(", f"{i2}value = {v},", f"{i2}onValueChange = {{", f"{i3}{v} = it"]
             out += change + [f"{i2}}},"] + [f"{i2}{x}" for x in look]
-            if ph is not None:
-                out.append(f"{i2}placeholder = {{ Text({self.g.kstr(ph.text)}) }},")
+            if ph is not None:  # подсказка в поле — строковый ресурс (переводится)
+                out.append(f"{i2}placeholder = {{ Text({self.g.res_text(ph.text)}) }},")
             if hint is not None:
                 out.append(f"{i2}supportingText = {{ Text({self.text(hint)}) }},")
             return out + [f"{i2}singleLine = true,", f"{i2}modifier = {M},", f"{ind})"]
@@ -257,7 +257,7 @@ class Material:
             out = [f"{ind}{field}(", f"{i2}value = {var},", f"{i2}onValueChange = {{ {var} = it }},"] + \
                 [f"{i2}{x}" for x in look]
             if ph is not None:
-                out.append(f"{i2}placeholder = {{ Text({self.g.kstr(ph.text)}) }},")
+                out.append(f"{i2}placeholder = {{ Text({self.g.res_text(ph.text)}) }},")
             if hint is not None:
                 out.append(f"{i2}supportingText = {{ Text({self.text(hint)}) }},")
             return out + [f"{i2}singleLine = true,",
@@ -357,7 +357,8 @@ class Material:
         if r in _TOP_BARS:
             title = next((t for t in texts), None)
             vecs = [d for d in tree.descendants(n) if d.type == "vector" and d.path]
-            out = [f"{ind}{_TOP_BARS[r]}(", f"{i2}title = {{ Text({self.text(title) if title else EMPTY}) }},"]
+            out = [f"{ind}{_TOP_BARS[r]}(", f"{i2}title = {{ Text({self.text(title) if title else EMPTY}, "
+                   "modifier = Modifier.semantics { heading() }) },"]
             if vecs:
                 v = vecs[0]
                 out += [f"{i2}navigationIcon = {{", f"{i3}IconButton(onClick = {{"] + self.taps(v.id, i3 + "    ") + \
