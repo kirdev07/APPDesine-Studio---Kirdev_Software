@@ -275,6 +275,7 @@ class MainWindow(QMainWindow):
             if title == "Экспорт":
                 for text, sc, slot in (("Экраны в PNG…", "Ctrl+Shift+E", self.export_png),
                                        ("Экраны в PDF…", None, self.export_pdf),
+                                       ("Прототип в браузере (HTML)…", None, self.export_html),
                                        ("Показ на весь экран", "Shift+F5", self.present),
                                        ("Иконка приложения из выделенного", None, self.make_app_icon),
                                        ("Проверка проекта", "F7", self.show_validator),
@@ -597,6 +598,46 @@ class MainWindow(QMainWindow):
         if not self._quiet:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         return path
+
+    def export_html(self, path: str | None = None):
+        """Прототип одним HTML-файлом: открывается в любом браузере, на компьютере и на телефоне."""
+        from pathlib import Path
+        from PySide6.QtWidgets import QApplication, QFileDialog, QProgressDialog
+        ed = self.project_page.editor
+        if self.doc is None or not self.doc.screens:
+            return None
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(self, "Прототип в браузере",
+                                                  str(Path(self._export_dir()) / f"{self.doc.meta.title}.html"),
+                                                  "Веб-страница (*.html)")
+            if not path:
+                return None
+        from app.ui.workspace.web_export import save_html
+        wait = QProgressDialog("Обхожу состояния прототипа…", None, 0, 0, self)
+        wait.setWindowTitle("Прототип в браузере")
+        wait.setMinimumDuration(400)
+
+        def progress(i, n):
+            wait.setMaximum(n)
+            wait.setValue(i)
+            QApplication.processEvents()
+        start = ed.screen_id if ed.screen() is not None else None
+        try:
+            r = save_html(self.doc, ed.engine, ed.artboard_color(), path, start, progress)
+        except OSError as e:
+            QMessageBox.warning(self, "Прототип в браузере", f"Не удалось записать файл:\n{e}")
+            return None
+        finally:
+            wait.close()
+        mb = r.size / 1_000_000
+        self.statusBar().showMessage(f"Прототип: {r.states} сост., {mb:.1f} МБ — {r.path}", 10000)
+        if r.cut and not self._quiet:
+            QMessageBox.information(self, "Прототип в браузере",
+                                    f"Состояний очень много — в файл вошли первые {r.states}. Обычно так бывает "
+                                    "со счётчиками без предела: в браузере после них появится подсказка.")
+        if not self._quiet:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(r.path)))
+        return r
 
     _quiet = False  # тесты: не открывать проводник и просмотрщик
 
