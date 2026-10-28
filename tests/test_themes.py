@@ -92,7 +92,9 @@ def test_theme_dialog_and_apply_with_undo(qtbot, win):
     old_fill = btn.fill
     d = ThemeDialog(ed)
     assert d.presets.count() == len(PRESETS) and not d.presets.item(0).icon().isNull()
-    d.presets.setCurrentRow(next(i for i, p in enumerate(PRESETS) if p.key == "sunset"))
+    d.show()  # показ окна не меняет тему проекта (список не выбирает первую тему сам)
+    assert d.appearance().accent == ed.doc.meta.appearance.accent
+    d.presets.itemClicked.emit(d.presets.item(next(i for i, p in enumerate(PRESETS) if p.key == "sunset")))
     ap = d.appearance()
     assert ap.accent == "#F4511E" and ap.theme == "dark" and ap.corner_radius == 20
     assert not d.light_view.pixmap().isNull() and not d.dark_view.pixmap().isNull()

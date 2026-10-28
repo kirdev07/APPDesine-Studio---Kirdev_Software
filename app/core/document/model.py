@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 # 13 — данные графика у контейнера (data: числа через пробел);
 # 14 — матовое стекло (размытие фона под элементом), слой поверх с режимом наложения, маска любой формой;
 # 15 — липкий элемент в прокрутке (sticky) и листание страницами (paging).
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -61,6 +61,7 @@ class Appearance:
     dynamic_color: bool = False   # цвета из обоев телефона (Android 12+)
     app_icon: str = ""            # иконка приложения: ресурс-картинка 432×432 (пусто — стандартная)
     app_icon_bg: str = ""         # подложка адаптивной иконки Android
+    material: str = "m3"          # поколение Material: m1 (2014), m2 (2018), m3, m3x (Expressive, 2025)
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +73,7 @@ class Appearance:
             "app_theme": self.app_theme,
             "dynamic_color": self.dynamic_color,
             **({"app_icon": self.app_icon, "app_icon_bg": self.app_icon_bg} if self.app_icon else {}),
+            **({"material": self.material} if self.material != "m3" else {}),
         }
 
     @classmethod
@@ -88,6 +90,7 @@ class Appearance:
             dynamic_color=bool(d.get("dynamic_color", False)),
             app_icon=check_prop("asset_id", d.get("app_icon", ""), "image"),
             app_icon_bg=check_prop("fill", d.get("app_icon_bg", "")),
+            material=d.get("material") if d.get("material") in ("m1", "m2", "m3", "m3x") else "m3",
         )
 
 

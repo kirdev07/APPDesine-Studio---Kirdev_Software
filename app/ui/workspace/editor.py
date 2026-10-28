@@ -606,7 +606,7 @@ class Editor(QObject):
         targets = self.nav_targets(nav_id)
         targets[index] = screen_id
         ap = self.doc.meta.appearance
-        sch = scheme(ap.accent, ap.theme != "light")
+        sch = {**scheme(ap.accent, ap.theme != "light"), "__gen": ap.material}
         master = nav.to_dict()
         sid = s.id
         added: list[str] = []

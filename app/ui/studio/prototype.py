@@ -358,7 +358,8 @@ class PrototypePlayer(QWidget):
         apply_samples(screen, self.samples())
         if self.live:
             ap = self.doc.meta.appearance
-            live.apply(screen, self.live, scheme(ap.accent, ap.theme != "light"), spec.units(screen))
+            live.apply(screen, self.live, {**scheme(ap.accent, ap.theme != "light"), "__gen": ap.material},
+                       spec.units(screen))
         return screen, hit[1]
 
     # ---------- отрисовка ----------

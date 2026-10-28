@@ -129,5 +129,15 @@ def restyle(doc: ProjectDocument, new: Appearance) -> int:
         t.text_color = _map(cmap, t.text_color)
     for c in doc.colors:
         c.value = _map(cmap, c.value)
+    if new.material != old.material:  # другое поколение Material: вид компонентов по ролям
+        from app.engines.material import generations
+        from app.engines.material.color import scheme
+        from app.engines.preview.devices import screen_dpi
+        sch = scheme(new.accent, new.theme != "light")
+        ks = [screen_dpi(s) / 160 for s in doc.screens if s.platform == "android"]
+        for s in doc.screens:
+            if s.platform == "android":
+                changed += generations.apply(s.nodes, new.material, sch, screen_dpi(s) / 160)
+        changed += generations.apply([c.root for c in doc.components], new.material, sch, ks[0] if ks else 2.625)
     doc.meta.appearance = replace(new)
     return changed

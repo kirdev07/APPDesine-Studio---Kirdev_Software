@@ -54,8 +54,8 @@ def selected(n) -> int:
     items = _items(n)
     for i, it in enumerate(items):
         if n.role == "m3.nav_bar":
-            pill = next((c for c in it.children if c.is_frame), None)
-            on = pill is not None and bool(pill.fill)
+            from app.engines.material.generations import nav_selected
+            return nav_selected(n)
         elif n.role == "m3.tabs":
             rects = [c for c in it.children if c.type == "rect"]
             on = bool(rects) and bool(rects[-1].fill)
@@ -154,18 +154,9 @@ def _tabs(n, sel, s, u):
 
 
 def _nav(n, sel, s, u):
-    for i, it in enumerate(_items(n)):
-        on = i == sel
-        pill = next((c for c in it.children if c.is_frame), None)
-        if pill is not None:
-            pill.fill = s["secondaryContainer"] if on else ""
-            for c in pill.children:
-                if c.type == "vector":
-                    c.fill = s["onSecondaryContainer"] if on else s["onSurfaceVariant"]
-        for c in it.children:
-            if c.type == "text":
-                c.text_color = s["onSurface"] if on else s["onSurfaceVariant"]
-                c.font_weight = 600 if on else 500
+    from app.engines.material.generations import nav_item_look
+    for i, it in enumerate(_items(n)):  # s["__gen"] — поколение Material (M1/M2 — без «пилюли»)
+        nav_item_look(it, i == sel, s.get("__gen", "m3"), s)
 
 
 def _segmented(n, sel, s, u):

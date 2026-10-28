@@ -88,7 +88,9 @@ class _Ctx:
             if key in kw:
                 kw[key] = self.d(kw[key])
         if kw.get("radius"):
-            kw["radius"] = round(kw["radius"] * self.shape, 2)
+            side = min(kw.get("w") or 1e9, kw.get("h") or 1e9)
+            if kw["radius"] * 2 < side - 0.5:  # круги и «капсулы» (радиокнопки, шаги) остаются круглыми
+                kw["radius"] = round(kw["radius"] * self.shape, 2)
         kw.setdefault("fill", "")
         return Node(type="frame", name=name, layout=layout, children=children, **kw)
 
@@ -565,6 +567,9 @@ def build(kind: str, screen: Screen, appearance: Appearance) -> Node:
         raise KeyError(kind)
     c = _Ctx(screen, appearance)
     node = spec.builder(c)
+    if screen.platform == "android" and appearance.material != "m3":
+        from app.engines.material import generations
+        generations.apply([node], appearance.material, c.s, c.k)
     # компоненты ставятся на трети высоты экрана, не на всю ширину — с отступом 16 dp от левого края;
     # растянутые по ширине с полями (строка поиска, разделитель) сохраняют свой отступ
     full_width = node.constraint_h == "left_right" and node.x == 0

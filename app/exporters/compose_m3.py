@@ -90,6 +90,19 @@ class Material:
                     self.state[n.id + ":show"] = show
                     self.decls.append(f"    var {show} by remember {{ mutableStateOf(false) }}")
 
+    def _field_kind(self, n) -> tuple[str, list[str]]:
+        """Поле ввода по виду в дизайне: линия снизу — TextField (залитое; без заливки — прозрачное, Material 1),
+        иначе — OutlinedTextField (Material 3)."""
+        box = next((c for c in n.children if c.is_frame and (c.stroke or c.fill)), None)
+        if box is None or box.stroke_sides != "b":
+            look = [f"shape = RoundedCornerShape({self.g.dp(box.radius)}),"] if box is not None and box.radius else []
+            return "OutlinedTextField", look
+        if box.fill:
+            return "TextField", [f"colors = TextFieldDefaults.colors(focusedContainerColor = {self.g.g.color(box.fill)}, "
+                                 f"unfocusedContainerColor = {self.g.g.color(box.fill)}),"]
+        return "TextField", ["colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, "
+                             "unfocusedContainerColor = Color.Transparent),"]
+
     @staticmethod
     def _slider_value(n) -> float:
         rects = [c for c in n.children if c.type == "rect"]
@@ -162,6 +175,10 @@ class Material:
                         "OutlinedButton": "outlinedButtonColors", "TextButton": "textButtonColors",
                         "ElevatedButton": "elevatedButtonColors"}[_BUTTONS[r]]
                 out.append(f"{i2}colors = ButtonDefaults.{kind}(containerColor = {self.g.g.color(n.fill)}),")
+            if n.radius < min(n.w, n.h) / 2 - 0.5:  # не «капсула» — своя форма (поколения Material 1 / 2)
+                out.append(f"{i2}shape = RoundedCornerShape({self.g.dp(n.radius)}),")
+            if texts and texts[0].text_case == "upper":
+                label = f"{label}.uppercase()"
             out.append(f"{ind}) {{")
             if icons:
                 out += [f"{i2}{self.icon(icons[0], i2, round(18 * k))}", f"{i2}Spacer(Modifier.width({_dp(8 * k)}))"]
@@ -170,8 +187,16 @@ class Material:
         if r in _ICON_BUTTONS:
             comp = _ICON_BUTTONS[r]
             body = [f"{i2}{self.icon(icons[0], i2)}"] if icons else []
+            look = []
+            if comp.endswith("FloatingActionButton"):  # форма и цвет из дизайна (круг в Material 1 / 2)
+                circle = n.radius >= min(n.w, n.h) / 2 - 0.5
+                look.append(f"{i2}shape = {'CircleShape' if circle else f'RoundedCornerShape({self.g.dp(n.radius)})'},")
+                if n.fill:
+                    look.append(f"{i2}containerColor = {self.g.g.color(n.fill)},")
+                if icons and icons[0].fill:
+                    look.append(f"{i2}contentColor = {self.g.g.color(icons[0].fill)},")
             return ([f"{ind}{comp}(", f"{i2}onClick = {{"] + self.taps(n.id, i3) +
-                    [f"{i2}}},", f"{i2}modifier = {M},", f"{ind}) {{"] + body + [f"{ind}}}"])
+                    [f"{i2}}},"] + look + [f"{i2}modifier = {M},", f"{ind}) {{"] + body + [f"{ind}}}"])
         if r == "m3.fab_extended":
             ico = [f"{i2}icon = {{ {self.icon(icons[0], i2)} }},"] if icons else []
             return ([f"{ind}ExtendedFloatingActionButton(", f"{i2}onClick = {{"] + self.taps(n.id, i3) +
@@ -214,8 +239,9 @@ class Material:
             hint = texts[1] if len(texts) > 1 else None
             v = self.g.inputs.get(ph.id) if ph is not None and ph.id in self.g.inputs else var
             change = self.g.input_change(ph, v, i3) if ph is not None and ph.id in self.g.inputs else []
-            out = [f"{ind}OutlinedTextField(", f"{i2}value = {v},", f"{i2}onValueChange = {{", f"{i3}{v} = it"]
-            out += change + [f"{i2}}},"]
+            field, look = self._field_kind(n)
+            out = [f"{ind}{field}(", f"{i2}value = {v},", f"{i2}onValueChange = {{", f"{i3}{v} = it"]
+            out += change + [f"{i2}}},"] + [f"{i2}{x}" for x in look]
             if ph is not None:
                 out.append(f"{i2}placeholder = {{ Text({self.g.kstr(ph.text)}) }},")
             if hint is not None:
@@ -227,7 +253,9 @@ class Material:
             ph = next((t for t in texts if t.name == "Плейсхолдер"), texts[0] if texts else None)
             hint = next((t for t in texts if t.name == "Подсказка"), None)
             eye, eye_off = (self.g.kstr(ICONS[k][1]) for k in ("visibility", "visibility_off"))
-            out = [f"{ind}OutlinedTextField(", f"{i2}value = {var},", f"{i2}onValueChange = {{ {var} = it }},"]
+            field, look = self._field_kind(n)
+            out = [f"{ind}{field}(", f"{i2}value = {var},", f"{i2}onValueChange = {{ {var} = it }},"] + \
+                [f"{i2}{x}" for x in look]
             if ph is not None:
                 out.append(f"{i2}placeholder = {{ Text({self.g.kstr(ph.text)}) }},")
             if hint is not None:
@@ -294,11 +322,33 @@ class Material:
             return out + [f"{ind}}}"]
         if r == "m3.nav_bar":
             insets = "" if mode == "slot" else ", windowInsets = WindowInsets(0, 0, 0, 0)"  # в слоте — системные отступы
-            out = [f"{ind}NavigationBar(modifier = {M}{insets}) {{"]
-            for i, item in enumerate(_items(n)):
+            c = self.g.g.color
+            bg = f", containerColor = {c(n.fill)}" if n.fill else ""
+            out = [f"{ind}NavigationBar(modifier = {M}{insets}{bg}) {{"]
+            items = _items(n)
+            sel = live.selected(n)
+            colors = None
+            if items and len(items) > 1:
+                on, off = items[sel], items[(sel + 1) % len(items)]
+                pill = next((x for x in on.children if x.is_frame), None)
+                ion, ioff = _vectors(on), _vectors(off)
+                ton, toff = _texts(on), _texts(off)
+                parts = [f"indicatorColor = {c(pill.fill) if pill is not None and pill.fill else 'Color.Transparent'}"]
+                if ion and ion[0].fill:
+                    parts.append(f"selectedIconColor = {c(ion[0].fill)}")
+                if ioff and ioff[0].fill:
+                    parts.append(f"unselectedIconColor = {c(ioff[0].fill)}")
+                if ton and ton[0].text_color:
+                    parts.append(f"selectedTextColor = {c(ton[0].text_color)}")
+                if toff and toff[0].text_color:
+                    parts.append(f"unselectedTextColor = {c(toff[0].text_color)}")
+                colors = f"NavigationBarItemDefaults.colors({', '.join(parts)})"
+            for i, item in enumerate(items):
                 t, ic = _texts(item), _vectors(item)
                 out += [f"{i2}NavigationBarItem(", f"{i3}selected = {var} == {i},", f"{i3}onClick = {{",
                         f"{i3}    {var} = {i}"] + self.taps(item.id, i3 + "    ") + [f"{i3}}},"]
+                if colors:
+                    out.append(f"{i3}colors = {colors},")
                 out.append(f"{i3}icon = {{ {self.icon(ic[0], i3)} }}," if ic else f"{i3}icon = {{}},")
                 if t:
                     out.append(f"{i3}label = {{ Text({self.text(t[0])}) }},")
@@ -320,6 +370,16 @@ class Material:
                 out.append(f"{i2}}},")
             if mode != "slot":  # вне Scaffold отступ под строку состояния уже учтён
                 out.append(f"{i2}windowInsets = WindowInsets(0, 0, 0, 0),")
+            if n.fill:  # цвета шапки из дизайна
+                c = self.g.g.color
+                parts = [f"containerColor = {c(n.fill)}"]
+                if title is not None and title.text_color:
+                    parts.append(f"titleContentColor = {c(title.text_color)}")
+                if vecs and vecs[0].fill:
+                    parts.append(f"navigationIconContentColor = {c(vecs[0].fill)}")
+                if len(vecs) > 1 and vecs[1].fill:
+                    parts.append(f"actionIconContentColor = {c(vecs[1].fill)}")
+                out.append(f"{i2}colors = TopAppBarDefaults.topAppBarColors({', '.join(parts)}),")
             return out + [f"{i2}modifier = {M},", f"{ind})"]
         return []
 

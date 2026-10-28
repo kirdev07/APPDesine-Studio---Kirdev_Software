@@ -35,7 +35,8 @@ def _layout(screen: Screen, engine) -> None:
 
 def sample(ap: Appearance, like: Screen, engine) -> QPixmap:
     """Мини-экран темы: верхняя панель, карточка, кнопка, переключатель, нижняя навигация."""
-    key = (ap.accent, ap.theme, ap.font_family, ap.corner_radius, like.width, like.height, like.device_id)
+    key = (ap.accent, ap.theme, ap.font_family, ap.corner_radius, ap.material, like.width, like.height,
+           like.device_id)
     if key in _cache:
         return _cache[key]
     s = Screen(name="образец", platform="android", width=like.width, height=like.height, device_id=like.device_id)
@@ -63,6 +64,11 @@ def restyled_copy(screen: Screen, old: Appearance, new: Appearance) -> Screen:
     f = shape_factor(old.corner_radius, new.corner_radius)
     for n, _, _ in tree.walk(copy.nodes):
         restyle_node(n, cmap, f, old.font_family, new.font_family)
+    if new.material != old.material and copy.platform == "android":  # другое поколение Material
+        from app.engines.material import generations
+        from app.engines.material.color import scheme
+        from app.engines.preview.devices import screen_dpi
+        generations.apply(copy.nodes, new.material, scheme(new.accent, new.theme != "light"), screen_dpi(copy) / 160)
     return copy
 
 
@@ -92,7 +98,10 @@ class ThemeDialog(QDialog):
             it.setData(Qt.ItemDataRole.UserRole, p.key)
             it.setToolTip(f"{p.hint}\nШрифт: {p.font} · скругления: {SHAPES[p.shape][0].lower()}")
             self.presets.addItem(it)
-        self.presets.currentItemChanged.connect(self._pick)
+        # только по щелчку или Enter: при показе окна список получает фокус и сам выбирает первую тему —
+        # тема проекта сбрасывалась бы на неё
+        self.presets.itemClicked.connect(self._pick)
+        self.presets.itemActivated.connect(self._pick)
         left.addWidget(self.presets, 1)
         root.addLayout(left, 3)
 
@@ -114,6 +123,13 @@ class ThemeDialog(QDialog):
         for v, (t, _) in SHAPES.items():
             self.shape.addItem(t, v)
         form.addRow("Скругления", self.shape)
+        from app.engines.material.generations import GENERATIONS
+        self.material = QComboBox()
+        for k, t in GENERATIONS:
+            self.material.addItem(t, k)
+        self.material.setToolTip("Вид компонентов: Material 1 и 2 — малые скругления, кнопки заглавными, цветная "
+                                 "шапка; Material 3 — тональные цвета; Expressive — крупные выразительные формы")
+        form.addRow("Поколение", self.material)
         right.addLayout(form)
         right.addWidget(label("Готовое Android-приложение", "H2"))
         self.follow = QCheckBox("Светлая или тёмная — как в телефоне")
@@ -140,7 +156,7 @@ class ThemeDialog(QDialog):
         self._loading = True
         self.set_appearance(self.old)
         self._loading = False
-        for w in (self.theme, self.font, self.shape):
+        for w in (self.theme, self.font, self.shape, self.material):
             w.currentIndexChanged.connect(self.refresh)
         self.font.editTextChanged.connect(self.refresh)
         self.refresh()
@@ -153,13 +169,14 @@ class ThemeDialog(QDialog):
                                                               else 12)))
         self.follow.setChecked(ap.app_theme == "system")
         self.dynamic.setChecked(ap.dynamic_color)
+        self.material.setCurrentIndex(max(0, self.material.findData(ap.material)))
 
     def appearance(self) -> Appearance:
         return replace(self.old, accent=self.accent._value or self.old.accent, theme=self.theme.currentData(),
                        font_family=self.font.currentText().strip() or self.old.font_family,
                        corner_radius=self.shape.currentData(),
                        app_theme="system" if self.follow.isChecked() else "design",
-                       dynamic_color=self.dynamic.isChecked())
+                       dynamic_color=self.dynamic.isChecked(), material=self.material.currentData() or "m3")
 
     def _pick(self, item, _prev=None) -> None:
         if item is None:
