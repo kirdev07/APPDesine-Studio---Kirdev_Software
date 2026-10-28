@@ -253,12 +253,15 @@ class ExportPage(QWidget):
         self.b_export = button("Собрать пакет", self.export, "Проверить проект, собрать и проверить архив", "Primary")
         lay.addWidget(self.b_export)
         row = QHBoxLayout()
-        self.b_android = button("Android-проект в папку…", self.save_android,
+        self.b_android = button("Проект Android…", self.save_android,
                                 "Сохранить проект Android Studio, чтобы открыть его сразу")
-        self.b_apk = button("Собрать тестовый APK", self.build_apk,
+        self.b_apk = button("Тестовый APK", self.build_apk,
                             "Собрать отладочный APK на этом компьютере (Android SDK, JDK и Gradle из Android Studio)")
+        self.b_play = button("Google Play (AAB)…", self.build_release,
+                             "Подписанный пакет AAB для загрузки в Google Play и подписанный APK")
         row.addWidget(self.b_android)
         row.addWidget(self.b_apk)
+        row.addWidget(self.b_play)
         lay.addLayout(row)
         self.steps = label("", "Muted", wrap=True)
         lay.addWidget(self.steps)
@@ -525,7 +528,7 @@ class ExportPage(QWidget):
         t = find_toolchain()
         if not t.ok:
             QMessageBox.warning(self, "Сборка APK", "Не хватает инструментов: " + t.describe() +
-                                ".\n\nПроект можно сохранить кнопкой «Android-проект в папку…» и собрать в "
+                                ".\n\nПроект можно сохранить кнопкой «Проект Android…» и собрать в "
                                 "Android Studio.")
             return None
         project = self.ws.ctx.paths.base / "apk_build" / self.main.doc.meta.id
@@ -533,6 +536,46 @@ class ExportPage(QWidget):
             shutil.rmtree(project / "app" / "src", ignore_errors=True)
         write_project(self._android_files(), project, t.sdk)
         dlg = ApkBuildDialog(t, project, self)
+        dlg.show()
+        dlg.start()
+        self.apk_dialog = dlg
+        return dlg
+
+    def build_release(self, version_name: str | None = None):
+        """Сборка для Google Play: ключ загрузки (создаётся один раз), номер версии растёт, Gradle bundleRelease."""
+        import shutil
+
+        from PySide6.QtWidgets import QInputDialog
+
+        from app.exporters.android_project import package_name
+        from app.exporters.apk_builder import find_toolchain, prepare_release, signing_key, write_project
+        from app.ui.studio.export_tools import ApkBuildDialog
+        if self.main.doc is None:
+            return None
+        t = find_toolchain()
+        if not t.ok:
+            QMessageBox.warning(self, "Сборка для Google Play", "Не хватает инструментов: " + t.describe())
+            return None
+        if version_name is None:
+            version_name, ok = QInputDialog.getText(self, "Сборка для Google Play",
+                                                    "Версия для пользователей (например 1.0 или 1.2.3):", text="1.0")
+            if not ok or not version_name.strip():
+                return None
+        pkg = package_name(self.main.doc.meta.title)
+        keys = self.ws.ctx.paths.base / "keys"
+        try:
+            key = signing_key(t, keys, pkg)
+        except (RuntimeError, OSError) as e:
+            QMessageBox.warning(self, "Сборка для Google Play", f"Ключ подписи не создан: {e}")
+            return None
+        project = self.ws.ctx.paths.base / "apk_build" / self.main.doc.meta.id
+        if project.exists():
+            shutil.rmtree(project / "app" / "src", ignore_errors=True)
+        write_project(self._android_files(), project, t.sdk)
+        code = prepare_release(project, key, keys, pkg, version_name.strip())
+        note = (f"Версия {version_name.strip()} (номер сборки {code}). Ключ подписи: {key.store} — "
+                "сохраните копию папки с ключом: без него обновить приложение в Google Play будет нельзя.")
+        dlg = ApkBuildDialog(t, project, self, release=True, note=note)
         dlg.show()
         dlg.start()
         self.apk_dialog = dlg

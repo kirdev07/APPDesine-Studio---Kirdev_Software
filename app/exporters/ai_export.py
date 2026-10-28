@@ -103,7 +103,10 @@ def _components_used(doc: ProjectDocument, screens: list[Screen]) -> dict[str, l
 
 
 def _assets_used(doc: ProjectDocument, screens: list[Screen], comps: dict[str, list[str]]) -> dict[str, list[str]]:
-    fonts = {a.family: a.id for a in doc.assets if a.kind == "font" and a.family}
+    fonts: dict[str, list[str]] = {}  # семейство → все его файлы (обычный, жирный, курсив…)
+    for a in doc.assets:
+        if a.kind == "font" and a.family:
+            fonts.setdefault(a.family, []).append(a.id)
     out = {}
     for s in screens:
         nodes = [n for n, _, _ in tree.walk(s.nodes)]
@@ -112,7 +115,7 @@ def _assets_used(doc: ProjectDocument, screens: list[Screen], comps: dict[str, l
             if d is not None:
                 nodes += [n for n, _, _ in tree.walk([d.root])]
         ids = {n.asset_id for n in nodes if n.type == "image" and n.asset_id}
-        ids |= {fonts[n.font_family] for n in nodes if n.type == "text" and n.font_family in fonts}
+        ids |= {fid for n in nodes if n.type == "text" and n.font_family in fonts for fid in fonts[n.font_family]}
         out[s.id] = sorted(i for i in ids if doc.asset(i) is not None)
     return out
 
@@ -220,7 +223,16 @@ def build_package(doc: ProjectDocument, opts: ExportOptions, issues: list[Issue]
         used: set[str] = set()
         drawables = {r["id"]: (drawable_name(r["name"], used), files[r["path"]], r["path"].rsplit(".", 1)[-1])
                      for r in included if r["kind"] == "image" and r["path"].rsplit(".", 1)[-1] in ("png", "jpg", "webp")}
-        proj = AndroidProject(doc, screens, drawables)
+        from app.exporters.vector_drawable import svg_to_vector
+        for r in included:  # SVG — векторным ресурсом Android
+            if r["kind"] == "image" and r["path"].rsplit(".", 1)[-1].lower() == "svg":
+                xml = svg_to_vector(files[r["path"]])
+                if xml:
+                    drawables[r["id"]] = (drawable_name(r["name"], used), xml.encode("utf-8"), "xml")
+        fused: set[str] = set()
+        fonts = {r["id"]: ("font_" + drawable_name(r["name"], fused), files[r["path"]], r["path"].rsplit(".", 1)[-1])
+                 for r in included if r["kind"] == "font" and r["path"].rsplit(".", 1)[-1].lower() in ("ttf", "otf")}
+        proj = AndroidProject(doc, screens, drawables, fonts)
         files.update(proj.files())
         android = {"root": A_ROOT, "package": proj.pkg, "versions": VERSIONS,
                    "screens": {s.id: {"composable": proj.fns[s.id], "route": proj.routes[s.id]} for s in proj.screens}}

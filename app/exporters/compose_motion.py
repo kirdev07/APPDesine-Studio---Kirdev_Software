@@ -4,8 +4,8 @@
   плавностями; действие «Запустить анимацию» запускает их, «Открытие экрана» — при показе экрана.
 - Тень уровня Material 3 → Modifier.shadow, градиент → Brush, размытие → Modifier.blur.
 - Переходы между экранами — в AppNavHost (AnimatedContent): затухание и сдвиги с длительностью и плавностью.
-Дорожки непрозрачности, положения, масштаба и поворота — рабочий код; остальные (размер, цвет, скругление,
-шрифт) помечаются TODO.
+Дорожки непрозрачности, положения, масштаба, поворота, размера, скругления, размера шрифта и цветов (заливка,
+цвет текста) — рабочий код; остальные (обводка) помечаются TODO.
 """
 
 from __future__ import annotations
@@ -15,7 +15,15 @@ import math
 from app.core.document import tree
 from app.core.document.model import ELEVATION_DP
 
-SUPPORTED = ("opacity", "x", "y", "scale", "rotation")
+SUPPORTED = ("opacity", "x", "y", "scale", "rotation", "w", "h", "radius", "font_size", "fill", "text_color")
+COLORS = ("fill", "text_color")       # Animatable(Color)
+LENGTHS = ("w", "h", "radius", "font_size")  # в dp / sp
+
+
+def _kcolor(c: str) -> str:
+    c = (str(c or "#000000")).lstrip("#").upper()
+    a = c[6:8] if len(c) == 8 else "FF"
+    return f"Color(0x{a}{c[:6]})"
 _BEZIER = {"ease_in": (0.42, 0.0, 1.0, 1.0), "ease_out": (0.0, 0.0, 0.58, 1.0), "ease_in_out": (0.42, 0.0, 0.58, 1.0)}
 
 
@@ -55,17 +63,24 @@ class Motion:
                 n = m.get(tr.node_id)
                 if n is None or len(tr.keyframes) < 1:
                     continue
-                if tr.prop not in SUPPORTED:
+                if tr.prop not in SUPPORTED or (tr.prop == "fill" and n.gradient not in ("", "none")):  # градиент
                     self.todo.append(f"«{a.name}»: дорожка «{tr.prop}» элемента «{n.name}»")
                     continue
                 key = (n.id, tr.prop)
                 if key not in self.vars:
                     var = gen.ident(f"anim {n.name} {tr.prop}")
                     self.vars[key] = var
-                    init = {"opacity": n.opacity, "scale": n.scale, "rotation": n.rotation}.get(tr.prop, 0.0)
-                    if a.id in opening:
-                        init = self._value(n, tr.prop, tr.keyframes[0].value)
-                    self.decls.append(f"    val {var} = remember {{ Animatable({_f(init)}) }}")
+                    if tr.prop in COLORS:  # цвет: Animatable(Color) из androidx.compose.animation
+                        init = tr.keyframes[0].value if a.id in opening else getattr(n, tr.prop) or "#00000000"
+                        self.decls.append(f"    val {var} = remember {{ androidx.compose.animation.Animatable("
+                                          f"{_kcolor(init)}) }}")
+                    else:
+                        init = {"opacity": n.opacity, "scale": n.scale, "rotation": n.rotation, "w": n.w / gen.k,
+                                "h": n.h / gen.k, "radius": n.radius / gen.k,
+                                "font_size": n.font_size / gen.k}.get(tr.prop, 0.0)
+                        if a.id in opening:
+                            init = self._value(n, tr.prop, tr.keyframes[0].value)
+                        self.decls.append(f"    val {var} = remember {{ Animatable({_f(init)}) }}")
                 launches.append(self._launch(self.vars[key], n, tr, a))
             if launches:
                 fn = gen.ident(f"play {a.name}")
@@ -81,20 +96,21 @@ class Motion:
     def _value(self, n, prop: str, v) -> float:
         if prop in ("opacity", "scale", "rotation"):
             return float(v)
+        if prop in LENGTHS:
+            return float(v) / self.g.k  # px дизайна → dp / sp
         return (float(v) - (n.x if prop == "x" else n.y)) / self.g.k   # смещение от места в дизайне, dp
 
     def _launch(self, var: str, n, tr, a) -> str:
         kfs = tr.keyframes
         dur = max(1, a.duration)
-        entries = [f"{_f(self._value(n, tr.prop, k.value))} at {k.t} using {easing(k.easing, k.bezier)}"
-                   for k in kfs]
+        val = (lambda v: _kcolor(v)) if tr.prop in COLORS else (lambda v: _f(self._value(n, tr.prop, v)))
+        entries = [f"{val(k.value)} at {k.t} using {easing(k.easing, k.bezier)}" for k in kfs]
         if kfs[-1].t < dur:  # держать последнее значение до конца анимации
-            entries.append(f"{_f(self._value(n, tr.prop, kfs[-1].value))} at {dur}")
+            entries.append(f"{val(kfs[-1].value)} at {dur}")
         spec = f"keyframes {{ durationMillis = {dur}; {'; '.join(entries)} }}"
         if a.loop:
             spec = f"infiniteRepeatable({spec}, RepeatMode.Restart)"
-        first = _f(self._value(n, tr.prop, kfs[0].value))
-        last = _f(self._value(n, tr.prop, kfs[-1].value))
+        first, last = val(kfs[0].value), val(kfs[-1].value)
         return f"{var}.snapTo({first}); {var}.animateTo({last}, {spec})"
 
     # ---------- в генераторе экрана ----------
@@ -103,7 +119,12 @@ class Motion:
         return f"scope.launch {{ {fn}() }}" if fn else None
 
     def animated(self, n) -> bool:
-        return any((n.id, p) in self.vars for p in SUPPORTED) or n.scale != 1 or n.rotation != 0
+        return any((n.id, p) in self.vars for p in ("opacity", "x", "y", "scale", "rotation")) or n.scale != 1 \
+            or n.rotation != 0
+
+    def var(self, n, prop: str) -> str | None:
+        """Имя Animatable, если у элемента есть дорожка этого свойства."""
+        return self.vars.get((n.id, prop))
 
     def layer(self, n, ind: str) -> list[str]:
         """graphicsLayer с анимируемыми значениями узла (вместо статической непрозрачности)."""

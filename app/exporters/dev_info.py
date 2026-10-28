@@ -82,8 +82,8 @@ def spec_rows(doc: ProjectDocument, screen: Screen, node: Node) -> list[tuple[st
     if node.type == "text":
         sp = "sp" if screen.platform == "android" else "px"
         family = node.font_family or "системный"
-        if proj is not None:  # в коде Android шрифт не задаётся — у приложения шрифт по умолчанию
-            family = f"по умолчанию (Roboto), в макете «{family}»"
+        if proj is not None and node.font_family not in {a.family for a in doc.assets if a.kind == "font"}:
+            family = f"по умолчанию (Roboto), в макете «{family}»"  # шрифта нет в проекте — в Android его нет
         on = None
         if proj is not None:
             from app.exporters.android_project import _Screen

@@ -333,13 +333,15 @@ class _Screen:
         elif fill_w is not None:
             m.append(f"{ind}    .fillMaxWidth({_num(fill_w)}f)")
         elif n.sizing_h != "hug" and not (mode == "row" and n.sizing_h == "fill"):
-            m.append(f"{ind}    .width({self.dp(n.w)})")
+            aw = self.motion.var(n, "w")  # анимация ширины из студии
+            m.append(f"{ind}    .width({aw + '.value.dp' if aw else self.dp(n.w)})")
         if (n.sizing_v == "fill" and mode == "row") or (fill_h == 1.0 and n.sizing_v != "hug"):
             m.append(f"{ind}    .fillMaxHeight()")
         elif fill_h is not None and n.sizing_v != "hug":
             m.append(f"{ind}    .fillMaxHeight({_num(fill_h)}f)")
         elif n.sizing_v != "hug" and not (mode == "col" and n.sizing_v == "fill") and n.type != "text":
-            m.append(f"{ind}    .height({self.dp(n.h)})")
+            ah = self.motion.var(n, "h")
+            m.append(f"{ind}    .height({ah + '.value.dp' if ah else self.dp(n.h)})")
         elif n.type == "text" and n.sizing_v == "fixed":
             m.append(f"{ind}    .heightIn(min = {self.dp(n.h)})")
         if self.motion.animated(n):  # анимация из студии: непрозрачность и смещение — в graphicsLayer
@@ -347,6 +349,8 @@ class _Screen:
         elif n.opacity < 1:
             m.append(f"{ind}    .alpha({_num(n.opacity)}f)")
         shape = f"maskShape({kstr(n.clip_path)})" if n.clip_path else kshape(n, self.dp)
+        if self.motion.var(n, "radius") and not n.clip_path and n.type != "ellipse":  # анимация скругления
+            shape = f"RoundedCornerShape({self.motion.var(n, 'radius')}.value.dp)"
         drop = shadow(n, self.dp, self.g.color, shape, inset=False)
         if drop:
             m.append(f"{ind}    {drop}")
@@ -371,6 +375,8 @@ class _Screen:
                 tint = self.ident(f"glass {n.name}")
                 self.pre.append(f"val {tint} = {self.g.color(fill)}")
                 m.append(f"{ind}    .drawWithContent {{ drawContent(); drawRect({tint}) }}")
+            elif self.motion.var(n, "fill"):  # анимация цвета заливки
+                m.append(f"{ind}    .background({self.motion.var(n, 'fill')}.value)")
             else:
                 m.append(f"{ind}    .background({brush(n, self.g.color) or self.g.color(fill)})")
         inner = shadow(n, self.dp, self.g.color, shape, inset=True)
@@ -513,7 +519,7 @@ class _Screen:
                         f"{ind2}    contentScale = ContentScale.{ {'cover': 'Crop', 'contain': 'Fit'}.get(n.fit, 'FillBounds') },",
                         f"{ind2}    modifier = {modtxt},", f"{ind2})"]
             else:
-                out += [f"{ind2}// TODO: изображение «{n.name}» (SVG или не включено в пакет)",
+                out += [f"{ind2}// TODO: изображение «{n.name}» (не включено в пакет или SVG не разобрать)",
                         f"{ind2}Box(modifier = {modtxt}.background(Color(0x22FFFFFF)))"]
         elif n.type == "vector" and n.path:
             tint = self.ident(f"tint {n.name}")  # цвет темы читается до рисования (в Canvas он недоступен)
@@ -675,8 +681,12 @@ class _Screen:
 
     def text(self, n, modtxt: str, ind: str) -> list[str]:
         align = {"left": "TextAlign.Start", "center": "TextAlign.Center", "right": "TextAlign.End"}[n.align]
-        style = (f"color = {self.g.color(n.text_color, self.behind(n))}, fontSize = {_num(n.font_size / self.k)}.sp, "
+        tc, fs = self.motion.var(n, "text_color"), self.motion.var(n, "font_size")  # анимации из студии
+        style = (f"color = {tc + '.value' if tc else self.g.color(n.text_color, self.behind(n))}, "
+                 f"fontSize = {fs + '.value.sp' if fs else _num(n.font_size / self.k) + '.sp'}, "
                  f"fontWeight = FontWeight({n.font_weight}), textAlign = {align}")
+        if n.font_family in self.g.families:  # свой шрифт проекта (файл в res/font)
+            style += f", fontFamily = {self.g.families[n.font_family]}"
         if n.letter_spacing:
             style += f", letterSpacing = {_num(n.letter_spacing / self.k)}.sp"
         if n.line_height:
@@ -847,7 +857,7 @@ class _Screen:
               f"    AppTheme {{ {self.fn}(AppState(), onNavigate = {{ _, _ -> }}, onBack = {{}}) }}", "}", ""]
         if self.motion.todo:
             L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)"),
-                     "// TODO: анимации, которые не переведены автоматически (размер, цвет, скругление, шрифт):\n"
+                     "// TODO: анимации, которые не переведены автоматически (обводка):\n"
                      + "\n".join(f"//   {t}" for t in self.motion.todo))
         hovers = [it for it in self.its if it.trigger in ("hover_enter", "hover_leave")]
         if hovers:
@@ -857,9 +867,26 @@ class _Screen:
 
 
 class AndroidProject:
-    def __init__(self, doc: ProjectDocument, screens: list[Screen], drawables: dict[str, tuple[str, bytes, str]]):
-        """drawables — {asset_id: (имя ресурса, данные, расширение)} для включённых растровых изображений."""
+    def __init__(self, doc: ProjectDocument, screens: list[Screen], drawables: dict[str, tuple[str, bytes, str]],
+                 fonts: dict[str, tuple[str, bytes, str]] | None = None):
+        """drawables — {asset_id: (имя ресурса, данные, расширение)} для включённых растровых изображений;
+        fonts — то же для файлов шрифтов (ttf / otf)."""
         self.doc = doc
+        self._font_files = fonts or {}
+        # семейство шрифта → имя FontFamily в коде и начертания (ресурс, насыщенность, курсив)
+        from app.exporters.fontinfo import weight_italic
+        fused: set[str] = set()
+        self.families: dict[str, str] = {}
+        self.faces: dict[str, list[tuple[str, int, bool]]] = {}
+        by_id = {a.id: a for a in doc.assets}
+        for aid, (name, data, _ext) in sorted(fonts.items() if fonts else []):
+            fam = by_id[aid].family if aid in by_id else ""
+            if not fam:
+                continue
+            if fam not in self.families:
+                self.families[fam] = ident(f"{fam} font", True, fused, "Font")
+            w, it = weight_italic(data)
+            self.faces.setdefault(fam, []).append((name, w, it))
         self.screens = [s for s in screens if s.platform == PLATFORM_ANDROID]
         self.pkg = package_name(doc.meta.title)
         self.artboard = ARTBOARD_COLORS.get(doc.meta.appearance.theme, "#000000")
@@ -957,7 +984,8 @@ class AndroidProject:
             f"{self.pkg}.navigation.NavMotion", f"{self.pkg}.navigation.StepEasing",
             f"{self.pkg}.ui.components.DesignIcon", f"{self.pkg}.ui.components.linearAngleBrush",
             f"{self.pkg}.ui.components.maskShape", "androidx.compose.ui.graphics.BlendMode",
-            f"{self.pkg}.ui.theme.AppTheme", "kotlinx.coroutines.coroutineScope", "kotlinx.coroutines.launch")]
+            f"{self.pkg}.ui.theme.AppTheme", "kotlinx.coroutines.coroutineScope", "kotlinx.coroutines.launch")] + \
+            [f"import {self.pkg}.ui.theme.{v}" for v in self.families.values()]
 
     def literal(self, var_type: str, value) -> str:
         from app.core.document.behavior import coerce
@@ -1022,8 +1050,16 @@ kotlin-android = {{ id = "org.jetbrains.kotlin.android", version.ref = "kotlin" 
 kotlin-compose = {{ id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }}
 '''
         out["gradle/wrapper/gradle-wrapper.properties"] = f"distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-{v['gradle']}-bin.zip\nzipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n"
-        out[".gitignore"] = "*.iml\n.gradle/\n/local.properties\n/.idea/\n.DS_Store\n/build/\n/app/build/\n/captures/\n.externalNativeBuild/\n.cxx/\n"
-        out["app/build.gradle.kts"] = f'''import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+        out[".gitignore"] = "*.iml\n.gradle/\n/local.properties\n/release.properties\n*.jks\n/.idea/\n.DS_Store\n/build/\n/app/build/\n/captures/\n.externalNativeBuild/\n.cxx/\n"
+        out["app/build.gradle.kts"] = f'''import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+// Подпись для Google Play: release.properties рядом с проектом (создаёт App Design Studio при сборке AAB;
+// в Git не попадает). Без него release собирается без подписи.
+val release = Properties().apply {{
+    val f = rootProject.file("release.properties")
+    if (f.exists()) f.inputStream().use {{ load(it) }}
+}}
 
 plugins {{
     alias(libs.plugins.android.application)
@@ -1039,13 +1075,25 @@ android {{
         applicationId = "{pkg}"
         minSdk = {v['min_sdk']}
         targetSdk = {v['target_sdk']}
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = (release.getProperty("versionCode") ?: "1").toInt()
+        versionName = release.getProperty("versionName") ?: "1.0"
+    }}
+
+    signingConfigs {{
+        if (release.getProperty("storeFile") != null) {{
+            create("upload") {{
+                storeFile = file(release.getProperty("storeFile"))
+                storePassword = release.getProperty("storePassword")
+                keyAlias = release.getProperty("keyAlias")
+                keyPassword = release.getProperty("keyPassword")
+            }}
+        }}
     }}
 
     buildTypes {{
         release {{
             isMinifyEnabled = false
+            signingConfigs.findByName("upload")?.let {{ signingConfig = it }}
         }}
     }}
     compileOptions {{
@@ -1117,6 +1165,8 @@ dependencies {{
         out["app/src/main/res/values/strings.xml"] = f'<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <string name="app_name">{esc}</string>\n</resources>\n'
         for aid, (name, data, ext) in sorted(self._drawable_files.items()):
             out[f"app/src/main/res/drawable/{name}.{ext}"] = data
+        for aid, (name, data, ext) in sorted(self._font_files.items()):
+            out[f"app/src/main/res/font/{name}.{ext}"] = data
         src = f"app/src/main/java/{path}"
         start = self.routes[self.screens[0].id] if self.screens else "screen1"
         ap = self.doc.meta.appearance
@@ -1226,6 +1276,8 @@ fun AppNavHost() {{
 '''
         out[f"{src}/ui/theme/Theme.kt"] = self.theme_kt()
         out[f"{src}/ui/theme/Type.kt"] = self.type_kt()
+        if self.families:
+            out[f"{src}/ui/theme/Fonts.kt"] = self.fonts_kt()
         out[f"{src}/ui/components/DesignIcon.kt"] = DESIGN_ICON.replace("{pkg}", pkg)
         for s in self.screens:
             out[f"{src}/ui/screens/{self.fns[s.id]}.kt"] = _Screen(self, s, self.fns[s.id]).source()
@@ -1294,6 +1346,17 @@ fun AppTheme(
 }}
 """
 
+    def fonts_kt(self) -> str:
+        """Свои шрифты проекта: FontFamily для каждого семейства из файлов в res/font."""
+        lines = [f"package {self.pkg}.ui.theme", "", "import androidx.compose.ui.text.font.Font",
+                 "import androidx.compose.ui.text.font.FontFamily", "import androidx.compose.ui.text.font.FontStyle",
+                 "import androidx.compose.ui.text.font.FontWeight", f"import {self.pkg}.R", ""]
+        for fam, var in self.families.items():
+            faces = ", ".join(f"Font(R.font.{res}, FontWeight({w}), FontStyle.{'Italic' if it else 'Normal'})"
+                              for res, w, it in self.faces[fam])
+            lines += [f"/** Шрифт «{fam}» из проекта. */", f"val {var} = FontFamily({faces})", ""]
+        return "\n".join(lines)
+
     def type_kt(self) -> str:
         tused: set[str] = set()
         k = screen_dpi(self.screens[0]) / 160 if self.screens else 1.0
@@ -1345,7 +1408,7 @@ val AppTypography = Typography({chr(10) + typo + "," + chr(10) if typo else ""})
                  "## Что доработать", "",
                  "- Эффекты (тени Material 3, градиенты, размытие), переходы между экранами, плавное появление и "
                  "анимации непрозрачности и положения из студии — рабочий код.",
-                 "- Места с `TODO`: анимации размера и цвета, SVG-изображения.",
+                 "- Места с `TODO`: анимации, которые не переводятся автоматически; картинки, не включённые в пакет.",
                  "- Абсолютные смещения → адаптивная раскладка, тексты → `strings.xml`, данные → ViewModel.",
                  "- Подробное задание для ИИ — `AI_TASK.md` в корне пакета.", "",
                  "## Экраны", ""]

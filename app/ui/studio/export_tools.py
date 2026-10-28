@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLineEdit, QPlainTextEdit, QVBoxLayout,
 )
 
-from app.exporters.apk_builder import Toolchain, apk_path, build_command
+from app.exporters.apk_builder import Toolchain, aab_path, apk_path, build_command
 from app.exporters.prompts import PLACEHOLDERS, Prompt
 from app.ui.studio.common import button
 from app.ui.widgets import label
@@ -63,15 +63,18 @@ class PromptDialog(QDialog):
 class ApkBuildDialog(QDialog):
     """Сборка отладочного APK: Gradle в отдельном процессе, журнал, отмена, открыть папку с APK."""
 
-    def __init__(self, toolchain: Toolchain, project: Path, parent=None):
+    def __init__(self, toolchain: Toolchain, project: Path, parent=None, release: bool = False, note: str = ""):
         super().__init__(parent)
-        self.setWindowTitle("Сборка тестового APK")
+        self.release = release
+        self.setWindowTitle("Сборка для Google Play" if release else "Сборка тестового APK")
         self.resize(820, 560)
         self.project, self.toolchain = Path(project), toolchain
         v = QVBoxLayout(self)
         v.addWidget(label(f"Проект: {project}", "Muted", wrap=True))
         v.addWidget(label(toolchain.describe() + ". Первая сборка скачивает зависимости Gradle из Google Maven "
                           "и Maven Central — нужен интернет; дальше — из кэша.", "Muted", wrap=True))
+        if note:
+            v.addWidget(label(note, "Muted", wrap=True))
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(5000)
@@ -79,7 +82,7 @@ class ApkBuildDialog(QDialog):
         self.status = label("Сборка…", "H2")
         v.addWidget(self.status)
         row = QHBoxLayout()
-        self.b_open = button("Открыть папку с APK", self.open_folder)
+        self.b_open = button("Открыть папку с AAB" if release else "Открыть папку с APK", self.open_folder)
         self.b_open.setEnabled(False)
         self.b_project = button("Открыть проект", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(project))))
         self.b_stop = button("Остановить", self.stop, object_name="Danger")
@@ -100,7 +103,7 @@ class ApkBuildDialog(QDialog):
         self.result: Path | None = None
 
     def start(self) -> None:
-        exe, args = build_command(self.toolchain, self.project)
+        exe, args = build_command(self.toolchain, self.project, self.release)
         self.log.appendPlainText(f"> {exe} {' '.join(args)}\n")
         self.proc.start("cmd.exe", ["/c", exe, *args])  # gradle.bat запускается через cmd
 
@@ -110,10 +113,11 @@ class ApkBuildDialog(QDialog):
 
     def _done(self, code, _status=None) -> None:
         self.b_stop.setEnabled(False)
-        apk = apk_path(self.project)
+        apk = aab_path(self.project) if self.release else apk_path(self.project)
         if code == 0 and apk.exists():
             self.result = apk
-            self.status.setText(f"✓ APK собран: {apk} ({apk.stat().st_size // 1024} КБ)")
+            what = "AAB для Google Play" if self.release else "APK"
+            self.status.setText(f"✓ {what} собран: {apk} ({apk.stat().st_size // 1024} КБ)")
             self.b_open.setEnabled(True)
         else:
             self._fail(f"Gradle завершился с кодом {code} — подробности в журнале выше")

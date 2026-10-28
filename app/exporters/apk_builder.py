@@ -98,10 +98,69 @@ def write_project(files: dict[str, bytes], folder: Path, sdk: Path | None = None
     return folder
 
 
-def build_command(t: Toolchain, project: Path) -> tuple[str, list[str]]:
-    """Программа и аргументы для сборки отладочного APK."""
-    return str(t.gradle), ["-p", str(project), "assembleDebug", "--console=plain", "--no-daemon"]
+def build_command(t: Toolchain, project: Path, release: bool = False) -> tuple[str, list[str]]:
+    """Программа и аргументы: отладочный APK или (release) пакет AAB для Google Play и подписанный APK."""
+    tasks = ["bundleRelease", "assembleRelease"] if release else ["assembleDebug"]
+    return str(t.gradle), ["-p", str(project), *tasks, "--console=plain", "--no-daemon"]
 
 
-def apk_path(project: Path) -> Path:
-    return Path(project) / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+def apk_path(project: Path, release: bool = False) -> Path:
+    kind = "release" if release else "debug"
+    return Path(project) / "app" / "build" / "outputs" / "apk" / kind / f"app-{kind}.apk"
+
+
+def aab_path(project: Path) -> Path:
+    return Path(project) / "app" / "build" / "outputs" / "bundle" / "release" / "app-release.aab"
+
+
+# ---------- подпись для Google Play ----------
+@dataclass
+class SigningKey:
+    store: Path
+    password: str
+    alias: str = "upload"
+    version_code: int = 0
+
+
+def signing_key(t: Toolchain, keys_dir: Path, package: str) -> SigningKey:
+    """Ключ загрузки приложения (один на пакет): создаётся keytool из JDK при первой сборке и хранится в папке
+    программы. Его потеря — нельзя обновить приложение в Google Play, поэтому путь показывается пользователю."""
+    import json
+    import secrets
+    import subprocess
+    keys_dir = Path(keys_dir)
+    keys_dir.mkdir(parents=True, exist_ok=True)
+    store, info = keys_dir / f"{package}.jks", keys_dir / f"{package}.json"
+    if store.exists() and info.exists():
+        d = json.loads(info.read_text(encoding="utf-8"))
+        return SigningKey(store, d["password"], d.get("alias", "upload"), int(d.get("version_code", 0)))
+    if t.java_home is None:
+        raise RuntimeError("не найден JDK (keytool) — установите Android Studio")
+    password = secrets.token_urlsafe(18)
+    name = re.sub(r"[^A-Za-z0-9._ -]", " ", package)[:60]  # латиница: кириллица в -dname ломается в консоли
+    cmd = [str(t.java_home / "bin" / "keytool.exe"), "-genkeypair", "-keystore", str(store), "-storetype", "PKCS12",
+           "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-alias", "upload",
+           "-storepass", password, "-keypass", password, "-dname", f"CN={name}"]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0 or not store.exists():
+        raise RuntimeError("keytool не создал ключ: " + (r.stderr or r.stdout).strip()[:300])
+    info.write_text(json.dumps({"package": package, "password": password, "alias": "upload", "version_code": 0},
+                               ensure_ascii=False, indent=2), encoding="utf-8")
+    return SigningKey(store, password, "upload", 0)
+
+
+def prepare_release(project: Path, key: SigningKey, keys_dir: Path, package: str, version_name: str) -> int:
+    """release.properties для Gradle; номер версии (versionCode) растёт с каждой сборкой — Google Play требует."""
+    import json
+    code = key.version_code + 1
+    esc = lambda p: str(p).replace("\\", "/")  # noqa: E731 — в .properties обратная косая — экранирование
+    (Path(project) / "release.properties").write_text(
+        f"storeFile={esc(key.store)}\nstorePassword={key.password}\nkeyAlias={key.alias}\n"
+        f"keyPassword={key.password}\nversionCode={code}\nversionName={version_name}\n", encoding="utf-8")
+    info = Path(keys_dir) / f"{package}.json"
+    d = json.loads(info.read_text(encoding="utf-8"))
+    d["version_code"] = code
+    info.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    key.version_code = code
+    return code
