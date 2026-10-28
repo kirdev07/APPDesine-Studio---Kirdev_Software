@@ -14,7 +14,7 @@ from app.context import AppContext
 from app.core.logging_setup import setup_logging
 from app.core.paths import AppPaths
 from app.ui.shell.main_window import MainWindow
-from app.ui.themes.fusion_amoled import apply_theme
+from app.ui.themes.fusion_amoled import apply_theme, install_qt_russian
 
 log = logging.getLogger("app")
 
@@ -52,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     apply_theme(app)
+    install_qt_russian(app)
     ctx = AppContext.create(paths)
     win = MainWindow(ctx)
     win.show()

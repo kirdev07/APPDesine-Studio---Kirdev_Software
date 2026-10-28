@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QPalette
+import tempfile
+from pathlib import Path
+
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QApplication
 
 TOKENS = {
@@ -64,6 +68,9 @@ QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {{ background: {surface_2}; borde
     border-radius: {radius}; padding: 5px 8px; selection-background-color: {accent}; }}
 QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {{ border: 1px solid {accent}; }}
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {{ color: {text_disabled}; }}
+QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: center right; width: 18px;
+    border: none; background: transparent; }}
+QComboBox::down-arrow {{ image: url({arrow}); width: 10px; height: 6px; }}
 QComboBox QAbstractItemView {{ background: {surface_2}; border: 1px solid {border_strong};
     selection-background-color: {surface_3}; }}
 
@@ -113,8 +120,43 @@ QFontComboBox {{ min-width: 120px; }}
 """
 
 
+def _arrow() -> str:
+    """Стрелка выпадающего списка: своя зона стрелки в стиле не даёт ей налезать на рамку, но стрелку тогда
+    рисует не Fusion — картинка рисуется при запуске (обычная и @2x для чётких экранов)."""
+    folder = Path(tempfile.gettempdir()) / "AppDesignStudio"
+    path = folder / "combo_arrow.png"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        for k, name in ((1, "combo_arrow.png"), (2, "combo_arrow@2x.png")):
+            img = QImage(10 * k, 6 * k, QImage.Format.Format_ARGB32)
+            img.fill(QColor(0, 0, 0, 0))
+            p = QPainter(img)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(QPen(QColor(TOKENS["text_muted"]), 1.5 * k, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                          Qt.PenJoinStyle.RoundJoin))
+            p.drawPolyline([QPointF(1 * k, 1 * k), QPointF(5 * k, 5 * k), QPointF(9 * k, 1 * k)])
+            p.end()
+            img.save(str(folder / name), "PNG")
+    except OSError:
+        return ""
+    return path.as_posix()
+
+
 def stylesheet() -> str:
-    return QSS.format(**TOKENS)
+    return QSS.format(**TOKENS, arrow=_arrow())
+
+
+def install_qt_russian(app: QApplication) -> bool:
+    """Стандартные кнопки и окна Qt по-русски («Отмена», «Да», «Нет» вместо Cancel, Yes, No)."""
+    from PySide6.QtCore import QLibraryInfo, QTranslator
+    import PySide6
+    tr = QTranslator(app)
+    folders = (QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath),
+               str(Path(PySide6.__file__).parent / "translations"))  # в собранном EXE — рядом с PySide6
+    if not any(tr.load("qtbase_ru", f) for f in folders):
+        return False
+    app.installTranslator(tr)
+    return True
 
 
 def apply_theme(app: QApplication) -> None:

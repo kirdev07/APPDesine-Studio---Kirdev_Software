@@ -108,6 +108,8 @@ class MainWindow(QMainWindow):
         self.settings_page.changed.connect(self._settings_changed)
 
         self._build_menu()
+        from app.ui.shell import shortcuts
+        shortcuts.apply(self, shortcuts.load(ctx.settings))  # свои горячие клавиши поверх стандартных
         self.autosave_timer = QTimer(self)
         self.autosave_timer.timeout.connect(self.autosave)
         self._settings_changed()
@@ -313,29 +315,158 @@ class MainWindow(QMainWindow):
                 rows.setdefault(" / ".join(keys), text)
         return sorted(rows.items(), key=lambda r: r[1].lower()) + extra
 
+    # ---------- свои горячие клавиши ----------
+    def set_shortcut(self, name: str, seq: str, take: bool = True) -> bool:
+        """Назначить команде сочетание ("" — без клавиш). Занятое другой командой — отобрать у неё (take)."""
+        from app.ui.shell import shortcuts as sc
+        cmds = sc.commands(self)
+        if name not in cmds:
+            return False
+        custom = sc.load(self.ctx.settings)
+        fmt = QKeySequence.SequenceFormat.PortableText
+        seq = QKeySequence(seq, fmt).toString(fmt) if seq else ""
+        if seq:
+            other = sc.owner(self, seq, skip=name)
+            if other is not None:
+                if not take:
+                    return False
+                custom[other] = [k for k in sc.current(cmds[other]) if k != seq]
+            custom[name] = [seq]
+        else:
+            custom[name] = []
+        for n in list(custom):  # хранить только отличия от стандартных
+            if n in cmds and custom[n] == sc.group_defaults(cmds[n]):
+                del custom[n]
+        sc.save(self.ctx.settings, custom)
+        sc.apply(self, custom)
+        return True
+
+    def reset_shortcuts(self) -> None:
+        from app.ui.shell import shortcuts as sc
+        sc.save(self.ctx.settings, {})
+        sc.apply(self, {})
+
+    def edit_shortcut(self, name: str) -> bool:
+        """Окно «нажмите новое сочетание»; занятое — с вопросом, отдать ли его этой команде."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QKeySequenceEdit, QLabel, QVBoxLayout
+        from app.ui.shell import shortcuts as sc
+        d = QDialog(self)
+        d.setWindowTitle("Горячая клавиша")
+        v = QVBoxLayout(d)
+        v.addWidget(QLabel(f"Команда «{name}». Нажмите новое сочетание клавиш:"))
+        edit = QKeySequenceEdit()
+        edit.setMaximumSequenceLength(1)
+        edit.setClearButtonEnabled(True)
+        cur = sc.current(sc.commands(self).get(name, []))
+        if cur:
+            edit.setKeySequence(QKeySequence(cur[0], QKeySequence.SequenceFormat.PortableText))
+        v.addWidget(edit)
+        hint = QLabel("Очистить поле (×) — команда без клавиш.")
+        hint.setObjectName("Hint")
+        v.addWidget(hint)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        v.addWidget(bb)
+        edit.setFocus()
+        self._key_dialog = (d, edit)
+        if d.exec() != QDialog.DialogCode.Accepted:
+            return False
+        seq = edit.keySequence().toString(QKeySequence.SequenceFormat.PortableText)
+        other = sc.owner(self, seq, skip=name) if seq else None
+        if other is not None and QMessageBox.question(
+                self, "Сочетание занято", f"«{sc.native([seq])}» уже у команды «{other}».\n"
+                f"Отдать его команде «{name}»? У «{other}» клавиши не будет.") != QMessageBox.StandardButton.Yes:
+            return False
+        return self.set_shortcut(name, seq)
+
     def show_shortcuts(self) -> None:
-        from PySide6.QtWidgets import QDialog, QTableWidget, QTableWidgetItem, QVBoxLayout, QLineEdit
+        """Все команды и их клавиши; двойной щелчок или «Изменить…» — своё сочетание."""
+        from PySide6.QtGui import QFont
+        from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
+                                       QVBoxLayout)
+        from app.ui.shell import shortcuts as sc
         d = QDialog(self)
         d.setWindowTitle("Горячие клавиши")
-        d.resize(560, 620)
+        d.resize(600, 660)
         v = QVBoxLayout(d)
         find = QLineEdit()
         find.setPlaceholderText("Найти действие или клавишу…")
         v.addWidget(find)
-        rows = self.shortcut_rows()
-        t = QTableWidget(len(rows), 2)
+        t = QTableWidget(0, 2)
         t.setHorizontalHeaderLabels(["Клавиши", "Действие"])
         t.verticalHeader().setVisible(False)
         t.horizontalHeader().setStretchLastSection(True)
         t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        for i, (k, text) in enumerate(rows):
-            t.setItem(i, 0, QTableWidgetItem(k))
-            t.setItem(i, 1, QTableWidgetItem(text))
-        t.resizeColumnToContents(0)
+        t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        t.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         v.addWidget(t)
-        find.textChanged.connect(lambda q: [t.setRowHidden(i, bool(q) and q.lower() not in (r[0] + r[1]).lower())
-                                            for i, r in enumerate(rows)])
+        row = QHBoxLayout()
+        change = QPushButton("Изменить…")
+        change.setToolTip("Или двойной щелчок по строке")
+        reset = QPushButton("Сбросить всё")
+        reset.setToolTip("Вернуть стандартные клавиши всем командам")
+        row.addWidget(change)
+        row.addStretch(1)
+        row.addWidget(reset)
+        v.addLayout(row)
+        fixed = [("Alt (зажать)", "Расстояния от выделенного до элемента под курсором"),
+                 ("Пробел + перетаскивание", "Двигать холст"), ("Стрелки / Shift+стрелки", "Сдвиг на 1 / 10"),
+                 ("Ctrl + колесо", "Масштаб холста"), ("Esc", "Снять выделение, отменить пипетку")]
+
+        def fill():
+            r = t.currentRow()
+            keep = t.item(r, 1).text() if r >= 0 and t.item(r, 1) is not None else ""
+            cmds = sc.commands(self)
+            rows = sorted(((sc.native(sc.current(a)), n, True) for n, a in cmds.items()), key=lambda x: x[1].lower())
+            rows += [(k, n, False) for k, n in fixed]
+            t.setRowCount(len(rows))
+            custom = sc.load(self.ctx.settings)
+            for i, (k, n, editable) in enumerate(rows):
+                ki, ni = QTableWidgetItem(k or "—"), QTableWidgetItem(n)
+                ki.setData(Qt.ItemDataRole.UserRole, n if editable else None)
+                if not editable:
+                    for it in (ki, ni):
+                        it.setForeground(t.palette().placeholderText())
+                        it.setToolTip("Встроено в холст — не меняется")
+                elif n in custom:
+                    f = QFont(ki.font())
+                    f.setBold(True)
+                    ki.setFont(f)
+                    ki.setToolTip("Своё сочетание")
+                t.setItem(i, 0, ki)
+                t.setItem(i, 1, ni)
+                if n == keep:
+                    t.setCurrentCell(i, 0)
+            t.resizeColumnToContents(0)
+            t.setColumnWidth(0, t.columnWidth(0) + 16)  # воздух у границы столбца
+            if t.currentRow() < 0:
+                t.setCurrentCell(0, 0)  # «Изменить…» сразу работает
+            filt(find.text())
+
+        def filt(q):
+            for i in range(t.rowCount()):
+                text = (t.item(i, 0).text() + " " + t.item(i, 1).text()).lower()
+                t.setRowHidden(i, bool(q) and q.lower() not in text)
+
+        def edit_row(*_):
+            r = t.currentRow()
+            name = t.item(r, 0).data(Qt.ItemDataRole.UserRole) if r >= 0 else None
+            if name and self.edit_shortcut(name):
+                fill()
+
+        def reset_all():
+            if QMessageBox.question(d, "Горячие клавиши", "Вернуть стандартные клавиши всем командам?") == \
+                    QMessageBox.StandardButton.Yes:
+                self.reset_shortcuts()
+                fill()
+        t.cellDoubleClicked.connect(edit_row)
+        change.clicked.connect(edit_row)
+        reset.clicked.connect(reset_all)
+        find.textChanged.connect(filt)
+        fill()
         self._shortcuts_dialog = d
+        self._shortcuts_table = t
         d.show()
 
     def _act(self, menu, text, shortcut, slot) -> QAction:
