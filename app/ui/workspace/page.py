@@ -373,6 +373,8 @@ class WorkspacePage(QMainWindow):
         if a["type"] == "set_visible":
             n = tree.node_map(ed.screen()).get(a.get("node_id"))
             return "При нажатии: показать / скрыть «" + ((n.name if n else "?")[:14]) + "»"
+        if a["type"] == "set_variant":
+            return f"При нажатии: «{a.get('axis', '')[:14]}» → {a.get('value') or 'следующий'}"
         return "При нажатии: своё правило"
 
     def _fill_tap_menu(self) -> None:
@@ -413,8 +415,29 @@ class WorkspacePage(QMainWindow):
             a.setChecked(isinstance(cur, dict) and cur.get("type") == "set_visible" and cur.get("node_id") == n.id)
         if not targets:
             vis.addAction("На экране нет других элементов").setEnabled(False)
+        self._fill_variant_tap(m, nid, cur)
         m.addSeparator()
         m.addAction("Сложнее (условия, переменные, анимации) — в «Логике»…", self._open_logic)
+
+    def _fill_variant_tap(self, m: QMenu, nid: str, cur) -> None:
+        """«Переключить вариант»: у этой или другой копии компонента с вариантами — значение или следующее."""
+        ed = self.editor
+        sub = self._submenu(m, "Переключить вариант")
+        insts = [n for n, _, _ in tree.walk(ed.screen().nodes) if n.is_instance and not n.ref
+                 and ed.doc.component(n.component_id) and ed.doc.component(n.component_id).variants]
+        insts.sort(key=lambda n: n.id != nid)  # сначала сама выделенная копия
+        if not insts:
+            sub.addAction("Нет копий компонента с вариантами (Инструменты → Компонент с вариантами)").setEnabled(False)
+        for n in insts:
+            target = sub if len(insts) == 1 else self._submenu(sub, "Эта копия" if n.id == nid else f"«{n.name}»")
+            for axis, vals in ed.doc.component(n.component_id).variants.items():
+                target.addSection(axis)
+                for v in [""] + list(vals):
+                    act = {"type": "set_variant", "node_id": n.id, "axis": axis, "value": v}
+                    a = target.addAction(v or "Следующий по кругу",
+                                         lambda x=act: ed.set_tap_action(nid, dict(x)))
+                    a.setCheckable(True)
+                    a.setChecked(isinstance(cur, dict) and all(cur.get(k) == x for k, x in act.items()))
 
     def _fill_anim_menu(self) -> None:
         from app.engines.animation.presets import PRESETS

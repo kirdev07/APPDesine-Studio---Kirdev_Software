@@ -882,6 +882,8 @@ def describe(doc, e) -> str:
     if e.kind == "variable":
         v = doc.variable(d["var_id"])
         return f"переменная «{v.name if v else '?'}» = {format_value(d['value'])}"
+    if e.kind == "state" and d.get("axis"):
+        return f"вариант «{d['axis']}»: {d['from'].split(': ', 1)[-1]} → {d['value']}"
     if e.kind == "state":
         return f"состояние компонента: {d['from']} → {d['state']}"
     if e.kind == "visible":

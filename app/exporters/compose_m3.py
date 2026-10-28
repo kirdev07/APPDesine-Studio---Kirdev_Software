@@ -59,6 +59,10 @@ def _items(n):
     return [c for c in n.children if c.is_frame]
 
 
+def _dp(v: float) -> str:
+    return f"{round(v, 1):g}.dp"
+
+
 class Material:
     """Перевод ролей для одного экрана; gen — генератор экрана (_Screen)."""
 
@@ -89,6 +93,13 @@ class Material:
         return max(0.0, min(1.0, rects[0].w / span)) if rects and span > 0 else 0.5
 
     # ---------- общие части ----------
+    def _variant_scale(self, n) -> float:
+        """Во сколько раз копия компонента выше мастера (варианты размера); 1 — как мастер."""
+        d = self.g.g.doc.component(n.component_id) if n.is_instance else None
+        if d is None or not d.root.h or abs(n.h - d.root.h) < 0.5:
+            return 1
+        return round(n.h / d.root.h, 3)
+
     def handles(self, n) -> bool:
         return n.is_frame and n.role in ROLES
 
@@ -130,11 +141,15 @@ class Material:
         i2, i3 = ind + "    ", ind + "        "
         label = self.text(texts[0]) if texts else '""'
         if r in _BUTTONS:
+            k = self._variant_scale(n)  # вариант «Размер» S / L: высота, шрифт и значок пропорционально
+            if k != 1:
+                M += f".height({_dp(40 * k)})"
             out = [f"{ind}{_BUTTONS[r]}(", f"{i2}onClick = {{"] + self.taps(n.id, i3) + [f"{i2}}},",
                                                                                       f"{i2}modifier = {M},", f"{ind}) {{"]
             if icons:
-                out += [f"{i2}{self.icon(icons[0], i2, 18)}", f"{i2}Spacer(Modifier.width(8.dp))"]
-            return out + [f"{i2}Text({label})", f"{ind}}}"]
+                out += [f"{i2}{self.icon(icons[0], i2, round(18 * k))}", f"{i2}Spacer(Modifier.width({_dp(8 * k)}))"]
+            size = f", fontSize = {round(14 * k, 1)}.sp" if k != 1 else ""
+            return out + [f"{i2}Text({label}{size})", f"{ind}}}"]
         if r in _ICON_BUTTONS:
             comp = _ICON_BUTTONS[r]
             body = [f"{i2}{self.icon(icons[0], i2)}"] if icons else []

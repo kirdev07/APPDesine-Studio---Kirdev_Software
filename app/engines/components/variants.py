@@ -13,6 +13,10 @@ from app.core.document import tree
 from app.core.document.model import ROOT_REF, Appearance, ComponentDef
 
 PRESET_AXES = {"size": "Размер", "style": "Стиль", "theme": "Тема"}
+_BUTTON_ROLES = {"Заливка": "m3.button_filled", "Тональный": "m3.button_tonal", "Контур": "m3.button_outlined",
+                 "Текст": "m3.button_text"}
+_ICON_ROLES = {"Заливка": "m3.icon_button_filled", "Тональный": "m3.icon_button_tonal",
+               "Контур": "m3.icon_button_outlined", "Текст": "m3.icon_button"}
 
 
 def _ref(defn: ComponentDef, n) -> str:
@@ -47,19 +51,25 @@ def size_variants(defn: ComponentDef) -> dict:
 
 
 def style_variants(defn: ComponentDef, sch: dict, k: float) -> dict:
-    """Стили кнопки Material 3 для любого компонента: корень и его тексты и значки."""
-    def recolor(fill: str, stroke: str, sw: float, fg: str) -> dict:
-        out = {ROOT_REF: {"fill": fill, "stroke": stroke, "stroke_width": sw}}
+    """Стили кнопки Material 3 для любого компонента: корень и его тексты и значки.
+    У кнопок Material 3 меняется и роль — в коде Android это Button / FilledTonalButton / OutlinedButton / TextButton."""
+    role = defn.root.role
+    roles = _BUTTON_ROLES if role in _BUTTON_ROLES.values() else _ICON_ROLES if role in _ICON_ROLES.values() else {}
+
+    def recolor(fill: str, stroke: str, sw: float, fg: str, style: str) -> dict:
+        out = {ROOT_REF: {"fill": fill, "stroke": stroke, "stroke_width": sw,
+                          **({"role": roles[style]} if roles else {})}}
         for n, _, _ in tree.walk(defn.root.children):
             if n.type == "text":
                 out[n.id] = {"text_color": fg}
             elif n.type == "vector":
                 out[n.id] = {"fill": fg}
         return out
-    return {"Заливка": {},
-            "Тональный": recolor(sch["secondaryContainer"], "", 0.0, sch["onSecondaryContainer"]),
-            "Контур": recolor("", sch["outline"], round(1 * k, 2), sch["primary"]),
-            "Текст": recolor("", "", 0.0, sch["primary"])}
+    first = {ROOT_REF: {"role": roles["Заливка"]}} if roles and role != roles["Заливка"] else {}
+    return {"Заливка": first,
+            "Тональный": recolor(sch["secondaryContainer"], "", 0.0, sch["onSecondaryContainer"], "Тональный"),
+            "Контур": recolor("", sch["outline"], round(1 * k, 2), sch["primary"], "Контур"),
+            "Текст": recolor("", "", 0.0, sch["primary"], "Текст")}
 
 
 def theme_variants(defn: ComponentDef, ap: Appearance) -> dict:

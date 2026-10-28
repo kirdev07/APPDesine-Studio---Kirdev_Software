@@ -104,6 +104,8 @@ VECTOR_PROPS = ("path", "vb_w", "vb_h", "fill_rule")
 INSTANCE_PROPS = ("component_id", "overrides", "state", "variant")
 # В вариантах компонента, кроме стиля и содержимого, можно менять размеры и отступы (варианты размера S / M / L).
 VARIANT_GEOMETRY = ("w", "h", "pad_t", "pad_r", "pad_b", "pad_l", "gap")
+# …и роль корня: стиль «Контур» у кнопки Material 3 — это OutlinedButton в коде Android
+VARIANT_EXTRA = VARIANT_GEOMETRY + ("role",)
 _STYLE = STYLE_PROPS + EFFECT_PROPS
 LEAF_PROPS = COMMON_PROPS + GEOMETRY_PROPS + _STYLE + TEXT_PROPS + CHILD_PROPS + INPUT_PROPS
 ALLOWED_PROPS = {
@@ -230,7 +232,7 @@ def check_overrides(value, extra: tuple = ()) -> dict:
             if k not in OVERRIDABLE and k not in extra:
                 raise ModelError(f"Свойство «{k}» нельзя переопределять")
             node_type = "vector" if k == "path" else "image" if k == "asset_id" else \
-                "frame" if k in ("pad_t", "pad_r", "pad_b", "pad_l", "gap") else "text"
+                "frame" if k in ("pad_t", "pad_r", "pad_b", "pad_l", "gap", "role") else "text"
             clean[k] = check_prop(k, v, node_type)
         if clean:
             out[ref] = clean
@@ -633,7 +635,7 @@ def check_variants(value) -> dict:
         check_prop("state", axis, "instance")
         if not isinstance(vals, dict) or not 1 <= len(vals) <= 16:
             raise ModelError(f"У свойства «{axis}» должно быть от 1 до 16 значений")
-        out[axis] = {check_prop("state", v, "instance"): check_overrides(ov, VARIANT_GEOMETRY)
+        out[axis] = {check_prop("state", v, "instance"): check_overrides(ov, VARIANT_EXTRA)
                      for v, ov in vals.items()}
     return out
 

@@ -38,6 +38,7 @@ class RuntimeState:
     history: list[str] = field(default_factory=list)
     variables: dict = field(default_factory=dict)    # var_id → значение
     states: dict = field(default_factory=dict)       # node_id экземпляра → состояние
+    variants: dict = field(default_factory=dict)     # node_id экземпляра → {свойство варианта: значение}
     visibility: dict = field(default_factory=dict)   # node_id → bool
     texts: dict = field(default_factory=dict)        # node_id → текст
     overlays: list[str] = field(default_factory=list)
@@ -46,7 +47,9 @@ class RuntimeState:
         return {"screen_id": self.screen_id, "history": list(self.history),
                 "variables": dict(sorted(self.variables.items())), "states": dict(sorted(self.states.items())),
                 "visibility": dict(sorted(self.visibility.items())), "texts": dict(sorted(self.texts.items())),
-                "overlays": list(self.overlays)}
+                "overlays": list(self.overlays),
+                **({"variants": {k: dict(sorted(v.items())) for k, v in sorted(self.variants.items())}}
+                   if self.variants else {})}
 
     def digest(self) -> str:
         return hashlib.sha256(json.dumps(self.snapshot(), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -297,8 +300,23 @@ class Interpreter:
             return [Effect("variable", {"var_id": var.id, "value": new})]
         s = screens.get(st.screen_id)
         nodes = tree.node_map(s) if s else {}
-        if t in ("set_state", "set_visible", "set_text", "open_overlay") and a["node_id"] not in nodes:
+        if t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay") and \
+                a["node_id"] not in nodes:
             return [Effect("error", {"message": f"{ACTION_NAMES[t]}: элемент не на текущем экране"})]
+        if t == "set_variant":
+            n = nodes[a["node_id"]]
+            defn = self.doc.component(n.component_id) if n.is_instance else None
+            vals = list(defn.variants.get(a["axis"], {})) if defn is not None else []
+            if not vals:
+                return [Effect("error", {"message": f"У компонента нет свойства «{a['axis']}»"})]
+            cur = {**n.variant, **st.variants.get(n.id, {})}.get(a["axis"])
+            prev = cur if cur in vals else vals[0]
+            new = a["value"] or vals[(vals.index(prev) + 1) % len(vals)]
+            if new not in vals:
+                return [Effect("error", {"message": f"У свойства «{a['axis']}» нет значения «{new}»"})]
+            st.variants.setdefault(n.id, {})[a["axis"]] = new
+            return [Effect("state", {"node_id": n.id, "state": f"{a['axis']}: {new}", "from": f"{a['axis']}: {prev}",
+                                     "axis": a["axis"], "value": new})]
         if t == "set_state":
             n = nodes[a["node_id"]]
             if not n.is_instance:
@@ -380,7 +398,17 @@ def validate(doc: ProjectDocument) -> list[Diagnostic]:
                     diags.append(Diagnostic("warning", it.node_id, f"{where}: {label} — экран удалён"))
                 elif it.trigger == "screen_open":
                     edges.setdefault(it.screen_id, set()).add(a["screen_id"])
-            if t in ("set_state", "set_visible", "set_text", "open_overlay") and a["node_id"] not in nodes:
+            if t == "set_variant" and a["node_id"] in nodes:
+                n = nodes[a["node_id"]]
+                defn = doc.component(n.component_id) if n.is_instance else None
+                vals = defn.variants.get(a["axis"]) if defn is not None else None
+                if vals is None:
+                    diags.append(Diagnostic("warning", n.id, f"{where}: у компонента нет свойства «{a['axis']}»"))
+                elif a["value"] and a["value"] not in vals:
+                    diags.append(Diagnostic("warning", n.id, f"{where}: у свойства «{a['axis']}» нет значения "
+                                                             f"«{a['value']}»"))
+            if t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay") and \
+                    a["node_id"] not in nodes:
                 diags.append(Diagnostic("warning", it.node_id, f"{where}: {label} — элемент не на этом экране"))
             if t == "set_state" and a["node_id"] in nodes:
                 n = nodes[a["node_id"]]

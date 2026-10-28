@@ -37,6 +37,7 @@ EASE_RU = {"linear": "Линейная", "ease_in": "Разгон", "ease_out": 
 DEFAULTS = {"navigate": {"transition": "slide_left", "duration": 300, "easing": "ease_out"},
             "back": {"transition": "slide_right", "duration": 250, "easing": "ease_out"},
             "set_variable": {"mode": "set", "value": ""}, "set_state": {"state": "default"},
+            "set_variant": {"axis": "", "value": ""},
             "set_visible": {"mode": "toggle"}, "set_text": {"text": ""}}
 
 
@@ -401,8 +402,9 @@ class LogicPage(QWidget):
         if t == "set_variable":
             v = doc.variable(a.get("var_id", ""))
             return f"«{v.name if v else '?'}»: {MODE_RU[a['mode']].lower()} {a.get('value', '')}"
-        if t in ("set_state", "set_visible", "set_text", "open_overlay"):
-            extra = {"set_state": a.get("state", ""), "set_visible": MODE_RU.get(a.get("mode"), ""),
+        if t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay"):
+            extra = {"set_state": a.get("state", ""), "set_variant": f"{a.get('axis', '')} → "
+                     f"{a.get('value') or 'следующее'}", "set_visible": MODE_RU.get(a.get("mode"), ""),
                      "set_text": f"«{a.get('text', '')[:24]}»", "open_overlay": ""}[t]
             return f"«{names.get(a.get('node_id'), '?')}» {extra}"
         if t == "play_animation":
@@ -434,6 +436,15 @@ class LogicPage(QWidget):
         if t in ("set_state", "set_visible", "set_text", "open_overlay"):
             sel = self.main.selected_nodes()
             a["node_id"] = sel[0].id if sel else (s.nodes[0].id if s.nodes else "")
+        if t == "set_variant":
+            insts = [n for n, _, _ in tree.walk(s.nodes) if n.is_instance and not n.ref
+                     and doc.component(n.component_id) and doc.component(n.component_id).variants]
+            sel = [n for n in self.main.selected_nodes() if n in insts]
+            if not insts:
+                self.status.setText("На экране нет копий компонента с вариантами")
+                return
+            n = (sel or insts)[0]
+            a["node_id"], a["axis"] = n.id, next(iter(doc.component(n.component_id).variants))
         if t == "set_variable":
             if not doc.variables:
                 self.status.setText("Сначала создайте переменную (слева)")
@@ -505,7 +516,7 @@ class LogicPage(QWidget):
                 modes = VAR_MODES if a["type"] == "set_variable" else VIS_MODES
                 w, title = combo([(MODE_RU[m], m) for m in modes], f, cur), "Режим"
             elif f == "node_id":
-                only_inst = a["type"] == "set_state"
+                only_inst = a["type"] in ("set_state", "set_variant")
                 only_text = a["type"] == "set_text"
                 items = [("  " * d + (n.name or n.type), n.id) for n, _, d in nodes
                          if not n.is_group and not n.ref and (not only_inst or n.is_instance)
@@ -516,6 +527,15 @@ class LogicPage(QWidget):
                 defn = doc.component(n.component_id) if n is not None and n.is_instance else None
                 w = combo([("По умолчанию", "default")] + [(st, st) for st in (defn.states if defn else {})], f, cur)
                 title = "Состояние"
+            elif f == "axis":
+                n = next((n for n, _, _ in nodes if n.id == a.get("node_id")), None)
+                defn = doc.component(n.component_id) if n is not None and n.is_instance else None
+                w, title = combo([(x, x) for x in (defn.variants if defn else {})], f, cur), "Свойство"
+            elif f == "value" and a["type"] == "set_variant":
+                n = next((n for n, _, _ in nodes if n.id == a.get("node_id")), None)
+                defn = doc.component(n.component_id) if n is not None and n.is_instance else None
+                vals = (defn.variants if defn else {}).get(a.get("axis"), {})
+                w, title = combo([("Следующее по кругу", "")] + [(x, x) for x in vals], f, cur), "Значение"
             elif f == "animation_id":
                 w = combo([(x.name, x.id) for x in doc.animations if s and x.screen_id == s.id], f, cur)
                 title = "Анимация"
@@ -532,6 +552,14 @@ class LogicPage(QWidget):
         self.work["actions"][r][key] = value
         if key == "node_id" and self.work["actions"][r]["type"] == "set_state":
             self.work["actions"][r]["state"] = "default"
+            self._fill_action(r)
+        if key in ("node_id", "axis") and self.work["actions"][r]["type"] == "set_variant":
+            act = self.work["actions"][r]
+            if key == "node_id":
+                n = tree.node_map(self.main.screen()).get(value)
+                defn = self.main.doc.component(n.component_id) if n is not None and n.is_instance else None
+                act["axis"] = next(iter(defn.variants), "") if defn else ""
+            act["value"] = ""
             self._fill_action(r)
         self.actions.item(r).setText(f"{ACTION_NAMES[self.work['actions'][r]['type']]}  "
                                      f"{self._summary(self.work['actions'][r])}")

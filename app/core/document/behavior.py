@@ -189,6 +189,7 @@ ACTION_FIELDS = {
     "back": ("transition", "duration", "easing"),
     "set_variable": ("var_id", "mode", "value"),
     "set_state": ("node_id", "state"),
+    "set_variant": ("node_id", "axis", "value"),  # value "" — следующее значение по кругу
     "set_visible": ("node_id", "mode"),
     "set_text": ("node_id", "text"),
     "play_animation": ("animation_id",),
@@ -196,7 +197,7 @@ ACTION_FIELDS = {
     "close_overlay": (),
 }
 ACTION_NAMES = {"navigate": "Перейти на экран", "back": "Назад", "set_variable": "Изменить переменную",
-                "set_state": "Состояние компонента", "set_visible": "Показать / скрыть", "set_text": "Задать текст",
+                "set_state": "Состояние компонента", "set_variant": "Переключить вариант", "set_visible": "Показать / скрыть", "set_text": "Задать текст",
                 "play_animation": "Запустить анимацию", "open_overlay": "Открыть всплывающее окно",
                 "close_overlay": "Закрыть окно"}
 VAR_MODES = ("set", "toggle", "increment", "decrement")
@@ -227,8 +228,10 @@ def check_action(d: dict) -> dict:
             if v not in allowed:
                 raise ModelError(f"Неверный режим действия: {v!r}")
             out[f] = v
-        elif f == "state":
+        elif f == "state" or f == "axis":
             out[f] = check_prop("state", v, "instance")
+        elif t == "set_variant":  # значение варианта или "" — следующее
+            out[f] = check_prop("state", v, "instance") if v else ""
         else:  # value, text
             if v is not None and not isinstance(v, (str, int, float, bool)):
                 raise ModelError("Значение действия должно быть числом, текстом или логическим")

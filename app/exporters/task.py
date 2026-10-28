@@ -46,10 +46,11 @@ def describe_interaction(doc: ProjectDocument, it) -> str:
             v = doc.variable(a["var_id"])
             mode = {"set": "=", "toggle": "переключить", "increment": "+=", "decrement": "-="}[a["mode"]]
             acts.append(f"«{v.name if v else '?'}» {mode} {format_value(a['value'])}".strip())
-        elif t in ("set_state", "set_visible", "set_text", "open_overlay"):
+        elif t in ("set_state", "set_variant", "set_visible", "set_text", "open_overlay"):
             n = nodes.get(a["node_id"])
             name = f"«{n.name or n.type}»" if n is not None else "?"
-            extra = {"set_state": f" → {a.get('state')}", "set_visible": f" ({a.get('mode')})",
+            extra = {"set_state": f" → {a.get('state')}",
+                     "set_variant": f" «{a.get('axis')}» → {a.get('value') or 'следующее значение'}", "set_visible": f" ({a.get('mode')})",
                      "set_text": f" = «{a.get('text')}»"}.get(t, "")
             acts.append(f"{ACTION_NAMES[t].lower()} {name}{extra}")
         elif t == "play_animation":

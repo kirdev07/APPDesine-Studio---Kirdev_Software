@@ -96,6 +96,16 @@ class _Screen:
                     self.texts.setdefault(a["node_id"], ident(f"text {m[a['node_id']].name}", False, self.used,
                                                               "text"))
         self.overlays = overlays
+        # переключение вариантов: node_id копии → {свойство: имя переменной}
+        self.variant_vars: dict[str, dict[str, str]] = {}
+        self._expanding: set[str] = set()
+        for it in self.its:
+            for a in it.actions:
+                n = m.get(a.get("node_id", "")) if a["type"] == "set_variant" else None
+                d = gen.doc.component(n.component_id) if n is not None and n.is_instance else None
+                if d is not None and a["axis"] in d.variants:
+                    self.variant_vars.setdefault(n.id, {}).setdefault(
+                        a["axis"], ident(f"variant {n.name} {a['axis']}", False, self.used, "variant"))
         for n, _, _ in tree.walk(s.nodes):
             if n.type == "text" and n.editable:
                 self.inputs[n.id] = ident(f"input {n.name}", False, self.used, "input")
@@ -144,6 +154,15 @@ class _Screen:
                 out += [f"{self.vis[nid]} = false" for nid in sorted(self.overlays)] or ["// окно не открыто"]
             elif t == "play_animation" and self.motion.action(a["animation_id"]):
                 out.append(self.motion.action(a["animation_id"]))
+            elif t == "set_variant" and a["axis"] in self.variant_vars.get(a["node_id"], {}):
+                var = self.variant_vars[a["node_id"]][a["axis"]]
+                n = tree.node_map(self.s)[a["node_id"]]
+                vals = list(self.g.doc.component(n.component_id).variants[a["axis"]])
+                if a["value"] or len(vals) == 1:
+                    out.append(f"{var} = {kstr(a['value'] or vals[0])}")
+                else:  # следующее значение по кругу
+                    steps = "; ".join(f"{kstr(v)} -> {kstr(vals[i + 1])}" for i, v in enumerate(vals[:-1]))
+                    out.append(f"{var} = when ({var}) {{ {steps}; else -> {kstr(vals[0])} }}")
             elif t == "set_text" and a["node_id"] in self.texts:
                 out.append(f"{self.texts[a['node_id']]} = {self.template(str(a['text']))}")
             else:
@@ -282,6 +301,8 @@ class _Screen:
             for c in n.children:
                 out += self.node(c, parent, mode, ind)
             return out
+        if n.id in self.variant_vars and n.id not in self._expanding:
+            return self.variant_node(n, parent, mode, ind)
         hidden = not n.visible
         if n.id in self.vis:  # показ и скрытие — с плавным появлением
             out.append(f"{ind}AnimatedVisibility(visible = {self.vis[n.id]}, enter = fadeIn(), "
@@ -336,6 +357,38 @@ class _Screen:
         if n.id in self.vis:
             out.append(f"{ind}}}")
         return out
+
+    def variant_node(self, n, parent, mode: str, ind: str) -> list[str]:
+        """Копия, у которой по нажатию меняется вариант: when по выбранным значениям, каждая ветка — свой вид."""
+        from itertools import product
+
+        from app.core.document.model import Node
+        from app.engines.components import engine as ce
+        from app.engines.layout import LayoutEngine
+        d = self.g.doc.component(n.component_id)
+        axes = self.variant_vars[n.id]
+        names = list(axes)
+        combos = list(product(*[list(d.variants[a]) for a in names]))
+        self._expanding.add(n.id)
+        try:
+            if len(combos) > 32:
+                return [f"{ind}// TODO: слишком много сочетаний вариантов ({len(combos)}) — показан текущий"] + \
+                    self.node(n, parent, mode, ind)
+            key = axes[names[0]] if len(names) == 1 else '"' + "|".join("${" + axes[a] + "}" for a in names) + '"'
+            out = [f"{ind}// «{n.name}»: вид зависит от выбранного варианта ({', '.join(names)})",
+                   f"{ind}when ({key}) {{"]
+            engine = LayoutEngine()
+            for i, combo in enumerate(combos):
+                c = Node.from_dict(n.to_dict())
+                c.variant = {**n.variant, **dict(zip(names, combo))}
+                ce.materialize(d, c, engine)
+                head = "else" if i == len(combos) - 1 else kstr("|".join(combo))
+                out.append(f"{ind}    {head} -> {{")
+                out += self.node(c, parent, mode, ind + "        ")
+                out.append(f"{ind}    }}")
+            return out + [f"{ind}}}"]
+        finally:
+            self._expanding.discard(n.id)
 
     def text(self, n, modtxt: str, ind: str) -> list[str]:
         align = {"left": "TextAlign.Start", "center": "TextAlign.Center", "right": "TextAlign.End"}[n.align]
@@ -451,6 +504,12 @@ class _Screen:
             L.append(f"    var {var} by remember {{ mutableStateOf({'true' if m[nid].visible and nid not in self.overlays else 'false'}) }}")
         for nid, var in self.texts.items():
             L.append(f"    var {var} by remember {{ mutableStateOf({kstr(m[nid].text)}) }}")
+        for nid, axes in self.variant_vars.items():
+            d = g.doc.component(m[nid].component_id)
+            for axis, var in axes.items():
+                vals = list(d.variants[axis])
+                cur = m[nid].variant.get(axis) if m[nid].variant.get(axis) in vals else vals[0]
+                L.append(f"    var {var} by remember {{ mutableStateOf({kstr(cur)}) }}")
         for nid, var in self.inputs.items():
             L.append(f"    var {var} by remember {{ mutableStateOf(\"\") }}")
         opens = [it for it in self.its if it.trigger == "screen_open"]

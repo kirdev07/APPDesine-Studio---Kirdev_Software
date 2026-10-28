@@ -17,11 +17,12 @@ def compose(doc: ProjectDocument, state: RuntimeState, engine: LayoutEngine,
         return None
     clone = Screen.from_dict(src.to_dict())
     m = tree.node_map(clone)
-    for nid, inst_state in state.states.items():
+    for nid in list(dict.fromkeys([*state.states, *state.variants])):
         inst = m.get(nid)
         defn = doc.component(inst.component_id) if inst is not None and inst.is_instance else None
         if defn is not None:
-            inst.state = inst_state
+            inst.state = state.states.get(nid, inst.state)
+            inst.variant = {**inst.variant, **state.variants.get(nid, {})}
             ce.materialize(defn, inst, engine)
     m = tree.node_map(clone)
     for nid, vis in state.visibility.items():
