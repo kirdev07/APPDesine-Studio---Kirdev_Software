@@ -1632,9 +1632,15 @@ class ScreensStrip(QWidget):
         cur = self.editor.screen()
         m.addAction("Пустой экран", self.editor.add_blank_screen).setEnabled(cur is not None)
         m.addAction("Пустой экран для другого устройства…", self.add_screen)
+        if cur is not None and cur.platform == "windows":  # готовые экраны Windows 11 (Fluent)
+            from app.libraries.screen_templates_win import TEMPLATES as WIN
+            m.addSeparator()
+            m.addAction("Готовые экраны Windows").setEnabled(False)
+            for key, (title, _fn) in WIN.items():
+                m.addAction(title.replace(" (Windows)", ""), lambda k=key: self.editor.add_template_screen(k))
         if cur is not None and cur.platform == "android":
             m.addSeparator()
-            m.addSection("Готовые экраны")
+            m.addAction("Готовые экраны").setEnabled(False)
             self._submenus = []  # подменю держатся здесь: иначе Qt удаляет их раньше времени
             for group, items in grouped_templates():
                 sub = QMenu(group, m)

@@ -38,8 +38,13 @@ def _palette(theme: str, accent: str = "#2F7BFF") -> dict:
     p = {"surface": s["surfaceContainerLow"], "surface2": s["secondaryContainer"], "on": s["onSurface"],
          "muted": s["onSurfaceVariant"], "outline": s["outline"]}
     if theme == "light":
-        return p | {"win_surface": "#FBFBFB", "win_card": "#FFFFFF", "win_stroke": "#E5E5E5", "win_ctrl": "#FDFDFD"}
-    return p | {"win_surface": "#202020", "win_card": "#2B2B2B", "win_stroke": "#3A3A3A", "win_ctrl": "#2D2D2D"}
+        return p | {"win_surface": "#F3F3F3", "win_card": "#FFFFFF", "win_stroke": "#E5E5E5", "win_ctrl": "#FDFDFD",
+                    "win_select": "#0000000F"}
+    if theme == "amoled":
+        return p | {"win_surface": "#000000", "win_card": "#141414", "win_stroke": "#2E2E2E", "win_ctrl": "#1C1C1C",
+                    "win_select": "#FFFFFF14"}
+    return p | {"win_surface": "#202020", "win_card": "#2B2B2B", "win_stroke": "#3A3A3A", "win_ctrl": "#2D2D2D",
+                "win_select": "#FFFFFF0F"}
 
 
 def _on_color(hex_color: str) -> str:
@@ -444,13 +449,14 @@ def win_button_accent(c: _Ctx) -> Node:
     acc = c.ap.accent
     return c.frame("Кнопка", "horizontal", [c.text("Сохранить", 14, _on_color(acc), 400, "Подпись")],
                    h=32, pad_l=12, pad_r=12, radius=4, fill=acc, main_align="center", cross_align="center",
-                   sizing_h="hug", min_w=120)
+                   sizing_h="hug", min_w=120, role="win.button_accent")
 
 
 def win_button(c: _Ctx) -> Node:
     return c.frame("Кнопка (обычная)", "horizontal", [c.text("Отмена", 14, c.p["on"], 400, "Подпись")],
                    h=32, pad_l=12, pad_r=12, radius=4, fill=c.p["win_ctrl"], stroke=c.p["win_stroke"],
-                   stroke_width=1, main_align="center", cross_align="center", sizing_h="hug", min_w=120)
+                   stroke_width=1, main_align="center", cross_align="center", sizing_h="hug", min_w=120,
+                   role="win.button")
 
 
 def win_textbox(c: _Ctx) -> Node:
@@ -459,7 +465,7 @@ def win_textbox(c: _Ctx) -> Node:
                   h=32, pad_l=10, pad_r=10, radius=4, fill=c.p["win_ctrl"], stroke=c.p["win_stroke"], stroke_width=1,
                   cross_align="center", sizing_h="fill")
     return c.frame("Текстовое поле", "vertical", [c.text("Адрес сервера", 14, c.p["on"], name="Заголовок"), box],
-                   w=296, gap=6, sizing_v="hug")
+                   w=296, gap=6, sizing_v="hug", role="win.textbox")
 
 
 def win_card(c: _Ctx) -> Node:
@@ -467,19 +473,21 @@ def win_card(c: _Ctx) -> Node:
                    [c.text("Заголовок карточки", 20, c.p["on"], 600, "Заголовок", sizing_h="fill"),
                     c.text(LOREM_RU, 14, c.p["muted"], name="Описание", sizing_h="fill")],
                    w=360, pad_t=16, pad_r=16, pad_b=16, pad_l=16, gap=8, radius=8, fill=c.p["win_card"],
-                   stroke=c.p["win_stroke"], stroke_width=1, sizing_v="hug")
+                   stroke=c.p["win_stroke"], stroke_width=1, sizing_v="hug", role="win.card")
 
 
 def win_nav_pane(c: _Ctx) -> Node:
     s = c.screen
     items = []
+    acc = c.ap.accent if c.ap.theme == "light" else c.s["primary"]
     for i, label in enumerate(["Главная", "Система", "Мониторинг", "Устройства", "Настройки"]):
+        bar = c.rect("Метка", 3, 16, acc if i == 0 else "", 2)  # выбранный пункт — полоска акцента слева
         items.append(c.frame(f"Пункт «{label}»", "horizontal",
-                             [c.text(label, 14, c.p["on"], 600 if i == 0 else 400, "Подпись", sizing_h="fill")],
-                             h=36, pad_l=12, pad_r=12, radius=4, cross_align="center", sizing_h="fill",
-                             fill=c.p["win_ctrl"] if i == 0 else ""))
+                             [bar, c.text(label, 14, c.p["on"], 600 if i == 0 else 400, "Подпись", sizing_h="fill")],
+                             h=36, pad_l=4, pad_r=12, gap=9, radius=4, cross_align="center", sizing_h="fill",
+                             fill=c.p["win_select"] if i == 0 else ""))
     return c.frame("Панель навигации", "vertical", items, x=0, y=0, w=280, h=s.height, pad_t=8, pad_r=8, pad_b=8,
-                   pad_l=8, gap=4, fill=c.p["win_surface"], constraint_v="top_bottom")
+                   pad_l=8, gap=4, fill=c.p["win_surface"], constraint_v="top_bottom", role="win.navpane")
 
 
 def win_command_bar(c: _Ctx) -> Node:
@@ -488,7 +496,7 @@ def win_command_bar(c: _Ctx) -> Node:
             for t in ("Создать", "Изменить", "Удалить")]
     return c.frame("Панель команд", "horizontal", btns, h=48, pad_l=8, pad_r=8, gap=4, radius=8,
                    fill=c.p["win_card"], stroke=c.p["win_stroke"], stroke_width=1, cross_align="center",
-                   sizing_h="hug")
+                   sizing_h="hug", role="win.commandbar")
 
 
 _A = "android"
@@ -553,7 +561,8 @@ def all_specs() -> tuple[ComponentSpec, ...]:
         order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
         android.sort(key=lambda s: order.get(s.category, len(order)))  # одна категория — подряд
         icons = [s for s in SPECS if s.category == "Значки"]
-        _ALL = tuple(android + icons + [s for s in SPECS if s.platform != _A])
+        from app.libraries.components_win import SPECS as WIN  # Windows 11 (Fluent 2), 1.31
+        _ALL = tuple(android + icons + [s for s in SPECS if s.platform != _A] + list(WIN))
     return _ALL
 
 

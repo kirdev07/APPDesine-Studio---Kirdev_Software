@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from app.core.document import tree
 from app.core.document.model import Screen
 from app.libraries import components
-from app.ui.workspace.canvas import build_scene
+from app.ui.workspace.canvas import ArtboardItem, build_scene
 
 MIME = "application/x-ads-component"
 ROLE_KIND = Qt.ItemDataRole.UserRole
@@ -33,8 +33,9 @@ def thumbnail(kind: str, screen: Screen, appearance, engine, artboard: str) -> Q
     hit = _cache.get(key)
     if hit is not None:
         return hit
-    tmp = Screen(name="превью", platform=screen.platform, width=screen.width, height=screen.height,
-                 device_id=screen.device_id)
+    narrow = screen.platform == "windows"  # окно Windows широкое: «на всю ширину» в миниатюре было бы мелким
+    tmp = Screen(name="превью", platform=screen.platform, width=480 if narrow else screen.width,
+                 height=320 if narrow else screen.height, device_id=screen.device_id)
     node = components.build(kind, tmp, appearance)
     tmp.nodes = [node]
     changes, _ = engine.layout_screen(tmp)
@@ -47,6 +48,9 @@ def thumbnail(kind: str, screen: Screen, appearance, engine, artboard: str) -> Q
     pm.fill(QColor(artboard))
     scene = QGraphicsScene()
     build_scene(scene, tmp, artboard)
+    for item in scene.items():
+        if isinstance(item, ArtboardItem):
+            item.setVisible(False)  # рамка холста не попадает в миниатюру (была «черта» сбоку)
     pad = max(w, h) * 0.06 + 4
     src = QRectF(x - pad, y - pad, w + 2 * pad, h + 2 * pad)
     p = QPainter(pm)

@@ -1802,7 +1802,13 @@ class Editor(QObject):
         cur = self.screen_like()
         if cur is None or not self.doc:
             return None
-        s = screen_templates.build(key, cur, self.doc.meta.appearance)
+        if key.startswith("win_"):  # готовый экран Windows — для окна текущего экрана Windows
+            from app.libraries import screen_templates_win
+            if cur.platform != "windows" or key not in screen_templates_win.TEMPLATES:
+                return None
+            s = screen_templates_win.build(key, cur, self.doc.meta.appearance)
+        else:
+            s = screen_templates.build(key, cur, self.doc.meta.appearance)
         if self.execute(AddScreen(s)):
             self.set_screen(s.id)
             return self.screen()
