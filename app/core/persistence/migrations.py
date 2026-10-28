@@ -42,9 +42,14 @@ def _v5_to_v6(raw: dict) -> dict:
     return raw
 
 
+def _v6_to_v7(raw: dict) -> dict:
+    # Схема 7 добавила необязательную роль фрейма; у старых узлов её нет — значение по умолчанию пустое.
+    return raw
+
+
 # {исходная_версия: функция(raw) -> raw}
 MIGRATIONS: dict[int, Callable[[dict], dict]] = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5,
-                                                 5: _v5_to_v6}
+                                                 5: _v5_to_v6, 6: _v6_to_v7}
 
 
 def migrate(raw: dict, version: int) -> dict:

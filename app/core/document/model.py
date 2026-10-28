@@ -10,8 +10,9 @@ from datetime import datetime, timezone
 
 # 1 — этап 1 (экраны без содержимого); 2 — узлы и направляющие; 3 — фреймы, Auto Layout и привязки;
 # 4 — векторы, изображения, компоненты и экземпляры, ресурсы, стили текста и цвета;
-# 5 — анимации, переменные, взаимодействия, переходы и поведение состояний компонентов.
-SCHEMA_VERSION = 6
+# 5 — анимации, переменные, взаимодействия, переходы и поведение состояний компонентов;
+# 6 — сценарии предпросмотра, прокрутка, поля ввода; 7 — роль фрейма (вид компонента Material 3).
+SCHEMA_VERSION = 7
 
 PLATFORM_ANDROID = "android"
 PLATFORM_WINDOWS = "windows"
@@ -81,7 +82,7 @@ COMMON_PROPS = ("name", "visible", "locked", "ref")
 CHILD_PROPS = ("sizing_h", "sizing_v", "min_w", "max_w", "min_h", "max_h", "constraint_h", "constraint_v")
 # Свойства контейнера-фрейма.
 FRAME_PROPS = ("layout", "gap", "row_gap", "pad_t", "pad_r", "pad_b", "pad_l", "main_align", "cross_align",
-               "grid_columns", "clip", "scroll")
+               "grid_columns", "clip", "scroll", "role")
 # Текстовое поле ввода в предпросмотре: текст можно набирать, значение можно связать с текстовой переменной.
 INPUT_PROPS = ("editable", "input_var")
 VECTOR_PROPS = ("path", "vb_w", "vb_h", "fill_rule")
@@ -140,6 +141,10 @@ def check_prop(name: str, value, node_type: str = "rect"):
     if name in ("ref", "asset_id", "component_id", "text_style", "input_var"):
         if not isinstance(value, str) or not _ID.match(value):
             raise ModelError(f"Неверный идентификатор «{name}»")
+        return value
+    if name == "role":
+        if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9_.]{0,64}", value):
+            raise ModelError("Неверная роль фрейма")
         return value
     if name == "state":
         if not isinstance(value, str) or not re.fullmatch(r"[0-9A-Za-zА-Яа-яЁё _-]{1,64}", value):
@@ -241,6 +246,7 @@ class Node:
     grid_columns: int = 2
     clip: bool = True
     scroll: str = "none"          # прокрутка содержимого фрейма в предпросмотре
+    role: str = ""                # вид стандартного компонента (m3.switch, …) — для экспорта в Compose
     # поле ввода (текст)
     editable: bool = False
     input_var: str = ""
@@ -298,7 +304,7 @@ class Node:
     def to_dict(self) -> dict:
         d = {"id": self.id, "type": self.type}
         for k in self._props():
-            if k == "ref" and not self.ref:
+            if k in ("ref", "role") and not getattr(self, k):
                 continue
             v = getattr(self, k)
             d[k] = dict(v) if isinstance(v, dict) else v

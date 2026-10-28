@@ -227,11 +227,19 @@ class TypographyPage(QWidget):
         lay.addLayout(row)
         lay.addWidget(button("Применить к выделенному тексту", self.apply_style,
                              "Связать выделенные на рабочей области тексты со стилем"))
+        lay.addWidget(button("Типографика Material 3", self.material_typography,
+                             "15 стилей шкалы Material 3 (Display, Headline, Title, Body, Label) — в Android-"
+                             "проекте становятся Typography темы"))
         self.s_status = label("", "Muted", wrap=True)
         lay.addWidget(self.s_status)
         frame.setMinimumWidth(320)
         self._style_id: str | None = None
         return frame
+
+    def material_typography(self) -> None:
+        n = self.main.add_material_typography()
+        self.s_status.setText(f"Стили Material 3: {n} (имена начинаются с «M3 · »)" if n else
+                              "Стили не добавлены")
 
     def refresh_styles(self) -> None:
         doc = self.main.doc

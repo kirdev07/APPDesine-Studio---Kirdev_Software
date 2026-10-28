@@ -13,7 +13,10 @@ import re
 
 from app.core.document import tree
 from app.core.document.model import ARTBOARD_COLORS, PLATFORM_ANDROID, ProjectDocument, Screen
+from app.engines.material.color import ROLES as COLOR_ROLES, scheme
+from app.engines.material.type_scale import TYPE_SCALE, role_of
 from app.engines.preview.devices import screen_dpi
+from app.exporters.compose_m3 import Material
 
 ROOT = "android_project"
 VERSIONS = {"agp": "8.13.2", "kotlin": "2.2.10", "compose_bom": "2025.09.01", "activity_compose": "1.11.0",
@@ -95,6 +98,11 @@ class _Screen:
         for n, _, _ in tree.walk(s.nodes):
             if n.type == "text" and n.editable:
                 self.inputs[n.id] = ident(f"input {n.name}", False, self.used, "input")
+        self.kstr = kstr
+        self.m3 = Material(self)
+
+    def ident(self, text: str) -> str:
+        return ident(text, False, self.used, "value")
 
     def dp(self, v: float) -> str:
         return f"{_num(v / self.k)}.dp"
@@ -172,17 +180,34 @@ class _Screen:
         return out + [f"{ind})"]
 
     # ---------- элементы ----------
-    def modifier(self, n, parent, mode: str, ind: str) -> list[str]:
+    def modifier(self, n, parent, mode: str, ind: str, handlers: bool = True) -> list[str]:
         """mode: abs (смещение в Box), col / row (в Auto Layout)."""
         m = [f"{ind}Modifier"]
+        stretch = False
         if mode == "abs":
             ox, oy = n.x - (parent.x if parent else 0), n.y - (parent.y if parent else 0)
+            pw, ph = (parent.w, parent.h) if parent else (self.s.width, self.s.height)
+            right, bottom = pw - ox - n.w, ph - oy - n.h
+            pad = []
+            if n.constraint_v == "bottom" and bottom >= 0:  # привязка к низу: у нижнего края любого экрана
+                m.append(f"{ind}    .align(Alignment.BottomStart)")
+                if bottom > 0.5:
+                    pad.append(f"bottom = {self.dp(bottom)}")
+                oy = 0
+            if n.constraint_h == "left_right" and right >= 0:  # растягивается по ширине экрана
+                if ox > 0.5:
+                    pad.insert(0, f"start = {self.dp(ox)}")
+                if right > 0.5:
+                    pad.append(f"end = {self.dp(right)}")
+                ox, stretch = 0, True
+            if pad:
+                m.append(f"{ind}    .padding({', '.join(pad)})")
             if ox or oy:
                 m.append(f"{ind}    .offset(x = {self.dp(ox)}, y = {self.dp(oy)})")
         main_fill = (mode == "col" and n.sizing_v == "fill") or (mode == "row" and n.sizing_h == "fill")
         if main_fill:
             m.append(f"{ind}    .weight(1f)")
-        if n.sizing_h == "fill" and mode == "col":
+        if (n.sizing_h == "fill" and mode == "col") or stretch:
             m.append(f"{ind}    .fillMaxWidth()")
         elif n.sizing_h != "hug" and not (mode == "row" and n.sizing_h == "fill"):
             m.append(f"{ind}    .width({self.dp(n.w)})")
@@ -201,7 +226,8 @@ class _Screen:
             m.append(f"{ind}    .background({kcolor(n.fill)})")
         if n.stroke and n.stroke_width and n.type not in ("text", "vector"):
             m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {kcolor(n.stroke)}, {shape})")
-        m += self.handlers(n, ind + "    ")
+        if handlers:
+            m += self.handlers(n, ind + "    ")
         if n.is_frame and n.layout != "none" and (n.pad_t or n.pad_r or n.pad_b or n.pad_l):
             m.append(f"{ind}    .padding(start = {self.dp(n.pad_l)}, top = {self.dp(n.pad_t)}, "
                      f"end = {self.dp(n.pad_r)}, bottom = {self.dp(n.pad_b)})")
@@ -222,6 +248,11 @@ class _Screen:
         else:
             ind2 = ind
         out.append(f"{ind2}// {n.name or n.type}" + (f" — экземпляр компонента" if n.is_instance else ""))
+        if self.m3.handles(n):  # стандартный компонент Material 3 → компонент Compose
+            out += self.m3.node(n, parent, mode, ind2)
+            if n.id in self.vis:
+                out.append(f"{ind}}}")
+            return out
         mod = self.modifier(n, parent, mode, ind2 + "    ")
         mod[0] = mod[0].lstrip()
         modtxt = "\n".join([mod[0]] + mod[1:])
@@ -239,7 +270,8 @@ class _Screen:
         elif n.type == "vector" and n.path:
             out += [f"{ind2}Canvas(modifier = {modtxt}) {{",
                     f"{ind2}    scale(size.width / {_num(n.vb_w)}f, size.height / {_num(n.vb_h)}f, pivot = Offset.Zero) {{",
-                    f"{ind2}        val p = PathParser().parsePathString({kstr(n.path)}).toPath()",
+                    f"{ind2}        val p = PathParser().parsePathString({kstr(n.path)}).toPath()"
+                    + (".apply { fillType = PathFillType.EvenOdd }" if n.fill_rule == "evenodd" else ""),
                     f"{ind2}        drawPath(p, {kcolor(n.fill or '#00000000')})"]
             if n.stroke and n.stroke_width:
                 out.append(f"{ind2}        drawPath(p, {kcolor(n.stroke)}, style = Stroke(width = {_num(n.stroke_width)}f))")
@@ -264,16 +296,9 @@ class _Screen:
                  f"fontWeight = FontWeight({n.font_weight}), textAlign = {align}")
         if n.id in self.inputs:
             var = self.inputs[n.id]
-            bind = ""
-            v = self.g.doc.variable(n.input_var) if n.input_var else None
-            if v is not None and v.type == "text":
-                bind = f"; state.{self.g.state_names[v.id]} = it"
-            changed = []
-            for it in self.its:
-                if it.node_id == n.id and it.trigger == "text_changed":
-                    changed += self.actions_code(it, ind + "        ")
             return ([f"{ind}BasicTextField(", f"{ind}    value = {var},",
-                     f"{ind}    onValueChange = {{ {var} = it{bind}"] + changed + [f"{ind}    }},",
+                     f"{ind}    onValueChange = {{ {var} = it"] + self.input_change(n, var, ind + "        ") +
+                    [f"{ind}    }},",
                      f"{ind}    textStyle = TextStyle({style}),",
                      f"{ind}    cursorBrush = SolidColor({kcolor(n.text_color)}),",
                      f"{ind}    modifier = {modtxt},",
@@ -283,6 +308,17 @@ class _Screen:
         value = self.texts.get(n.id) or kstr(n.text)
         return [f"{ind}Text(", f"{ind}    text = {value},", f"{ind}    {style},", f"{ind}    modifier = {modtxt},",
                 f"{ind})"]
+
+    def input_change(self, n, var: str, ind: str) -> list[str]:
+        """Строки обработчика изменения текста: связанная переменная и правила «Изменение текста»."""
+        out = []
+        v = self.g.doc.variable(n.input_var) if n.input_var else None
+        if v is not None and v.type == "text":
+            out.append(f"{ind}state.{self.g.state_names[v.id]} = it")
+        for it in self.its:
+            if it.node_id == n.id and it.trigger == "text_changed":
+                out += self.actions_code(it, ind)
+        return out
 
     def stack(self, n, modtxt: str, ind: str) -> list[str]:
         main = {"start": "Start", "center": "Center", "end": "End", "space_between": "SpaceBetween"}[n.main_align]
@@ -318,8 +354,10 @@ class _Screen:
         bg = kcolor(g.artboard)
         L = [f"package {g.pkg}.ui.screens", "", *g.imports(), "",
              f"/** Экран «{s.name}» ({_num(s.width / self.k)} × {_num(s.height / self.k)} dp). Сгенерирован App Design Studio. */",
+             "@OptIn(ExperimentalMaterial3Api::class)",
              "@Composable",
              f"fun {self.fn}(state: AppState, onNavigate: (String) -> Unit, onBack: () -> Unit) {{"]
+        L += self.m3.decls
         m = tree.node_map(s)
         for nid, var in self.vis.items():
             L.append(f"    var {var} by remember {{ mutableStateOf({'true' if m[nid].visible and nid not in self.overlays else 'false'}) }}")
@@ -333,17 +371,20 @@ class _Screen:
             for it in opens:
                 L += self.actions_code(it, "        ")
             L.append("    }")
-        L.append(f"    Box(modifier = Modifier.fillMaxSize().background({bg})) {{")
+        # Surface задаёт цвет содержимого (текст и значки вне компонентов); экран дизайна — без системных панелей
+        L += [f"    Surface(modifier = Modifier.fillMaxSize(), color = {bg}, "
+              "contentColor = MaterialTheme.colorScheme.onBackground) {",
+              "        Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {"]
         for n in s.nodes:
-            L += self.node(n, None, "abs", "        ")
-        L += ["    }", "}", "",
+            L += self.node(n, None, "abs", "            ")
+        L += ["        }", "    }", "}", "",
               f"@Preview(widthDp = {round(s.width / self.k)}, heightDp = {round(s.height / self.k)}, showBackground = true)",
               "@Composable",
               f"private fun {self.fn}Preview() {{",
               f"    AppTheme {{ {self.fn}(AppState(), onNavigate = {{}}, onBack = {{}}) }}", "}", ""]
         swipes = [it for it in self.its if it.trigger.startswith("swipe") or it.trigger in ("hover_enter", "hover_leave")]
         if swipes:
-            L.insert(L.index("@Composable"), f"// TODO: жесты {sorted({i.trigger for i in swipes})} — добавьте "
+            L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class)"), f"// TODO: жесты {sorted({i.trigger for i in swipes})} — добавьте "
                                               "pointerInput / detectDragGestures по описанию в AI_TASK.md")
         return "\n".join(L)
 
@@ -366,10 +407,12 @@ class AndroidProject:
     def imports(self) -> list[str]:
         return [f"import {x}" for x in (
             "androidx.compose.foundation.*", "androidx.compose.foundation.layout.*",
+            "androidx.compose.foundation.selection.selectable",
             "androidx.compose.foundation.shape.*", "androidx.compose.foundation.text.BasicTextField",
             "androidx.compose.material3.*", "androidx.compose.runtime.*", "androidx.compose.ui.Alignment",
             "androidx.compose.ui.Modifier", "androidx.compose.ui.draw.alpha", "androidx.compose.ui.draw.clip",
             "androidx.compose.ui.geometry.Offset", "androidx.compose.ui.graphics.Color",
+            "androidx.compose.ui.graphics.PathFillType",
             "androidx.compose.ui.graphics.RectangleShape", "androidx.compose.ui.graphics.SolidColor",
             "androidx.compose.ui.graphics.drawscope.Stroke", "androidx.compose.ui.graphics.drawscope.scale",
             "androidx.compose.ui.graphics.vector.PathParser", "androidx.compose.ui.layout.ContentScale",
@@ -377,7 +420,7 @@ class AndroidProject:
             "androidx.compose.ui.text.font.FontWeight", "androidx.compose.ui.text.style.TextAlign",
             "androidx.compose.ui.tooling.preview.Preview", "androidx.compose.ui.unit.dp",
             "androidx.compose.ui.unit.sp", f"{self.pkg}.AppState", f"{self.pkg}.R", f"{self.pkg}.fmt",
-            f"{self.pkg}.ui.theme.AppTheme")]
+            f"{self.pkg}.ui.components.DesignIcon", f"{self.pkg}.ui.theme.AppTheme")]
 
     def literal(self, var_type: str, value) -> str:
         from app.core.document.behavior import coerce
@@ -518,11 +561,15 @@ dependencies {{
             out[f"app/src/main/res/drawable/{name}.{ext}"] = data
         src = f"app/src/main/java/{path}"
         start = self.routes[self.screens[0].id] if self.screens else "screen1"
+        bars = ("statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT), "
+                "navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)"
+                if self.doc.meta.appearance.theme != "light" else "")  # светлые значки панелей на тёмной теме
         out[f"{src}/MainActivity.kt"] = f'''package {pkg}
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import {pkg}.navigation.AppNavHost
 import {pkg}.ui.theme.AppTheme
@@ -530,7 +577,7 @@ import {pkg}.ui.theme.AppTheme
 class MainActivity : ComponentActivity() {{
     override fun onCreate(savedInstanceState: Bundle?) {{
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge({bars})
         setContent {{
             AppTheme {{
                 AppNavHost()
@@ -588,53 +635,88 @@ fun AppNavHost() {{
     }}
 }}
 '''
+        out[f"{src}/ui/theme/Theme.kt"] = self.theme_kt()
+        out[f"{src}/ui/theme/Type.kt"] = self.type_kt()
+        out[f"{src}/ui/components/DesignIcon.kt"] = DESIGN_ICON.replace("{pkg}", pkg)
+        for s in self.screens:
+            out[f"{src}/ui/screens/{self.fns[s.id]}.kt"] = _Screen(self, s, self.fns[s.id]).source()
+        out["README_ANDROID.md"] = self.readme()
+        return {f"{ROOT}/{p}": (b if isinstance(b, bytes) else b.encode("utf-8")) for p, b in sorted(out.items())}
+
+    def theme_kt(self) -> str:
         ap = self.doc.meta.appearance
         dark = ap.theme != "light"
-        cused = {"Accent", "Background", "Scheme", "AppTheme"}
+        cused = {"Accent", "Background", "LightScheme", "DarkScheme", "AppTheme", "DesignIsDark"}
         colors = "\n".join(f"val {ident(c.name, True, cused, 'Token')} = {kcolor(c.value)}" for c in self.doc.colors)
-        out[f"{src}/ui/theme/Theme.kt"] = f'''package {pkg}.ui.theme
+
+        def block(name: str, fn: str, sch: dict) -> str:
+            roles = "\n".join(f"    {r} = {kcolor(sch[r])}," for r in COLOR_ROLES if r != "shadow")
+            return f"private val {name} = {fn}(\n{roles}\n)"
+        light, darks = scheme(ap.accent, False), scheme(ap.accent, True)
+        if dark:  # фон дизайна (AMOLED-чёрный и т. п.) сохраняется
+            darks = darks | {"background": self.artboard, "surface": self.artboard}
+        else:
+            light = light | {"background": self.artboard, "surface": self.artboard}
+        return f"""package {self.pkg}.ui.theme
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.{"darkColorScheme" if dark else "lightColorScheme"}
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// Цвета проекта (токены)
+// Цвет бренда и фон дизайна
 val Accent = {kcolor(ap.accent)}
 val Background = {kcolor(self.artboard)}
-{colors}
 
-private val Scheme = {"darkColorScheme" if dark else "lightColorScheme"}(
-    primary = Accent,
-    background = Background,
-    surface = Background,
-)
+// Цвета проекта (токены)
+{colors or "// токенов в дизайне нет"}
+
+/** Тема дизайна: {"тёмная" if dark else "светлая"}. Схемы Material 3 построены по цвету бренда {ap.accent}. */
+const val DesignIsDark = {"true" if dark else "false"}
+
+{block("LightScheme", "lightColorScheme", light)}
+
+{block("DarkScheme", "darkColorScheme", darks)}
 
 @Composable
-fun AppTheme(content: @Composable () -> Unit) {{
-    MaterialTheme(colorScheme = Scheme, content = content)
+fun AppTheme(darkTheme: Boolean = DesignIsDark, content: @Composable () -> Unit) {{
+    MaterialTheme(
+        colorScheme = if (darkTheme) DarkScheme else LightScheme,
+        typography = AppTypography,
+        content = content,
+    )
 }}
-'''
+"""
+
+    def type_kt(self) -> str:
         tused: set[str] = set()
         k = screen_dpi(self.screens[0]) / 160 if self.screens else 1.0
-        styles = "\n".join(
-            f"val {ident(t.name, True, tused, 'Style')} = TextStyle(fontSize = {_num(t.font_size / k)}.sp, "
-            f"fontWeight = FontWeight({t.font_weight}){', color = ' + kcolor(t.text_color) if t.text_color else ''})"
-            for t in self.doc.text_styles)
-        out[f"{src}/ui/theme/Type.kt"] = f'''package {pkg}.ui.theme
+        lines, roles = [], {}
+        for t in self.doc.text_styles:
+            name = ident(t.name, True, tused | {"AppTypography"}, "Style")
+            tused.add(name)
+            lines.append(f"val {name} = TextStyle(fontSize = {_num(t.font_size / k)}.sp, "
+                         f"fontWeight = FontWeight({t.font_weight})"
+                         f"{', color = ' + kcolor(t.text_color) if t.text_color else ''})")
+            role = role_of(t.name)
+            if role and role not in roles:
+                roles[role] = name
+        typo = ",\n".join(f"    {r} = {roles[r]}" for r in TYPE_SCALE if r in roles)
+        return f"""package {self.pkg}.ui.theme
 
+import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 {"import androidx.compose.ui.graphics.Color" if any(t.text_color for t in self.doc.text_styles) else ""}
 
 // Текстовые стили проекта
-{styles or "// стилей в дизайне нет"}
-'''
-        for s in self.screens:
-            out[f"{src}/ui/screens/{self.fns[s.id]}.kt"] = _Screen(self, s, self.fns[s.id]).source()
-        out["README_ANDROID.md"] = self.readme()
-        return {f"{ROOT}/{p}": (b if isinstance(b, bytes) else b.encode("utf-8")) for p, b in sorted(out.items())}
+{chr(10).join(lines) or "// стилей в дизайне нет"}
+
+/** Типографика Material 3: роли из стилей «M3 · …» проекта, остальные — по умолчанию. */
+val AppTypography = Typography({chr(10) + typo + "," + chr(10) if typo else ""})
+"""
 
     def readme(self) -> str:
         v = VERSIONS
@@ -648,12 +730,15 @@ import androidx.compose.ui.unit.sp
                  "APK: `app/build/outputs/apk/debug/app-debug.apk`.", "",
                  "## Что сгенерировано", "",
                  f"- Пакет `{self.pkg}`, minSdk {v['min_sdk']}, targetSdk {v['target_sdk']}.",
-                 "- `ui/theme` — цвета и текстовые стили проекта; `AppState.kt` — переменные прототипа.",
+                 "- `ui/theme` — схемы Material 3 (светлая и тёмная) по цвету бренда, токены и типографика; "
+                 "`AppState.kt` — переменные прототипа.",
+                 "- Стандартные компоненты из библиотеки студии — настоящие компоненты Material 3 (Button, Switch, "
+                 "Checkbox, Slider, NavigationBar, TopAppBar, …) с состоянием; значки — `ui/components/DesignIcon.kt`.",
                  "- `navigation/AppNavHost.kt` — переходы между экранами (стек маршрутов `screen1`, `screen2`, …; системная «Назад»).",
                  "- `ui/screens/*Screen.kt` — экраны: Auto Layout → Column / Row, остальное — Box со смещениями; "
                  "нажатия, переходы, переменные, показ/скрытие и поля ввода — рабочий код.", "",
                  "## Что доработать", "",
-                 "- Места с `TODO`: состояния компонентов, анимации, свайпы, SVG-изображения.",
+                 "- Места с `TODO`: состояния своих компонентов, анимации, свайпы, SVG-изображения.",
                  "- Абсолютные смещения → адаптивная раскладка, тексты → `strings.xml`, данные → ViewModel.",
                  "- Подробное задание для ИИ — `AI_TASK.md` в корне пакета.", "",
                  "## Экраны", ""]
@@ -670,3 +755,49 @@ def drawable_name(name: str, used: set[str]) -> str:
         n, i = f"{base}_{i}", i + 1
     used.add(n)
     return n
+
+
+DESIGN_ICON = """package {pkg}.ui.components
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
+/**
+ * Значок из дизайна (SVG-путь в сетке viewport × viewport). Цвет по умолчанию — цвет содержимого
+ * компонента (LocalContentColor), как у Icon из Material 3. Можно заменить на Icon(Icons....).
+ */
+@Composable
+fun DesignIcon(
+    path: String,
+    contentDescription: String? = null,
+    modifier: Modifier = Modifier,
+    tint: Color = LocalContentColor.current,
+    iconSize: Dp = 24.dp,
+    viewport: Float = 24f,
+    evenOdd: Boolean = false,
+) {
+    val shape = remember(path, evenOdd) {
+        PathParser().parsePathString(path).toPath().apply { if (evenOdd) fillType = PathFillType.EvenOdd }
+    }
+    val described = if (contentDescription != null) modifier.semantics { this.contentDescription = contentDescription }
+    else modifier
+    Canvas(described.size(iconSize)) {
+        scale(size.width / viewport, size.height / viewport, pivot = Offset.Zero) {
+            drawPath(shape, tint)
+        }
+    }
+}
+"""

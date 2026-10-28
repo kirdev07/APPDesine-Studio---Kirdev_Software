@@ -66,6 +66,11 @@ class LayersPanel(QWidget):
             grid.addWidget(b, i // 2, i % 2)
         lay.addLayout(grid)
         lay.addWidget(label("Компоненты", "H2"))
+        self.comp_filter = QLineEdit()
+        self.comp_filter.setPlaceholderText("Поиск: кнопка, переключатель, значок…")
+        self.comp_filter.setClearButtonEnabled(True)
+        self.comp_filter.textChanged.connect(self.filter_components)
+        lay.addWidget(self.comp_filter)
         self.components = QListWidget()
         self.components.setMinimumHeight(60)
         self.components.setToolTip("Щелчок — вставить на экран. Заготовки из фреймов с Auto Layout; свои "
@@ -128,6 +133,13 @@ class LayersPanel(QWidget):
             it.setData(ROLE_ID, spec.kind)
             it.setToolTip("Нажмите, чтобы добавить на экран")
             self.components.addItem(it)
+        self.filter_components(self.comp_filter.text())
+
+    def filter_components(self, text: str) -> None:
+        words = text.lower().split()
+        for i in range(self.components.count()):
+            it = self.components.item(i)
+            it.setHidden(not all(w in it.text().lower() for w in words))
 
     def _insert_component(self, item: QListWidgetItem) -> None:
         self.editor.insert_component(item.data(ROLE_ID))

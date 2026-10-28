@@ -57,6 +57,9 @@ class ColorsPage(QWidget):
         row.addWidget(button("Сохранить", self.save_token, object_name="Primary"))
         row.addWidget(button("Удалить", self.delete_token, object_name="Danger"))
         ll.addLayout(row)
+        ll.addWidget(button("Схема Material 3…", self.material_scheme,
+                            "Все роли цвета Material 3 (основной, контейнеры, поверхности, контуры, ошибка) "
+                            "по одному цвету бренда — светлая и тёмная схемы"))
         row = QHBoxLayout()
         row.addWidget(button("Залить выделение", lambda: self._apply("fill")))
         row.addWidget(button("Цвет текста выделения", lambda: self._apply("text_color")))
@@ -125,6 +128,16 @@ class ColorsPage(QWidget):
     def delete_token(self) -> None:
         if self._token_id and self.main.delete_color(self._token_id):
             self._token_id = None
+
+    def material_scheme(self) -> None:
+        from app.ui.studio.material import MaterialSchemeDialog
+        doc = self.main.doc
+        if doc is None:
+            return
+        dlg = MaterialSchemeDialog(doc.meta.appearance.accent, doc.meta.appearance.theme != "light", self)
+        if dlg.exec():
+            n = self.main.add_material_colors(dlg.seed(), dlg.variants(), dlg.fidelity())
+            self.status.setText(f"Создано и обновлено токенов: {n}" if n else "Схема не применена")
 
     def _apply(self, prop: str) -> None:
         v = self.value._value

@@ -802,6 +802,49 @@ class Editor(QObject):
                 doc.colors[doc.colors.index(old)] = t
         return self.patch(f"Цвет «{token.name}»", mutate)
 
+    def add_material_colors(self, seed: str, variants: tuple[str, ...], fidelity: bool = True) -> int:
+        """Цветовые токены всех ролей схемы Material 3 («M3 тёмная · Основной (primary)» …) одной записью
+        истории. Токен с тем же именем обновляется, а не дублируется. Возвращает число токенов."""
+        from app.engines.material.color import ROLE_RU, scheme
+        tokens = []
+        for variant in variants:
+            sch = scheme(seed, variant == "dark", fidelity)
+            ru = "тёмная" if variant == "dark" else "светлая"
+            tokens += [(f"M3 {ru} · {ROLE_RU[r]} ({r})", v) for r, v in sch.items()]
+
+        def mutate(doc):
+            by_name = {c.name: c for c in doc.colors}
+            for name, value in tokens:
+                if name in by_name:
+                    by_name[name].value = value
+                else:
+                    doc.colors.append(ColorToken(name=name, value=value))
+        return len(tokens) if self.patch("Схема Material 3", mutate) else 0
+
+    def add_material_typography(self) -> int:
+        """Стили текста шкалы Material 3 (размер в px по плотности первого экрана Android)."""
+        from app.engines.material.type_scale import TYPE_SCALE, style_name
+        from app.engines.preview.devices import screen_dpi
+        if not self.doc:
+            return 0
+        android = next((s for s in self.doc.screens if s.platform == "android"), None)
+        k = screen_dpi(android) / 160 if android else 1.0
+        family = self.doc.meta.appearance.font_family
+
+        def mutate(doc):
+            by_name = {t.name: t for t in doc.text_styles}
+            for role, (_, size, _, weight) in TYPE_SCALE.items():
+                name = style_name(role)
+                old = by_name.get(name)
+                st = TextStyle(name=name, font_family=family, font_size=round(size * k, 2), font_weight=weight,
+                               id=old.id if old else new_id())
+                if old is None:
+                    doc.text_styles.append(st)
+                else:
+                    doc.text_styles[doc.text_styles.index(old)] = st
+                    comp_engine.apply_text_style(doc, st.id, self.engine)
+        return len(TYPE_SCALE) if self.patch("Типографика Material 3", mutate) else 0
+
     def delete_color(self, token_id: str) -> bool:
         return self.patch("Удалить цвет", lambda doc: doc.colors.remove(
             next(c for c in doc.colors if c.id == token_id)))
