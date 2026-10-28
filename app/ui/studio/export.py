@@ -181,7 +181,10 @@ class ExportPage(QWidget):
         lay.addWidget(label("3. Структура пакета", "H2"))
         self.files = QTreeWidget()
         self.files.setHeaderLabels(["Файл", "Размер"])
-        self.files.setColumnWidth(0, 290)
+        hdr = self.files.header()  # имя файла занимает свободное место, размер — по содержимому
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(0, hdr.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, hdr.ResizeMode.ResizeToContents)
         lay.addWidget(self.files, 3)
         lay.addWidget(label("Ресурсы и лицензии", "H2"))
         self.assets = QListWidget()

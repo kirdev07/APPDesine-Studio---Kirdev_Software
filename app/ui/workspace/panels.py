@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFormLayout, QGridLayout, QHBoxLayout,
     QHeaderView,
     QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
-    QScrollArea, QSpinBox, QSplitter, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QSpinBox, QSplitter, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.core.document import tree
@@ -18,6 +18,7 @@ from app.libraries.catalog import DEVICES
 from app.ui.widgets import glyph_icon, label, pixmap_icon, separator
 from app.ui.workspace.canvas import qcolor, render_thumbnail
 from app.ui.workspace.editor import TYPE_NAMES, Editor
+from app.ui.workspace.gallery import ComponentGallery
 
 ROLE_ID = Qt.ItemDataRole.UserRole
 TYPE_GLYPH = {"rect": "▭", "ellipse": "◯", "text": "T", "group": "▣", "frame": "#", "vector": "✎", "image": "▨",
@@ -48,15 +49,17 @@ class LayersPanel(QWidget):
         self.editor = editor
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        split = QSplitter(Qt.Orientation.Vertical)  # верх (элементы, компоненты) и слои делят высоту по желанию
-        outer.addWidget(split)
+        # две вкладки вместо длинной панели: «Добавить» (картинки компонентов) и «Слои» (что уже на экране)
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        outer.addWidget(self.tabs)
         top = QWidget()
         lay = QVBoxLayout(top)
         lay.setContentsMargins(10, 10, 10, 4)
-        lay.addWidget(label("Элементы", "H2"))
+        lay.addWidget(label("Простые элементы", "H2"))
         grid = QGridLayout()
         grid.setSpacing(6)
-        for i, (kind, key, short) in enumerate((("frame", "F", "Фрейм"), ("rect", "R", "Прямоугольник"),
+        for i, (kind, key, short) in enumerate((("frame", "F", "Фрейм"), ("rect", "R", "Прямоуг."),
                                                 ("ellipse", "O", "Эллипс"), ("text", "T", "Текст"))):
             b = QPushButton(f"{TYPE_GLYPH[kind]}  {short}")
             b.setStyleSheet("padding:6px 2px")
@@ -66,26 +69,19 @@ class LayersPanel(QWidget):
             grid.addWidget(b, i // 2, i % 2)
         lay.addLayout(grid)
         lay.addWidget(label("Компоненты", "H2"))
-        self.comp_filter = QLineEdit()
-        self.comp_filter.setPlaceholderText("Поиск: кнопка, переключатель, значок…")
-        self.comp_filter.setClearButtonEnabled(True)
-        self.comp_filter.textChanged.connect(self.filter_components)
-        lay.addWidget(self.comp_filter)
-        self.components = QListWidget()
-        self.components.setMinimumHeight(60)
-        self.components.setToolTip("Щелчок — вставить на экран. Заготовки из фреймов с Auto Layout; свои "
-                                   "мастер-компоненты — раздел «Компоненты» и «Создать компонент» (Ctrl+Alt+K)")
-        self.components.itemClicked.connect(self._insert_component)
-        lay.addWidget(self.components, 1)
-        split.addWidget(top)
+        self.gallery = ComponentGallery(editor)
+        self.gallery.add_requested.connect(lambda kind: editor.insert_component(kind))
+        self.gallery.replace_requested.connect(lambda kind: editor.replace_selection(kind))
+        lay.addWidget(self.gallery, 1)
+        self.comp_filter = self.gallery.search      # совместимость: поиск и плитки галереи
+        self.components = self.gallery.tiles
+        self.tabs.addTab(top, "Добавить")
         bottom = QWidget()
         lay = QVBoxLayout(bottom)
-        lay.setContentsMargins(10, 4, 10, 10)
-        split.addWidget(bottom)
-        split.setStretchFactor(0, 2)
-        split.setStretchFactor(1, 3)
+        lay.setContentsMargins(10, 8, 10, 10)
+        self.tabs.addTab(bottom, "Слои")
         head = QHBoxLayout()
-        head.addWidget(label("Слои", "H2"))
+        head.addWidget(label("Что на экране", "H2"))
         head.addStretch()
         for text, tip, mode in (("↑", "Выше (Ctrl+])", "up"), ("↓", "Ниже (Ctrl+[)", "down")):
             b = QToolButton()
@@ -122,27 +118,26 @@ class LayersPanel(QWidget):
         editor.screen_changed.connect(self.rebuild)
         editor.selection_changed.connect(self.sync_selection)
         editor.screen_changed.connect(self.rebuild_components)
+        editor.document_changed.connect(self._maybe_rebuild_components)
+        self._gallery_key = None
+
+    def _appearance_key(self):
+        s, doc = self.editor.screen(), self.editor.doc
+        if s is None or doc is None:
+            return None
+        ap = doc.meta.appearance
+        return s.platform, s.device_id, s.width, ap.theme, ap.accent, ap.font_family
 
     def rebuild_components(self) -> None:
-        self.components.clear()
-        s = self.editor.screen()
-        if s is None:
-            return
-        for spec in components.specs_for(s.platform):
-            it = QListWidgetItem(f"{spec.category} · {spec.name}")
-            it.setData(ROLE_ID, spec.kind)
-            it.setToolTip("Нажмите, чтобы добавить на экран")
-            self.components.addItem(it)
-        self.filter_components(self.comp_filter.text())
+        self._gallery_key = self._appearance_key()
+        self.gallery.rebuild()
+
+    def _maybe_rebuild_components(self) -> None:
+        if self._appearance_key() != self._gallery_key:  # картинки зависят от оформления и платформы экрана
+            self.rebuild_components()
 
     def filter_components(self, text: str) -> None:
-        words = text.lower().split()
-        for i in range(self.components.count()):
-            it = self.components.item(i)
-            it.setHidden(not all(w in it.text().lower() for w in words))
-
-    def _insert_component(self, item: QListWidgetItem) -> None:
-        self.editor.insert_component(item.data(ROLE_ID))
+        self.comp_filter.setText(text)
 
     def rebuild(self) -> None:
         self._syncing = True
@@ -307,7 +302,7 @@ class Inspector(QScrollArea):
         for combo in body.findChildren(QComboBox):  # длинные пункты не должны расширять панель
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
-        self.lay.addStretch()
+        self.lay.addStretch(1)  # лишняя высота — вниз, а не между строками разделов
         editor.selection_changed.connect(self.refresh)
         editor.document_changed.connect(self.refresh)
         editor.preview_changed.connect(self._refresh_geometry)
@@ -803,8 +798,20 @@ class Inspector(QScrollArea):
                 self.p_title.setText(ed.doc.meta.title)
                 if self.p_desc.toPlainText() != ed.doc.meta.description and not self.p_desc.hasFocus():
                     self.p_desc.setPlainText(ed.doc.meta.description)
+            if self.simple:  # простой режим: без привязок, размеров в раскладке, точек пути и направляющих
+                for w in (self.sec_size, self.sec_cons, self.sec_vec, self.sec_guides):
+                    w.setVisible(False)
         finally:
             self._loading = False
+
+    simple = False
+
+    def set_simple(self, on: bool) -> None:
+        self.simple = on
+        self.refresh()
+        if self.simple:
+            for w in (self.sec_size, self.sec_cons, self.sec_vec, self.sec_guides):
+                w.setVisible(False)
 
     def _refresh_geometry(self) -> None:
         bb = self.editor.selection_bbox()
@@ -890,10 +897,10 @@ class ScreensStrip(QWidget):
         self.list.setViewMode(QListWidget.ViewMode.IconMode)
         self.list.setFlow(QListWidget.Flow.LeftToRight)
         self.list.setWrapping(False)
-        self.list.setIconSize(QSize(96, 96))
-        self.list.setGridSize(QSize(150, 136))
+        self.list.setIconSize(QSize(56, 56))       # компактная полоса: холсту остаётся основная высота
+        self.list.setGridSize(QSize(132, 86))
         self.list.setMovement(QListWidget.Movement.Static)
-        self.list.setFixedHeight(150)
+        self.list.setFixedHeight(96)
         self.list.currentItemChanged.connect(self._on_current)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._menu)
@@ -915,7 +922,7 @@ class ScreensStrip(QWidget):
         doc = self.editor.doc
         if doc:
             for s in doc.screens:
-                it = QListWidgetItem(pixmap_icon(render_thumbnail(s, self.editor.artboard_color(), 96, 96, self.editor.doc)),
+                it = QListWidgetItem(pixmap_icon(render_thumbnail(s, self.editor.artboard_color(), 56, 56, self.editor.doc)),
                                      f"{s.name}\n{s.width}×{s.height}")
                 it.setData(ROLE_ID, s.id)
                 it.setToolTip(s.name)

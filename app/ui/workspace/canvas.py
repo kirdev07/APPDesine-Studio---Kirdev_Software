@@ -435,6 +435,7 @@ class OverlayItem(QGraphicsItem):
 class CanvasView(QGraphicsView):
     zoom_changed = Signal(float)
     cursor_moved = Signal(float, float)
+    context_menu = Signal(object)  # глобальная точка: страница показывает меню действий с выделенным
 
     def __init__(self, editor: Editor, parent=None):
         super().__init__(parent)
@@ -447,6 +448,7 @@ class CanvasView(QGraphicsView):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
+        self.setAcceptDrops(True)
         self.items_by_id: dict[str, NodeItem] = {}
         self.overlay: OverlayItem | None = None
         self.hover_id: str | None = None
@@ -467,6 +469,7 @@ class CanvasView(QGraphicsView):
         self.pen_points: list[tuple[float, float]] = []
         self.pen_hover: tuple[float, float] | None = None
         self._fitted_screen: str | None = None
+        self._auto_fit = True  # экран «целиком» подстраивается под размер окна, пока масштаб не меняли вручную
 
         editor.document_changed.connect(self.rebuild)
         editor.screen_changed.connect(self._on_screen)
@@ -518,6 +521,7 @@ class CanvasView(QGraphicsView):
         Точка привязки считается вручную: встроенная привязка Qt берёт последнее движение мыши, которое холст
         не передаёт, и экран «уплывал» вправо при увеличении."""
         value = max(ZOOM_MIN, min(ZOOM_MAX, value))
+        self._auto_fit = False
         vp = self.viewport()
         pos = vp.rect().center()
         if anchor_under_mouse:
@@ -541,16 +545,17 @@ class CanvasView(QGraphicsView):
         s = self.editor.screen()
         if not s:
             return
-        pad = 0.1 * max(s.width, s.height)
+        pad = 0.04 * max(s.width, s.height)  # экран крупнее: поля вокруг небольшие
         self.fitInView(QRectF(-pad, -pad, s.width + 2 * pad, s.height + 2 * pad), Qt.AspectRatioMode.KeepAspectRatio)
         z = max(ZOOM_MIN, min(ZOOM_MAX, self.zoom()))
         self.setTransform(QTransform.fromScale(z, z))
         self.centerOn(s.width / 2, s.height / 2)
+        self._auto_fit = True
         self.zoom_changed.emit(z)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self._fitted_screen is None and self.editor.screen():
+        if self.editor.screen() and (self._fitted_screen is None or self._auto_fit):
             self._fitted_screen = self.editor.screen().id
             self.fit()
 
@@ -847,6 +852,41 @@ class CanvasView(QGraphicsView):
             text, ok = QInputDialog.getMultiLineText(self, "Текст", "Текст элемента:", node.text)
             if ok and text != node.text:
                 ed.set_props({node.id: {"text": text}}, "Изменить текст")
+
+    # ---------- перетаскивание заготовки из галереи ----------
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat("application/x-ads-component") and self.editor.screen():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat("application/x-ads-component"):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        md = event.mimeData()
+        if not md.hasFormat("application/x-ads-component"):
+            return super().dropEvent(event)
+        kind = bytes(md.data("application/x-ads-component")).decode("utf-8")
+        p = self.mapToScene(event.position().toPoint())
+        self.editor.insert_component(kind, at=(p.x(), p.y()))
+        event.acceptProposedAction()
+        self.setFocus()
+
+    def contextMenuEvent(self, event):
+        ed = self.editor
+        if not ed.screen():
+            return
+        p = self.mapToScene(event.pos())
+        nid = ed.hit(p.x(), p.y(), 4 / self.zoom())
+        if nid and nid not in ed.selection:
+            ed.select([nid])
+        elif not nid:
+            ed.select([])
+        self.context_menu.emit(event.globalPos())
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:

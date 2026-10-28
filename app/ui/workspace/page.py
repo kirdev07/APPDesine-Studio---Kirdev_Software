@@ -5,7 +5,8 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QMimeData, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
-    QComboBox, QDockWidget, QFrame, QHBoxLayout, QLabel, QMainWindow, QSizePolicy, QToolBar, QToolButton, QWidget,
+    QComboBox, QDockWidget, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu, QSizePolicy, QToolBar, QToolButton,
+    QWidget,
 )
 
 from app.context import AppContext
@@ -13,7 +14,7 @@ from app.core.document.model import ProjectDocument
 from app.ui.widgets import glyph_icon, label, stage_badge
 from app.ui.workspace.canvas import CanvasView
 from app.ui.workspace.editor import (
-    CLIPBOARD_MIME, TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_PEN, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, Editor,
+    CLIPBOARD_MIME, TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_PEN, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, TYPE_NAMES, Editor,
 )
 from app.ui.workspace.layout_tools import DiagnosticsPanel, ResponsiveDialog
 from app.ui.workspace.panels import Inspector, LayersPanel, ScreensStrip
@@ -64,6 +65,13 @@ class WorkspacePage(QMainWindow):
         self.editor.selection_changed.connect(self._update_actions)
         self.editor.view_changed.connect(self._sync_tools)
         self.canvas.zoom_changed.connect(lambda z: self.zoom_combo.setEditText(f"{round(z * 100)}%"))
+        self.canvas.context_menu.connect(self.show_context_menu)
+        self._build_selection_bar()
+        self._build_start_hint()
+        self.editor.selection_changed.connect(self._sync_selection_bar)
+        self.editor.document_changed.connect(self._sync_selection_bar)
+        self.editor.screen_changed.connect(self._sync_selection_bar)
+        self.set_simple(bool(s.get("workspace/simple")))
         self.canvas.cursor_moved.connect(lambda x, y: self.pos_label.setText(f"x {x:.0f}   y {y:.0f}"))
         self._update_actions()
 
@@ -71,7 +79,7 @@ class WorkspacePage(QMainWindow):
         super().showEvent(e)
         if not self._docks_sized:  # размеры доков применяются только у показанного окна
             self._docks_sized = True
-            self.resizeDocks([self.dock_screens], [150], Qt.Orientation.Vertical)  # холсту — основная высота
+            self.resizeDocks([self.dock_screens], [110], Qt.Orientation.Vertical)  # холсту — основная высота
 
     # ---------- построение ----------
     def _dock(self, title: str, widget: QWidget, area, width: int) -> QDockWidget:
@@ -157,9 +165,16 @@ class WorkspacePage(QMainWindow):
         self.a_make_component = self._action("Создать компонент…", self.make_component, "Ctrl+Alt+K")
         self.a_detach = self._action("Отсоединить экземпляр", ed.detach_selection)
         self.a_reset_over = self._action("Сбросить переопределения", ed.reset_overrides_selection)
+        self.a_replace = self._action("Заменить на компонент…", self.replace_dialog, "Ctrl+R")
+        self.a_add_component = self._action("Добавить компонент…", self.add_dialog, "Ctrl+Shift+N")
+        self.a_simple = self._action("Простой режим", self.set_simple, checkable=True)
+        self.a_simple.setToolTip("Только основные кнопки и свойства. Выключите, чтобы видеть привязки, "
+                                 "размеры в раскладке, направляющие и группы")
         self.a_run = self._action("▶ Просмотр", lambda: self.window().run_prototype()
                                   if hasattr(self.window(), "run_prototype") else None)
         self.a_run.setToolTip("Интерактивный предпросмотр на устройстве с текущего экрана (F5)")
+        self.edit_actions[8:8] = [self.a_replace, self.a_add_component]
+        self.view_actions += [None, self.a_simple]
         self.tools_actions = [self.a_wrap_v, self.a_wrap_h, self.a_unwrap, None, self.a_make_component,
                               self.a_detach, self.a_reset_over, None, self.a_responsive]
 
@@ -189,6 +204,8 @@ class WorkspacePage(QMainWindow):
             bar.addAction(action)
             if action in (self.a_redo, self.a_ungroup, self.a_responsive):
                 bar.addSeparator()
+        bar.addAction(self.a_simple)
+        self.toolbar = bar
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         bar.addWidget(spacer)
@@ -204,8 +221,8 @@ class WorkspacePage(QMainWindow):
         кнопки уходили за край)."""
         box = QFrame(self.canvas)
         box.setObjectName("ZoomBox")
-        box.setStyleSheet("#ZoomBox{background:#141414;border:1px solid #2A2A2A;border-radius:8px}"
-                          "#ZoomBox QToolButton{padding:4px 9px;font-size:15px}")
+        box.setStyleSheet("#ZoomBox{background:rgba(20,20,20,220);border:1px solid #2A2A2A;border-radius:8px}"
+                          "#ZoomBox QToolButton{padding:2px 6px}")
         lay = QHBoxLayout(box)
         lay.setContentsMargins(4, 3, 4, 3)
         lay.setSpacing(2)
@@ -213,7 +230,7 @@ class WorkspacePage(QMainWindow):
             if action is None:
                 self.zoom_combo = QComboBox()
                 self.zoom_combo.setEditable(True)
-                self.zoom_combo.setFixedWidth(92)
+                self.zoom_combo.setFixedWidth(78)
                 for z in ZOOMS:
                     self.zoom_combo.addItem(f"{z}%", z)
                 self.zoom_combo.addItem("Целиком", 0)
@@ -233,6 +250,126 @@ class WorkspacePage(QMainWindow):
         self.canvas.installEventFilter(self)
         self._place_zoom_box()
 
+    # ---------- простые действия: панель выделения, меню правой кнопки, замена ----------
+    def _build_selection_bar(self) -> None:
+        """Над холстом, пока что-то выделено: имя и крупные кнопки «Заменить», «Дублировать», «Удалить»."""
+        bar = QFrame(self.canvas)
+        bar.setObjectName("SelBar")
+        bar.setStyleSheet("#SelBar{background:#141414;border:1px solid #2F7BFF;border-radius:8px}"
+                          "#SelBar QToolButton{padding:5px 10px}")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(10, 4, 4, 4)
+        lay.setSpacing(4)
+        self.sel_label = QLabel("")
+        self.sel_label.setMaximumWidth(220)
+        lay.addWidget(self.sel_label)
+        self.sel_buttons = []
+        for action, text, danger in ((self.a_replace, "Заменить…", False), (self.a_dup, "Дублировать", False),
+                                     (self.a_delete, "Удалить", True)):
+            b = QToolButton()  # своя короткая подпись: setDefaultAction подставил бы длинное имя команды
+            b.setText(text)
+            b.setToolTip(f"{action.text()} ({action.shortcut().toString()})")
+            b.setAutoRaise(True)
+            if danger:
+                b.setStyleSheet("color:#FF6B6B")
+            b.clicked.connect(action.trigger)
+            action.changed.connect(lambda b=b, a=action: b.setEnabled(a.isEnabled()))
+            lay.addWidget(b)
+            self.sel_buttons.append(b)
+        self.sel_bar = bar
+        bar.hide()
+
+    def _build_start_hint(self) -> None:
+        hint = QLabel(self.canvas)
+        hint.setObjectName("StartHint")
+        hint.setWordWrap(True)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet("#StartHint{background:#101826;border:1px solid #2F7BFF;border-radius:10px;"
+                           "padding:12px 16px;color:#DDE6F5}")
+        hint.setText("<b>С чего начать</b><br>1. Слева во вкладке «Добавить» щёлкните компонент — он появится на "
+                     "экране, или перетащите его в нужное место.<br>2. Щёлкните элемент на экране — сверху появятся "
+                     "кнопки «Заменить», «Дублировать», «Удалить»; справа — его цвет, текст и размер.<br>"
+                     "3. Правая кнопка мыши — все действия. Ctrl + колесо — масштаб, F5 — проверить на телефоне.")
+        hint.setFixedWidth(440)
+        self.start_hint = hint
+        hint.hide()
+
+    def _sync_selection_bar(self) -> None:
+        ed = self.editor
+        nodes = ed.selected_nodes() if ed.doc else []
+        bar = getattr(self, "sel_bar", None)
+        if bar is not None:
+            if nodes:
+                name = nodes[0].name or TYPE_NAMES.get(nodes[0].type, "")
+                text = name if len(nodes) == 1 else f"Выбрано: {len(nodes)}"
+                self.sel_label.setText(self.sel_label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight,
+                                                                               200))
+                self.sel_label.setToolTip(text)
+                bar.adjustSize()
+            bar.setVisible(bool(nodes))
+        hint = getattr(self, "start_hint", None)
+        if hint is not None:
+            s = ed.screen()
+            hint.adjustSize()
+            hint.setVisible(bool(s is not None and not s.nodes))
+        self._place_zoom_box()
+
+    def show_context_menu(self, global_pos) -> None:
+        ed = self.editor
+        m = QMenu(self)
+        if ed.selection:
+            for a in (self.a_replace, self.a_dup, self.a_copy, self.a_delete):
+                m.addAction(a)
+            m.addSeparator()
+            for a in (self.a_top, self.a_bottom, self.a_hide, self.a_lock):
+                m.addAction(a)
+            m.addSeparator()
+            m.addAction(self.a_make_component)
+            if not self.simple:
+                m.addAction(self.a_group)
+                m.addAction(self.a_wrap_v)
+        else:
+            m.addAction(self.a_add_component)
+            m.addAction(self.a_paste)
+            m.addSeparator()
+            m.addAction(self.a_zoom_fit)
+        m.exec(global_pos)
+
+    def _pick_component(self, title: str) -> str | None:
+        from app.ui.workspace.gallery import PickComponentDialog
+        dlg = PickComponentDialog(self.editor, title, self)
+        return dlg.kind if dlg.exec() else None
+
+    def replace_dialog(self) -> None:
+        if len(self.editor.selection) != 1:
+            return
+        kind = self._pick_component("Заменить выделенный элемент на…")
+        if kind:
+            self.editor.replace_selection(kind)
+
+    def add_dialog(self) -> None:
+        kind = self._pick_component("Добавить компонент")
+        if kind:
+            self.editor.insert_component(kind)
+
+    simple = True
+
+    def set_simple(self, on: bool) -> None:
+        """Простой режим: прячет редкие кнопки панели и сложные разделы свойств."""
+        self.simple = bool(on)
+        self.a_simple.setChecked(self.simple)
+        bar = self.toolbar
+        advanced = (self.a_group, self.a_ungroup, self.a_responsive, self.a_guides)  # в меню они остаются
+        for a in advanced:
+            if a in bar.actions():
+                bar.removeAction(a)
+        if not self.simple:
+            for a in advanced:
+                bar.insertAction(self.a_grid, a)
+        self.inspector.set_simple(self.simple)
+        self.dock_diag.setVisible(not self.simple)  # вкладка диагностики — по меню «Вид» в простом режиме
+        self.ctx.settings.set("workspace/simple", self.simple)
+
     def _place_zoom_box(self) -> None:
         box = getattr(self, "zoom_box", None)
         if box is not None:
@@ -240,6 +377,18 @@ class WorkspacePage(QMainWindow):
             vp = self.canvas.viewport().geometry()
             box.move(vp.right() - box.width() - m, vp.bottom() - box.height() - m)
             box.raise_()
+        bar = getattr(self, "sel_bar", None)
+        if bar is not None:
+            vp = self.canvas.viewport().geometry()
+            bar.move(vp.left() + max(8, (vp.width() - bar.width()) // 2), vp.top() + 10)
+            bar.raise_()
+        hint = getattr(self, "start_hint", None)
+        if hint is not None:
+            vp = self.canvas.viewport().geometry()
+            hint.setFixedWidth(min(440, max(260, vp.width() - 40)))
+            hint.adjustSize()
+            hint.move(vp.left() + (vp.width() - hint.width()) // 2, vp.top() + 16)
+            hint.raise_()
 
     def eventFilter(self, obj, event):
         if obj is self.canvas and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
@@ -278,6 +427,8 @@ class WorkspacePage(QMainWindow):
         for a in (self.a_cut, self.a_copy, self.a_dup, self.a_delete, self.a_group, self.a_lock, self.a_hide,
                   self.a_up, self.a_down, self.a_top, self.a_bottom):
             a.setEnabled(sel)
+        self.a_replace.setEnabled(len(ed.selection) == 1)
+        self.a_add_component.setEnabled(ed.screen() is not None)
         self.a_ungroup.setEnabled(any(n.is_container for n in ed.selected_nodes()))
         self.a_unwrap.setEnabled(any(n.is_container for n in ed.selected_nodes()))
         self.a_wrap_v.setEnabled(sel)

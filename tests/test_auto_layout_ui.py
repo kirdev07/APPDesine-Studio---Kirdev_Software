@@ -197,6 +197,7 @@ def test_frames_and_layout_props_survive_save_reopen(ws):
 def test_inspector_sizing_and_constraints_sections(ws):
     page, _, _ = ws
     ed = page.editor
+    page.set_simple(False)  # раздел «Привязки» и размеры в раскладке — в расширенном режиме
     card = ed.insert_component("m3_card")
     insp = page.inspector
     assert not insp.sec_al.isHidden() and not insp.sec_cons.isHidden()

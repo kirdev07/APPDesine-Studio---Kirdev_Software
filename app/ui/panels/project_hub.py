@@ -182,8 +182,8 @@ class ProjectHubPage(QWidget):
         self.templates.setViewMode(QListView.ViewMode.IconMode)
         self.templates.setFlow(QListView.Flow.LeftToRight)
         self.templates.setWrapping(False)
-        self.templates.setIconSize(QSize(140, 84))
-        self.templates.setGridSize(QSize(236, 140))
+        self.templates.setIconSize(QSize(120, 66))
+        self.templates.setGridSize(QSize(200, 112))
         self.templates.setFixedHeight(156)
         self.templates.setMovement(QListView.Movement.Static)
         self.templates.itemClicked.connect(lambda it: self.new_requested.emit(it.data(ROLE_ID)))
@@ -383,8 +383,8 @@ class ProjectHubPage(QWidget):
         self.list_btn.setChecked(not grid)
         if grid:
             self.cards.setViewMode(QListView.ViewMode.IconMode)
-            self.cards.setIconSize(QSize(200, 120))
-            self.cards.setGridSize(QSize(224, 210))
+            self.cards.setIconSize(QSize(168, 100))
+            self.cards.setGridSize(QSize(196, 186))
             self.cards.setWordWrap(True)
             self.cards.setSpacing(0)
         else:

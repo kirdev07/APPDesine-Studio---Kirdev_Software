@@ -79,7 +79,7 @@ def main(out_dir: str, sizes: list[tuple[int, int]]) -> int:
     app.exec()
     ctx.close()
     (out / "clipped.txt").write_text("\n".join(report), encoding="utf-8")
-    print(f"страниц снято, обрезанных подписей: {len(report)} → {out / 'clipped.txt'}")
+    print(f"страниц снято, обрезанных подписей: {len(report)} -> {out / 'clipped.txt'}")
     return 0
 
 

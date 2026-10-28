@@ -441,6 +441,36 @@ class Editor(QObject):
             return n
         return None
 
+    def replace_selection(self, kind: str) -> Node | None:
+        """Заменить выделенный элемент заготовкой: новый встаёт на то же место (родитель, порядок, положение),
+        старый удаляется; одна запись истории."""
+        s = self.screen()
+        if not s or not self.doc or len(self.selection) != 1 or self.inside_instance(self.selection[0]):
+            if self.selection:
+                self.message.emit("Заменить можно один элемент верхнего уровня или внутри фрейма")
+            return None
+        old_id = self.selection[0]
+        new = components.build(kind, s, self.doc.meta.appearance)
+        holder: dict = {}
+
+        def mutate(doc):
+            scr = next(x for x in doc.screens if x.id == s.id)
+            old, parent, idx = tree.find(scr, old_id)
+            siblings = parent.children if parent is not None else scr.nodes
+            node = Node.from_dict(new.to_dict())
+            dx = 0.0 if node.constraint_h == "left_right" else old.x - node.x
+            dy = old.y - node.y
+            for n, _, _ in tree.walk([node]):
+                n.x, n.y = round(n.x + dx, 2), round(n.y + dy, 2)
+            if parent is not None and parent.auto_layout:
+                node.sizing_h = old.sizing_h if node.constraint_h != "left_right" else node.sizing_h
+            siblings[idx] = node
+            holder["id"] = node.id
+        if not self.patch(f"Заменить на: {new.name}", mutate):
+            return None
+        self.select([holder["id"]])
+        return tree.find(self.screen(), holder["id"])[0]
+
     def delete_selection(self) -> None:
         s = self.screen()
         if s and self.selection:
@@ -856,11 +886,18 @@ class Editor(QObject):
                 d for sel in self.selected_nodes() for d in tree.descendants(sel) if d.type == "text" and sel.is_frame]
         return bool(nodes) and self.set_props({n.id: {prop: value} for n in nodes}, "Применить цвет")
 
-    def insert_component(self, kind: str) -> Node | None:
+    def insert_component(self, kind: str, at: tuple[float, float] | None = None) -> Node | None:
+        """Добавить заготовку; at — точка экрана (перетаскивание из галереи): туда ставится левый верхний угол,
+        растянутые по ширине компоненты сохраняют свои поля по горизонтали."""
         s = self.screen()
         if not s or not self.doc:
             return None
         node = components.build(kind, s, self.doc.meta.appearance)
+        if at is not None:
+            dx = 0.0 if node.constraint_h == "left_right" else min(max(0.0, at[0]), max(0.0, s.width - node.w)) - node.x
+            dy = min(max(0.0, at[1]), max(0.0, s.height - node.h)) - node.y
+            for n, _, _ in tree.walk([node]):
+                n.x, n.y = round(n.x + dx, 2), round(n.y + dy, 2)
         if self.execute(AddNodes(s.id, [node], self._container_id(), label=f"Добавить: {node.name}")):
             self.select([node.id])
             return node
