@@ -283,6 +283,7 @@ class MainWindow(QMainWindow):
                 a.setEnabled(False)
         h = mb.addMenu("Помощь")
         self._act(h, "Как пользоваться", QKeySequence("F1"), self.show_tour)
+        self._act(h, "Горячие клавиши", QKeySequence("Ctrl+/"), self.show_shortcuts)
         h.addSeparator()
         self._act(h, "Открыть папку журнала", None,
                   lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.ctx.paths.logs))))
@@ -290,6 +291,44 @@ class MainWindow(QMainWindow):
             self, APP_NAME, f"{APP_NAME} {APP_VERSION}\nЛокальная студия дизайна интерфейсов Android и Windows.\n\n"
                             f"{COPYRIGHT}\nИспользование без письменного разрешения правообладателя запрещено.\n"
                             "Использует PySide6 / Qt (LGPLv3) — см. THIRD_PARTY_NOTICES."))
+
+    def shortcut_rows(self) -> list[tuple[str, str]]:
+        """Все действия с клавишами: (сочетание, что делает), без повторов, по алфавиту."""
+        rows = {}
+        extra = [("Alt (зажать)", "Расстояния от выделенного до элемента под курсором"),
+                 ("Пробел + перетаскивание", "Двигать холст"), ("Стрелки / Shift+стрелки", "Сдвиг на 1 / 10"),
+                 ("Ctrl + колесо", "Масштаб холста"), ("Esc", "Снять выделение, отменить пипетку")]
+        for a in self.findChildren(QAction):
+            keys = [k.toString(QKeySequence.SequenceFormat.NativeText) for k in a.shortcuts() if not k.isEmpty()]
+            text = a.text().replace("&", "").strip()
+            if keys and text:
+                rows.setdefault(" / ".join(keys), text)
+        return sorted(rows.items(), key=lambda r: r[1].lower()) + extra
+
+    def show_shortcuts(self) -> None:
+        from PySide6.QtWidgets import QDialog, QTableWidget, QTableWidgetItem, QVBoxLayout, QLineEdit
+        d = QDialog(self)
+        d.setWindowTitle("Горячие клавиши")
+        d.resize(560, 620)
+        v = QVBoxLayout(d)
+        find = QLineEdit()
+        find.setPlaceholderText("Найти действие или клавишу…")
+        v.addWidget(find)
+        rows = self.shortcut_rows()
+        t = QTableWidget(len(rows), 2)
+        t.setHorizontalHeaderLabels(["Клавиши", "Действие"])
+        t.verticalHeader().setVisible(False)
+        t.horizontalHeader().setStretchLastSection(True)
+        t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        for i, (k, text) in enumerate(rows):
+            t.setItem(i, 0, QTableWidgetItem(k))
+            t.setItem(i, 1, QTableWidgetItem(text))
+        t.resizeColumnToContents(0)
+        v.addWidget(t)
+        find.textChanged.connect(lambda q: [t.setRowHidden(i, bool(q) and q.lower() not in (r[0] + r[1]).lower())
+                                            for i, r in enumerate(rows)])
+        self._shortcuts_dialog = d
+        d.show()
 
     def _act(self, menu, text, shortcut, slot) -> QAction:
         a = QAction(text, self)

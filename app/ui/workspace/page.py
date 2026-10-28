@@ -116,6 +116,10 @@ class WorkspacePage(QMainWindow):
         self.a_copy = self._action("Копировать", lambda: self._to_clipboard(ed.copy_selection()), K.Copy)
         self.a_paste = self._action("Вставить", self._paste, K.Paste)
         self.a_dup = self._action("Дублировать", ed.duplicate, "Ctrl+D")
+        self.a_copy_style = self._action("Копировать стиль", ed.copy_style, "Ctrl+Alt+C",
+                                         tip="Запомнить цвета, обводку, тени, скругления и шрифт элемента")
+        self.a_paste_style = self._action("Вставить стиль", ed.paste_style, "Ctrl+Alt+V",
+                                          tip="Применить запомненный стиль к выделенным элементам")
         self.a_delete = self._action("Удалить", ed.delete_selection, [K.Delete, "Backspace"])
         self.a_select_all = self._action("Выделить всё", self._select_all, K.SelectAll)
         self.a_group = self._action("Сгруппировать", ed.group_selection, "Ctrl+G")
@@ -153,7 +157,7 @@ class WorkspacePage(QMainWindow):
         self.tool_actions[TOOL_SELECT].setChecked(True)
 
         self.edit_actions = [self.a_undo, self.a_redo, None, self.a_cut, self.a_copy, self.a_paste, self.a_dup,
-                             self.a_delete, None, self.a_select_all, None, self.a_group, self.a_ungroup, None,
+                             self.a_delete, None, self.a_copy_style, self.a_paste_style, None, self.a_select_all, None, self.a_group, self.a_ungroup, None,
                              self.a_up, self.a_down, self.a_top, self.a_bottom, None, self.a_lock, self.a_hide]
         self.view_actions = [self.a_zoom_in, self.a_zoom_out, self.a_zoom_fit, self.a_zoom_100, None,
                              self.a_grid, self.a_snap, self.a_guides]
@@ -492,6 +496,9 @@ class WorkspacePage(QMainWindow):
         if ed.selection:
             for a in (self.a_replace, self.a_dup, self.a_copy, self.a_delete):
                 m.addAction(a)
+            m.addAction(self.a_copy_style)
+            if ed.style_clipboard:
+                m.addAction(self.a_paste_style)
             if self.a_replace_symbol.isEnabled():
                 m.addAction(self.a_replace_symbol)
             if len(ed.selection) == 1:

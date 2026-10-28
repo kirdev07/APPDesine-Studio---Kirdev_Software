@@ -446,6 +446,35 @@ def build_scene(scene: QGraphicsScene, screen: Screen, artboard_color: str, asse
     return items
 
 
+def measure_lines(a: tuple, b: tuple) -> list[tuple[float, float, float, float, float]]:
+    """Расстояния от рамки a до рамки b (x, y, w, h): отрезки (x1, y1, x2, y2, длина).
+    b внутри себя содержит a — до четырёх краёв b; иначе — промежутки по горизонтали и вертикали."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ar, ab, br, bb = ax + aw, ay + ah, bx + bw, by + bh
+    out = []
+    if bx <= ax and by <= ay and br >= ar and bb >= ab:  # родитель или экран вокруг
+        cy, cx = ay + ah / 2, ax + aw / 2
+        for x1, y1, x2, y2 in ((bx, cy, ax, cy), (ar, cy, br, cy), (cx, by, cx, ay), (cx, ab, cx, bb)):
+            d = abs(x2 - x1) + abs(y2 - y1)
+            if d > 0.01:
+                out.append((x1, y1, x2, y2, d))
+        return out
+    lo_y, hi_y = max(ay, by), min(ab, bb)
+    y = (lo_y + hi_y) / 2 if lo_y < hi_y else ay + ah / 2
+    if br <= ax:
+        out.append((br, y, ax, y, ax - br))
+    elif bx >= ar:
+        out.append((ar, y, bx, y, bx - ar))
+    lo_x, hi_x = max(ax, bx), min(ar, br)
+    x = (lo_x + hi_x) / 2 if lo_x < hi_x else ax + aw / 2
+    if bb <= ay:
+        out.append((x, bb, x, ay, ay - bb))
+    elif by >= ab:
+        out.append((x, ab, x, by, by - ab))
+    return out
+
+
 class OverlayItem(QGraphicsItem):
     """Сетка, направляющие, выделение, ручки, линии привязки и рамки инструментов. Толщины — в пикселях экрана."""
 
@@ -559,6 +588,8 @@ class OverlayItem(QGraphicsItem):
                 p.setPen(QColor("#FFFFFF"))
                 p.drawText(QRectF(-w / 2, 0, w, 18), Qt.AlignmentFlag.AlignCenter, text)
                 p.restore()
+        if view.measuring() and nodes:
+            self._paint_distances(p, ed, s, scale)
         p.setPen(self._pen(QColor("#FF4D7A"), 1))
         for x in view.snap_lines_x:
             p.drawLine(QPointF(x, -10_000), QPointF(x, 10_000 + s.height))
@@ -590,6 +621,37 @@ class OverlayItem(QGraphicsItem):
             else:
                 p.drawRect(view.create_rect)
         del board
+
+    def _paint_distances(self, p: QPainter, ed, s, scale: float) -> None:
+        """Alt: расстояния от выделенного до элемента под курсором (или до экрана)."""
+        bb = ed.selection_bbox()
+        target = None
+        if self.view.hover_id and self.view.hover_id not in ed.selection:
+            try:
+                target = tree.bounds(tree.find(s, self.view.hover_id)[0])
+            except Exception:
+                target = None
+        if not bb:
+            return
+        target = target or (0, 0, s.width, s.height)
+        red = QColor("#FF4D7A")
+        f = QFont(TOKENS["font"])
+        f.setPixelSize(11)
+        for x1, y1, x2, y2, d in measure_lines(tuple(bb), tuple(target)):
+            p.setPen(self._pen(red, 1))
+            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+            p.save()
+            p.translate((x1 + x2) / 2, (y1 + y2) / 2)
+            p.scale(1 / scale, 1 / scale)
+            p.setFont(f)
+            text = f"{d:g}"
+            w = p.fontMetrics().horizontalAdvance(text) + 8
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(red)
+            p.drawRoundedRect(QRectF(-w / 2, -9, w, 18), 4, 4)
+            p.setPen(QColor("#FFFFFF"))
+            p.drawText(QRectF(-w / 2, -9, w, 18), Qt.AlignmentFlag.AlignCenter, text)
+            p.restore()
 
 
 class CanvasView(QGraphicsView):
@@ -631,6 +693,9 @@ class CanvasView(QGraphicsView):
         self.pen_hover: tuple[float, float] | None = None
         self._fitted_screen: str | None = None
         self._auto_fit = True  # экран «целиком» подстраивается под размер окна, пока масштаб не меняли вручную
+        self._pick_cb = None    # пипетка: следующий щелчок берёт цвет пикселя под курсором
+        self._alt = False       # Alt зажат — показываются расстояния
+        editor.color_picker = self.start_pick
 
         editor.document_changed.connect(self.rebuild)
         editor.screen_changed.connect(self._on_screen)
@@ -758,8 +823,27 @@ class CanvasView(QGraphicsView):
         self.snap_lines_x, self.snap_lines_y = lx, ly
         return QPointF(round(p.x() + dx), round(p.y() + dy))
 
+    def start_pick(self, callback) -> None:
+        self._pick_cb = callback
+        self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocus()
+        self.editor.message.emit("Пипетка: щёлкните по цвету на холсте (Esc — отмена)")
+
+    def pick_at(self, pos) -> str:
+        img = self.viewport().grab(QRectF(pos.x(), pos.y(), 1, 1).toRect()).toImage()
+        c = img.pixelColor(0, 0)
+        return f"#{c.red():02X}{c.green():02X}{c.blue():02X}"
+
+    def measuring(self) -> bool:
+        return self._alt
+
     def mousePressEvent(self, event):
         self.setFocus()
+        if self._pick_cb is not None and event.button() == Qt.MouseButton.LeftButton:
+            cb, self._pick_cb = self._pick_cb, None
+            self.viewport().setCursor(self._tool_cursor())
+            cb(self.pick_at(event.position()))
+            return
         p = self._scene_pos(event)
         ed = self.editor
         if event.button() == Qt.MouseButton.MiddleButton or (
@@ -1077,6 +1161,14 @@ class CanvasView(QGraphicsView):
     def keyPressEvent(self, event):
         key, mods = event.key(), event.modifiers()
         ed = self.editor
+        if key == Qt.Key.Key_Alt and not event.isAutoRepeat():
+            self._alt = True
+            self._refresh_overlay()
+            return
+        if key == Qt.Key.Key_Escape and self._pick_cb is not None:
+            self._pick_cb = None
+            self.viewport().setCursor(self._tool_cursor())
+            return
         if key == Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space = True
             self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
@@ -1111,6 +1203,10 @@ class CanvasView(QGraphicsView):
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Alt and not event.isAutoRepeat():
+            self._alt = False
+            self._refresh_overlay()
+            return
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space = False
             self.viewport().setCursor(self._tool_cursor())

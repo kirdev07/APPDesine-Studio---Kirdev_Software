@@ -129,6 +129,11 @@ class LayersPanel(QWidget):
             b.clicked.connect(lambda _=False, m=mode: editor.reorder(m))
             head.addWidget(b)
         lay.addLayout(head)
+        self.layer_search = QLineEdit()
+        self.layer_search.setPlaceholderText("Найти слой по имени…")
+        self.layer_search.setClearButtonEnabled(True)
+        self.layer_search.textChanged.connect(self.filter_layers)
+        lay.addWidget(self.layer_search)
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setColumnCount(3)
@@ -215,6 +220,22 @@ class LayersPanel(QWidget):
         self.tree.blockSignals(False)
         self._syncing = False
         self.sync_selection()
+        if self.layer_search.text():
+            self.filter_layers(self.layer_search.text())
+
+    def filter_layers(self, text: str) -> None:
+        """Показать слои, в имени которых есть текст, вместе с их родителями."""
+        q = text.strip().lower()
+
+        def walk(it) -> bool:
+            hit = not q or q in it.text(0).lower()
+            child_hit = False
+            for i in range(it.childCount()):
+                child_hit = walk(it.child(i)) or child_hit
+            it.setHidden(not (hit or child_hit))
+            return hit or child_hit
+        for i in range(self.tree.topLevelItemCount()):
+            walk(self.tree.topLevelItem(i))
 
     def _items(self):
         stack = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
@@ -276,6 +297,26 @@ class LayersPanel(QWidget):
 
 # ---------------- инспектор ----------------
 
+RECENT_COLORS: list[str] = []  # последние выбранные цвета (за сеанс), новые — первыми
+
+
+def remember_color(value: str) -> None:
+    if not value:
+        return
+    v = value.upper()
+    if v in RECENT_COLORS:
+        RECENT_COLORS.remove(v)
+    RECENT_COLORS.insert(0, v)
+    del RECENT_COLORS[12:]
+
+
+def swatch_icon(value: str):
+    from PySide6.QtGui import QIcon, QPixmap
+    pm = QPixmap(14, 14)
+    pm.fill(qcolor(value))
+    return QIcon(pm)
+
+
 class ColorField(QWidget):
     committed = Signal(str)
 
@@ -299,6 +340,16 @@ class ColorField(QWidget):
         self.clear_btn.setVisible(allow_none)
         self.clear_btn.clicked.connect(lambda: self.committed.emit(""))
         lay.addWidget(self.clear_btn)
+        self.more = QToolButton()
+        self.more.setText("▾")
+        self.more.setToolTip("Пипетка, последние цвета и цвета проекта")
+        self.more.setStyleSheet("padding:0 4px")
+        self.more_menu = QMenu(self.more)
+        self.more_menu.aboutToShow.connect(self._fill_more)
+        self.more.setMenu(self.more_menu)
+        self.more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        lay.addWidget(self.more)
+        self.committed.connect(remember_color)
         self._value = ""
 
     def set_value(self, v: str) -> None:
@@ -316,6 +367,37 @@ class ColorField(QWidget):
         if t != self._value:
             self.committed.emit(t)
 
+    def _editor(self):
+        w = self.parentWidget()
+        while w is not None and not hasattr(w, "editor"):
+            w = w.parentWidget()
+        return getattr(w, "editor", None)
+
+    def _fill_more(self) -> None:
+        m = self.more_menu
+        m.clear()
+        ed = self._editor()
+        pick = m.addAction("💧 Пипетка — взять цвет с холста", self.eyedrop)
+        pick.setEnabled(bool(getattr(ed, "color_picker", None)))
+        if RECENT_COLORS:
+            m.addSection("Последние")
+            for c in RECENT_COLORS:
+                m.addAction(swatch_icon(c), c, lambda v=c: self.committed.emit(v))
+        doc = getattr(ed, "doc", None)
+        colors = doc.colors if doc is not None else []
+        if colors:
+            m.addSection("Цвета проекта")
+            for t in colors[:40]:
+                m.addAction(swatch_icon(t.value), t.name, lambda v=t.value: self.committed.emit(v))
+        if self._value and hasattr(ed, "add_color_token"):
+            m.addSeparator()
+            m.addAction("Сохранить в цвета проекта", lambda: ed.add_color_token(self._value))
+
+    def eyedrop(self) -> None:
+        ed = self._editor()
+        if getattr(ed, "color_picker", None):
+            ed.color_picker(self.committed.emit)
+
     def _pick(self) -> None:
         start = qcolor(self._value) if self._value else QColor("#FFFFFF")
         c = QColorDialog.getColor(start, self, "Цвет", QColorDialog.ColorDialogOption.ShowAlphaChannel)
@@ -331,7 +413,7 @@ def _spin(lo=-100000.0, hi=100000.0, decimals=0, suffix="") -> QDoubleSpinBox:
     s.setKeyboardTracking(False)
     s.setSuffix(suffix)
     s.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-    s.setMinimumWidth(52)  # компактно: в строке инспектора помещаются 4 поля
+    s.setMinimumWidth(44)  # компактно: в строке инспектора помещаются 4 поля
     s.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return s
 
@@ -590,7 +672,7 @@ class Inspector(QScrollArea):
             lambda: self._commit_leaves("align", self.align.currentData(), "Выравнивание текста", "text"))
         f.addRow("Выравнивание", self.align)
         self.letter_spacing = _spin(-50, 200, 1, " px")
-        self.letter_spacing.setToolTip("Расстояние между буквами (в Android — letterSpacing)")
+        self.letter_spacing.setToolTip("Интервал между буквами (в Android — letterSpacing)")
         self.letter_spacing.valueChanged.connect(
             lambda v: self._commit_leaves("letter_spacing", v, "Интервал между буквами", "text"))
         self.line_height = _spin(0, 10, 2, " ×")
@@ -601,9 +683,7 @@ class Inspector(QScrollArea):
             lambda v: self._commit_leaves("line_height", round(v, 2), "Высота строки", "text"))
         sp = QHBoxLayout()
         sp.setContentsMargins(0, 0, 0, 0)
-        sp.addWidget(label("Буквы", "Muted"))
-        sp.addWidget(self.letter_spacing)
-        sp.addWidget(label("Строка", "Muted"))
+        sp.addWidget(self.letter_spacing)  # слева — между буквами, справа — высота строки (подсказки по наведению)
         sp.addWidget(self.line_height)
         f.addRow("Интервалы", sp)
         self.italic = QCheckBox("Курсив")
@@ -623,12 +703,12 @@ class Inspector(QScrollArea):
         f.addRow("Регистр", self.text_case)
         self.max_lines = QSpinBox()
         self.max_lines.setRange(0, 1000)
-        self.max_lines.setSpecialValueText("без ограничения")
+        self.max_lines.setSpecialValueText("все")
         self.max_lines.setKeyboardTracking(False)
         self.max_lines.setToolTip("Не больше стольких строк; лишнее обрезается многоточием «…»")
         self.max_lines.valueChanged.connect(
             lambda v: self._commit_leaves("max_lines", v, "Число строк", "text"))
-        f.addRow("Строк не больше", self.max_lines)
+        f.addRow("Макс. строк", self.max_lines)
         self.editable = QCheckBox("Поле ввода в предпросмотре")
         self.editable.setToolTip("В предпросмотре текст можно набирать; исходный текст — подсказка")
         self.editable.clicked.connect(lambda v: self._commit_leaves("editable", v, "Поле ввода", "text"))

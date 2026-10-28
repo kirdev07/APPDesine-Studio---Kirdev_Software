@@ -791,6 +791,60 @@ class Editor(QObject):
                     comp_engine.materialize(dep, inst, self.engine)
         self.patch(f"Состояние: {state}", mutate)
 
+    # ---------- копировать / вставить стиль ----------
+    STYLE_COPY = ("fill", "stroke", "stroke_width", "radius", "opacity", "elevation", "gradient", "fill2",
+                  "grad_angle", "blur", "shadow_color", "shadow_x", "shadow_y", "shadow_blur", "shadow_spread",
+                  "shadow_inset", "stroke_dash", "stroke_align", "stroke_sides", "radius_tl", "radius_tr",
+                  "radius_br", "radius_bl", "fill3")
+    TEXT_STYLE_COPY = ("font_family", "font_size", "font_weight", "text_color", "align", "letter_spacing",
+                       "line_height", "italic", "decoration", "text_case", "max_lines")
+    style_clipboard: dict | None = None
+
+    def copy_style(self) -> bool:
+        """Запомнить оформление выделенного элемента (без текста, размеров и положения)."""
+        nodes = [n for n in self.selected_nodes() if not n.is_group]
+        if not nodes:
+            return False
+        n = nodes[0]
+        props = {k: getattr(n, k) for k in self.STYLE_COPY}
+        if n.type == "text":
+            props.update({k: getattr(n, k) for k in self.TEXT_STYLE_COPY})
+        Editor.style_clipboard = {"type": n.type, "props": props}
+        self.message.emit(f"Стиль «{n.name or n.type}» скопирован — Ctrl+Alt+V вставит его другим элементам")
+        return True
+
+    def paste_style(self) -> bool:
+        """Применить запомненный стиль к выделенным: оформление — всем, свойства текста — только текстам."""
+        clip = Editor.style_clipboard
+        targets = [n for n in self.selected_leaves() if not self.inside_instance(n.id)]
+        if not clip or not targets:
+            return False
+        changes = {}
+        for n in targets:
+            props = {k: v for k, v in clip["props"].items()
+                     if (k in self.STYLE_COPY or n.type == "text") and getattr(n, k) != v}
+            if (n.type == "text") != (clip["type"] == "text"):
+                props.pop("fill", None)  # у текста заливка — это фон, а не цвет букв: между текстом и фигурой не переносится
+            if props:
+                changes[n.id] = props
+        return bool(changes) and self.set_props(changes, "Вставить стиль")
+
+    def add_color_token(self, value: str, name: str = "") -> str | None:
+        """Сохранить цвет в цвета проекта (если такого ещё нет); возвращает имя."""
+        from app.core.document.model import ColorToken
+        if not self.doc or not value:
+            return None
+        found = next((c for c in self.doc.colors if c.value.upper() == value.upper()), None)
+        if found is not None:
+            return found.name
+        name = name or f"Цвет {len(self.doc.colors) + 1}"
+
+        def mutate(doc):
+            doc.colors.append(ColorToken(name=name, value=value.upper()))
+        return name if self.patch("Цвет в проект", mutate) else None
+
+    color_picker = None  # холст: функция(обратный_вызов) — следующий щелчок по холсту берёт цвет
+
     def set_instance_variant(self, axis: str, value: str) -> None:
         """Выбрать значение свойства варианта у выделенных копий компонента."""
         s = self.screen()
