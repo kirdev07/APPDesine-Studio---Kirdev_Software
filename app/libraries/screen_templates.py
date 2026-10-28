@@ -56,7 +56,7 @@ def _content(c, s, children: list[Node], top_dp: float, bottom_dp: float = 0, ga
     h = s.height / c.k - top_dp - bottom_dp
     return c.frame("Содержимое", "vertical", children, x=0, y=c.d(top_dp), w=c.width_dp, h=h, pad_l=16, pad_r=16,
                    pad_t=16, pad_b=16, gap=gap, constraint_h="left_right", constraint_v="top_bottom",
-                   cross_align="stretch", clip=True)
+                   cross_align="stretch", clip=True, scroll="vertical")  # длинное содержимое прокручивается
 
 
 def _list_item(s, ap, title: str, sub: str) -> Node:

@@ -102,7 +102,8 @@ def test_compose_export_real_material_components():
                  "FilterChip(", "FloatingActionButton(", "FilledTonalButton(", "PrimaryTabRow(", "SegmentedButton(",
                  "BadgedBox(", "LinearProgressIndicator(", "OutlinedTextField(", "NavigationBar(",
                  "NavigationBarItem(", "DesignIcon(", "@OptIn(ExperimentalMaterial3Api::class)",
-                 "contentColor = MaterialTheme.colorScheme.onBackground", ".align(Alignment.BottomStart)"):
+                 "contentColor = MaterialTheme.colorScheme.onBackground", "bottomBar = {", "NavigationRail {",
+                 "topBar = {", "Scaffold("):
         assert call in src, call
     snack = src[src.index("// Всплывающее сообщение"):]
     assert ".padding(start = 16.dp, end = 16.dp)" in snack[:400] and ".fillMaxWidth()" in snack[:400]

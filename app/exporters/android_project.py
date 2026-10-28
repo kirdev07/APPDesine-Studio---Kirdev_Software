@@ -189,36 +189,23 @@ class _Screen:
     def modifier(self, n, parent, mode: str, ind: str, handlers: bool = True) -> list[str]:
         """mode: abs (смещение в Box), col / row (в Auto Layout)."""
         m = [f"{ind}Modifier"]
-        stretch = False
+        fill_w = fill_h = None  # None — размер из дизайна; 1.0 — на всё место; 0…1 — доля (масштабирование)
         if mode == "abs":
-            ox, oy = n.x - (parent.x if parent else 0), n.y - (parent.y if parent else 0)
-            pw, ph = (parent.w, parent.h) if parent else (self.s.width, self.s.height)
-            right, bottom = pw - ox - n.w, ph - oy - n.h
-            pad = []
-            if n.constraint_v == "bottom" and bottom >= 0:  # привязка к низу: у нижнего края любого экрана
-                m.append(f"{ind}    .align(Alignment.BottomStart)")
-                if bottom > 0.5:
-                    pad.append(f"bottom = {self.dp(bottom)}")
-                oy = 0
-            if n.constraint_h == "left_right" and right >= 0:  # растягивается по ширине экрана
-                if ox > 0.5:
-                    pad.insert(0, f"start = {self.dp(ox)}")
-                if right > 0.5:
-                    pad.append(f"end = {self.dp(right)}")
-                ox, stretch = 0, True
-            if pad:
-                m.append(f"{ind}    .padding({', '.join(pad)})")
-            if ox or oy:
-                m.append(f"{ind}    .offset(x = {self.dp(ox)}, y = {self.dp(oy)})")
+            m += self._place(n, parent, ind)
+            fill_w, fill_h = self._fills
         main_fill = (mode == "col" and n.sizing_v == "fill") or (mode == "row" and n.sizing_h == "fill")
         if main_fill:
             m.append(f"{ind}    .weight(1f)")
-        if (n.sizing_h == "fill" and mode == "col") or stretch:
+        if (n.sizing_h == "fill" and mode == "col") or fill_w == 1.0:
             m.append(f"{ind}    .fillMaxWidth()")
+        elif fill_w is not None:
+            m.append(f"{ind}    .fillMaxWidth({_num(fill_w)}f)")
         elif n.sizing_h != "hug" and not (mode == "row" and n.sizing_h == "fill"):
             m.append(f"{ind}    .width({self.dp(n.w)})")
-        if n.sizing_v == "fill" and mode == "row":
+        if (n.sizing_v == "fill" and mode == "row") or (fill_h == 1.0 and n.sizing_v != "hug"):
             m.append(f"{ind}    .fillMaxHeight()")
+        elif fill_h is not None and n.sizing_v != "hug":
+            m.append(f"{ind}    .fillMaxHeight({_num(fill_h)}f)")
         elif n.sizing_v != "hug" and not (mode == "col" and n.sizing_v == "fill") and n.type != "text":
             m.append(f"{ind}    .height({self.dp(n.h)})")
         elif n.type == "text" and n.sizing_v == "fixed":
@@ -237,10 +224,55 @@ class _Screen:
             m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {kcolor(n.stroke)}, {shape})")
         if handlers:
             m += self.handlers(n, ind + "    ")
+        if n.is_frame and n.scroll in ("vertical", "horizontal"):
+            m.append(f"{ind}    .{n.scroll}Scroll(rememberScrollState())")
         if n.is_frame and n.layout != "none" and (n.pad_t or n.pad_r or n.pad_b or n.pad_l):
             m.append(f"{ind}    .padding(start = {self.dp(n.pad_l)}, top = {self.dp(n.pad_t)}, "
                      f"end = {self.dp(n.pad_r)}, bottom = {self.dp(n.pad_b)})")
         return m
+
+    _ALIGN = {("Top", "Start"): "TopStart", ("Top", "Center"): "TopCenter", ("Top", "End"): "TopEnd",
+              ("Center", "Start"): "CenterStart", ("Center", "Center"): "Center", ("Center", "End"): "CenterEnd",
+              ("Bottom", "Start"): "BottomStart", ("Bottom", "Center"): "BottomCenter",
+              ("Bottom", "End"): "BottomEnd"}
+
+    def _place(self, n, parent, ind: str) -> list[str]:
+        """Место элемента в Box по его поведению при изменении размера экрана (привязкам): у левого или правого
+        края, по центру, растянут между краями или масштабируется. Так экран подстраивается под любой телефон
+        и планшет, а не стоит на фиксированных смещениях. Результат размеров — в self._fills."""
+        ox, oy = n.x - (parent.x if parent else 0), n.y - (parent.y if parent else 0)
+        pw, ph = (parent.w, parent.h) if parent else (self.s.width, self.s.height)
+        right, bottom = pw - ox - n.w, ph - oy - n.h
+        pad: dict[str, float] = {}
+        h, v = "Start", "Top"
+        fw = fh = None
+        ch, cv = n.constraint_h, n.constraint_v
+        if ch == "right" and right >= 0:
+            h, pad["end"], ox = "End", right, 0
+        elif ch == "center":
+            h, ox = "Center", ox - (pw - n.w) / 2
+        elif ch == "left_right" and right >= 0:
+            pad["start"], pad["end"], ox, fw = ox, right, 0, 1.0
+        elif ch == "scale" and pw - ox > 0:
+            pad["start"], fw, ox = ox, min(1.0, n.w / (pw - ox)), 0
+        if cv == "bottom" and bottom >= 0:
+            v, pad["bottom"], oy = "Bottom", bottom, 0
+        elif cv == "center":
+            v, oy = "Center", oy - (ph - n.h) / 2
+        elif cv == "top_bottom" and bottom >= 0:
+            pad["top"], pad["bottom"], oy, fh = oy, bottom, 0, 1.0
+        elif cv == "scale" and ph - oy > 0:
+            pad["top"], fh, oy = oy, min(1.0, n.h / (ph - oy)), 0
+        self._fills = (fw, fh)
+        out = []
+        if (v, h) != ("Top", "Start"):
+            out.append(f"{ind}    .align(Alignment.{self._ALIGN[(v, h)]})")
+        parts = [f"{k} = {self.dp(pad[k])}" for k in ("start", "top", "end", "bottom") if pad.get(k, 0) > 0.5]
+        if parts:
+            out.append(f"{ind}    .padding({', '.join(parts)})")
+        if abs(ox) > 0.05 or abs(oy) > 0.05:
+            out.append(f"{ind}    .offset(x = {self.dp(ox)}, y = {self.dp(oy)})")
+        return out
 
     def node(self, n, parent, mode: str, ind: str) -> list[str]:
         out: list[str] = []
@@ -319,6 +351,47 @@ class _Screen:
         return [f"{ind}Text(", f"{ind}    text = {value},", f"{ind}    {style},", f"{ind}    modifier = {modtxt},",
                 f"{ind})"]
 
+    def slots(self):
+        """Верхняя панель, нижняя навигация и плавающая кнопка экрана — в слоты Scaffold (без смещений)."""
+        s = self.s
+        free = [n for n in s.nodes if n.visible and n.id not in self.vis]
+        top = next((n for n in free if n.role == "m3.top_app_bar" and n.y <= 1), None)
+        nav = next((n for n in free if n.role == "m3.nav_bar" and n.y + n.h >= s.height - 1), None)
+        fab = next((n for n in free if n.role in ("m3.fab", "m3.fab_extended") and n.x + n.w >= s.width * 0.7
+                    and n.y >= s.height * 0.55), None)
+        return top, nav, fab
+
+    def scaffold(self, bg: str) -> list[str]:
+        s = self.s
+        top, nav, fab = self.slots()
+        top_h = top.y + top.h if top else 0.0
+        bot_h = s.height - nav.y if nav else 0.0
+        from app.core.document.model import Node
+        area = Node(type="frame", name="Содержимое", x=0, y=top_h, w=s.width, h=s.height - top_h - bot_h)
+        max_w = max(600, round(s.width / self.k))  # на планшете содержимое не растягивается шире макета
+        L = []
+        if nav is not None:
+            L.append("    val wide = LocalConfiguration.current.screenWidthDp >= 600  // планшет, сложенный экран")
+        L += ["    Scaffold(", f"        containerColor = {bg},",
+              "        contentColor = MaterialTheme.colorScheme.onBackground,"]
+        if top is not None:
+            L += ["        topBar = {"] + self.node(top, None, "slot", "            ") + ["        },"]
+        if nav is not None:
+            L += ["        bottomBar = {", "            if (!wide) {"] + self.node(nav, None, "slot", "                ") + \
+                 ["            }", "        },"]
+        if fab is not None:
+            L += ["        floatingActionButton = {"] + self.node(fab, None, "slot", "            ") + ["        },"]
+        L += ["    ) { inner ->", "        Row(modifier = Modifier.fillMaxSize().padding(inner)) {"]
+        if nav is not None:
+            L += ["            if (wide) {"] + self.m3.rail(nav, "                ") + ["            }"]
+        L += ["            Box(modifier = Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {",
+              f"                Box(modifier = Modifier.widthIn(max = {max_w}.dp).fillMaxSize()) {{"]
+        for n in s.nodes:
+            if n not in (top, nav, fab):
+                L += self.node(n, area, "abs", "                    ")
+        L += ["                }", "            }", "        }", "    }", "}"]
+        return L
+
     def input_change(self, n, var: str, ind: str) -> list[str]:
         """Строки обработчика изменения текста: связанная переменная и правила «Изменение текста»."""
         out = []
@@ -381,14 +454,11 @@ class _Screen:
             for it in opens:
                 L += self.actions_code(it, "        ")
             L.append("    }")
-        # Surface задаёт цвет содержимого (текст и значки вне компонентов); экран дизайна — без системных панелей
-        L += [f"    Surface(modifier = Modifier.fillMaxSize(), color = {bg}, "
-              "contentColor = MaterialTheme.colorScheme.onBackground) {",
-              "        Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {"]
-        for n in s.nodes:
-            L += self.node(n, None, "abs", "            ")
-        L += ["        }", "    }", "}", "",
-              f"@Preview(widthDp = {round(s.width / self.k)}, heightDp = {round(s.height / self.k)}, showBackground = true)",
+        L += self.scaffold(bg)
+        wdp, hdp = round(s.width / self.k), round(s.height / self.k)
+        L += ["", f"@Preview(name = \"Телефон\", widthDp = {wdp}, heightDp = {hdp}, showBackground = true)",
+              "@Preview(name = \"Маленький телефон\", widthDp = 360, heightDp = 640, showBackground = true)",
+              "@Preview(name = \"Планшет\", widthDp = 840, heightDp = 1200, showBackground = true)",
               "@Composable",
               f"private fun {self.fn}Preview() {{",
               f"    AppTheme {{ {self.fn}(AppState(), onNavigate = {{ _, _ -> }}, onBack = {{}}) }}", "}", ""]
@@ -438,6 +508,7 @@ class AndroidProject:
             "androidx.compose.ui.graphics.RectangleShape", "androidx.compose.ui.graphics.SolidColor",
             "androidx.compose.ui.graphics.drawscope.Stroke", "androidx.compose.ui.graphics.drawscope.scale",
             "androidx.compose.ui.graphics.vector.PathParser", "androidx.compose.ui.layout.ContentScale",
+            "androidx.compose.ui.platform.LocalConfiguration",
             "androidx.compose.ui.res.painterResource", "androidx.compose.ui.text.TextStyle",
             "androidx.compose.ui.text.font.FontWeight", "androidx.compose.ui.text.style.TextAlign",
             "androidx.compose.ui.tooling.preview.Preview", "androidx.compose.ui.unit.dp",

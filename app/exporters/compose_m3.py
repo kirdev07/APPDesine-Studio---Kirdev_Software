@@ -77,8 +77,11 @@ class Material:
 
     def modifier(self, n, parent, mode, ind) -> str:
         """Положение и ширина без заливки, рамки и отступов — их рисует компонент Compose."""
+        if mode == "slot":  # в слоте Scaffold место и ширину задаёт сам Scaffold
+            return "Modifier"
         bare = replace(n, fill="", stroke="", stroke_width=0, layout="none", children=[], radius=0,
-                       sizing_v="hug", sizing_h="hug" if n.role in _INTRINSIC else n.sizing_h)
+                       sizing_v="hug",
+                       sizing_h="hug" if n.role in _INTRINSIC and n.sizing_h != "fill" else n.sizing_h)  # «заполнить» — как в дизайне
         m = self.g.modifier(bare, parent, mode, ind, handlers=False)
         m[0] = m[0].lstrip()
         return "\n".join(m)
@@ -202,7 +205,8 @@ class Material:
                     f"{i2}) {{ Text({self.text(t[0]) if t else EMPTY}) }}"]
             return out + [f"{ind}}}"]
         if r == "m3.nav_bar":
-            out = [f"{ind}NavigationBar(modifier = {M}, windowInsets = WindowInsets(0, 0, 0, 0)) {{"]
+            insets = "" if mode == "slot" else ", windowInsets = WindowInsets(0, 0, 0, 0)"  # в слоте — системные отступы
+            out = [f"{ind}NavigationBar(modifier = {M}{insets}) {{"]
             for i, item in enumerate(_items(n)):
                 t, ic = _texts(item), _vectors(item)
                 out += [f"{i2}NavigationBarItem(", f"{i3}selected = {var} == {i},", f"{i3}onClick = {{",
@@ -226,5 +230,22 @@ class Material:
                     out += [f"{i3}IconButton(onClick = {{"] + self.taps(v.id, i3 + "    ") + \
                            [f"{i3}}}) {{ {self.icon(v, i3)} }}"]
                 out.append(f"{i2}}},")
-            return out + [f"{i2}windowInsets = WindowInsets(0, 0, 0, 0),", f"{i2}modifier = {M},", f"{ind})"]
+            if mode != "slot":  # вне Scaffold отступ под строку состояния уже учтён
+                out.append(f"{i2}windowInsets = WindowInsets(0, 0, 0, 0),")
+            return out + [f"{i2}modifier = {M},", f"{ind})"]
         return []
+
+    def rail(self, n, ind: str) -> list[str]:
+        """Нижняя навигация на широком экране (планшет) — боковая NavigationRail с теми же пунктами и состоянием."""
+        var = self.state.get(n.id)
+        i2, i3 = ind + "    ", ind + "        "
+        out = [f"{ind}NavigationRail {{", f"{i2}Spacer(Modifier.weight(1f))"]
+        for i, item in enumerate(_items(n)):
+            t, ic = _texts(item), _vectors(item)
+            out += [f"{i2}NavigationRailItem(", f"{i3}selected = {var} == {i},", f"{i3}onClick = {{",
+                    f"{i3}    {var} = {i}"] + self.taps(item.id, i3 + "    ") + [f"{i3}}},"]
+            out.append(f"{i3}icon = {{ {self.icon(ic[0], i3)} }}," if ic else f"{i3}icon = {{}},")
+            if t:
+                out.append(f"{i3}label = {{ Text({self.text(t[0])}) }},")
+            out.append(f"{i2})")
+        return out + [f"{i2}Spacer(Modifier.weight(1f))", f"{ind}}}"]
