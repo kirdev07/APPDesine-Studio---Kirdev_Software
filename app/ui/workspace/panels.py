@@ -40,6 +40,8 @@ HELP = {
             "у правого, растягивается между краями или держится по центру.",
     "inst": "Это копия компонента из библиотеки проекта. Изменения главного компонента сразу появляются во всех "
             "копиях; здесь можно поменять текст и цвета только этой копии.",
+    "img": "Как картинка заполняет рамку: «заполнить» — без полей, лишнее по краям обрезается; «вписать» — целиком, "
+           "с полями; «растянуть» — по размеру рамки, пропорции могут исказиться. Маска «круг» — для аватаров.",
     "fx": "Тень — насколько элемент «приподнят» над фоном (уровни Material 3). Градиент — плавный переход между "
           "двумя цветами. Размытие — элемент становится нечётким.",
 }
@@ -93,11 +95,19 @@ class LayersPanel(QWidget):
             grid.addWidget(b, i // 2, i % 2)
         lay.addLayout(grid)
         lay.addWidget(label("Компоненты", "H2"))
-        self.symbols_button = QPushButton("★  Значки Material (3900+)…")
+        self.symbols_button = QPushButton("★ Значки (3900+)")
         self.symbols_button.setToolTip("Google Material Symbols: поиск по-русски, три стиля, заливка (Ctrl+Shift+I)")
         self.symbols_button.clicked.connect(lambda: self.window().project_page.symbols_dialog()
                                             if hasattr(self.window(), "project_page") else None)
-        lay.addWidget(self.symbols_button)
+        img_row = QHBoxLayout()
+        img_row.addWidget(self.symbols_button, 1)
+        self.image_button = QPushButton("Фото ▾")
+        self.image_button.setToolTip("Картинка из файла или фото-заглушка для макета")
+        self.image_menu = QMenu(self.image_button)
+        self.image_menu.aboutToShow.connect(self._fill_image_menu)
+        self.image_button.setMenu(self.image_menu)
+        img_row.addWidget(self.image_button)
+        lay.addLayout(img_row)
         self.gallery = ComponentGallery(editor)
         self.gallery.add_requested.connect(lambda kind: editor.insert_component(kind))
         self.gallery.replace_requested.connect(lambda kind: editor.replace_selection(kind))
@@ -149,6 +159,18 @@ class LayersPanel(QWidget):
         editor.screen_changed.connect(self.rebuild_components)
         editor.document_changed.connect(self._maybe_rebuild_components)
         self._gallery_key = None
+
+    def _fill_image_menu(self) -> None:
+        from app.ui.workspace.images import PLACEHOLDERS
+        page = self.window().project_page if hasattr(self.window(), "project_page") else None
+        m = self.image_menu
+        m.clear()
+        if page is None:
+            return
+        m.addAction("Из файла… (PNG, JPEG, WebP)", lambda: page.image_dialog())
+        m.addSection("Фото-заглушка для макета")
+        for key, name in PLACEHOLDERS.items():
+            m.addAction(name, lambda k=key: page.placeholder_photo(k))
 
     def _appearance_key(self):
         s, doc = self.editor.screen(), self.editor.doc
@@ -602,6 +624,25 @@ class Inspector(QScrollArea):
         self.vec_info = label("", "Muted")
         f.addRow(self.vec_info)
 
+        self.sec_img, f = self._section("Картинка", HELP["img"])
+        self.img_fit = _combo([("cover", "Заполнить (обрезать края)"), ("contain", "Вписать целиком"),
+                               ("fill", "Растянуть")])
+        self.img_fit.currentIndexChanged.connect(
+            lambda: self._commit_type("image", "fit", self.img_fit.currentData(), "Картинка в рамке"))
+        f.addRow("В рамке", self.img_fit)
+        mask = QHBoxLayout()
+        for text, mode in (("Без маски", "none"), ("Скругление", "round"), ("Круг", "circle")):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, m=mode: self._image_mask(m))
+            mask.addWidget(b)
+        f.addRow("Маска", mask)
+        self.img_info = label("", "Muted", wrap=True)
+        f.addRow(self.img_info)
+        self.img_replace = QPushButton("Заменить картинку…")
+        self.img_replace.clicked.connect(lambda: self.window().project_page.image_dialog()
+                                         if hasattr(self.window(), "project_page") else None)
+        f.addRow(self.img_replace)
+
         self.sec_inst, f = self._section("Копия компонента", HELP["inst"])
         self.inst_info = label("", "Muted", wrap=True)
         f.addRow(self.inst_info)
@@ -629,6 +670,13 @@ class Inspector(QScrollArea):
                 self.vec_path.setPlainText(v.path)
             self.vec_rule.setCurrentIndex(self.vec_rule.findData(v.fill_rule))
             self.vec_info.setText(f"viewBox {v.vb_w:g} × {v.vb_h:g}")
+        imgs = [n for n in self.editor.selected_leaves() if n.type == "image"]
+        self.sec_img.setVisible(bool(imgs))
+        if imgs:
+            im = imgs[0]
+            self.img_fit.setCurrentIndex(max(0, self.img_fit.findData(im.fit)))
+            a = self.editor.doc.asset(im.asset_id) if self.editor.doc else None
+            self.img_info.setText(f"«{a.name}» · {a.ext.upper()} · {a.size // 1024} КБ" if a else "Нет файла")
         insts = self.editor.selected_instances()
         self.sec_inst.setVisible(bool(insts))
         if insts:
@@ -643,6 +691,28 @@ class Inspector(QScrollArea):
             for st in (defn.states if defn else {}):
                 self.inst_state.addItem(st, st)
             self.inst_state.setCurrentIndex(max(0, self.inst_state.findData(inst.state)))
+
+    def _image_mask(self, mode: str) -> None:
+        """Маска картинки: без скругления, скругление 16 dp или круг (квадрат с радиусом половины стороны)."""
+        from app.engines.preview.devices import screen_dpi
+        s = self.editor.screen()
+        k = screen_dpi(s) / 160 if s is not None and s.platform == "android" else 1.0
+        changes = {}
+        for n in self.editor.selected_leaves():
+            if n.type != "image":
+                continue
+            if mode == "none":
+                changes[n.id] = {"radius": 0.0}
+            elif mode == "round":
+                changes[n.id] = {"radius": round(16 * k, 2)}
+            else:
+                parent = tree.find(s, n.id)[1]
+                stretched = parent is not None and parent.layout == "vertical" and parent.cross_align == "stretch"
+                side = n.w if stretched else min(n.w, n.h)  # столбец растягивает ширину — круг на всю ширину
+                changes[n.id] = {"w": side, "h": side, "radius": side / 2, "fit": "cover", "sizing_h": "fixed",
+                                 "sizing_v": "fixed"}
+        if changes:
+            self.editor.set_props(changes, "Маска картинки")
 
     def _commit_path(self) -> None:
         vecs = [n for n in self.editor.selected_leaves() if n.type == "vector"]
@@ -776,7 +846,7 @@ class Inspector(QScrollArea):
             leaves = ed.selected_leaves()
             has = bool(nodes)
             for w in (self.sec_layer, self.sec_geom, self.sec_al, self.sec_size, self.sec_cons, self.sec_vec,
-                      self.sec_inst):
+                      self.sec_inst, self.sec_img):
                 w.setVisible(has)
             self.sec_style.setVisible(has)
             self.sec_fx.setVisible(has)

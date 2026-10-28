@@ -160,6 +160,21 @@ def apply_effects(item: QGraphicsItem, n: Node, k: float) -> None:
         item.setGraphicsEffect(None)
 
 
+def _fit_rects(rect: QRectF, iw: int, ih: int, fit: str) -> tuple[QRectF, QRectF]:
+    """Куда и какую часть картинки рисовать: fill — растянуть, cover — заполнить и обрезать по центру,
+    contain — вписать целиком с полями."""
+    if fit == "cover" and iw > 0 and ih > 0:
+        k = max(rect.width() / iw, rect.height() / ih)
+        sw, sh = rect.width() / k, rect.height() / k
+        return rect, QRectF((iw - sw) / 2, (ih - sh) / 2, sw, sh)
+    if fit == "contain" and iw > 0 and ih > 0:
+        k = min(rect.width() / iw, rect.height() / ih)
+        dw, dh = iw * k, ih * k
+        return QRectF(rect.x() + (rect.width() - dw) / 2, rect.y() + (rect.height() - dh) / 2, dw, dh), \
+            QRectF(0, 0, iw, ih)
+    return rect, QRectF(0, 0, iw, ih)
+
+
 def paint_node(p: QPainter, n: Node, assets=None) -> None:
     rect = QRectF(n.x, n.y, n.w, n.h)
     p.save()
@@ -183,10 +198,17 @@ def paint_node(p: QPainter, n: Node, assets=None) -> None:
             if r is False or r is None or (hasattr(r, "isNull") and r.isNull()) or \
                     (hasattr(r, "isValid") and not r.isValid()):
                 _paint_missing(p, rect, "не читается")
-            elif asset.ext == "svg":
-                r.render(p, rect)
             else:
-                p.drawImage(rect, r)
+                if n.radius > 0:  # маска: скругление или круг (радиус = половина стороны)
+                    clip = QPainterPath()
+                    rr = min(n.radius, n.w / 2, n.h / 2)
+                    clip.addRoundedRect(rect, rr, rr)
+                    p.setClipPath(clip, Qt.ClipOperation.IntersectClip)
+                if asset.ext == "svg":
+                    r.render(p, rect)
+                else:
+                    dst, src = _fit_rects(rect, r.width(), r.height(), n.fit)
+                    p.drawImage(dst, r, src)
     elif n.type == "ellipse":
         p.drawEllipse(rect)
     else:
@@ -440,6 +462,7 @@ class CanvasView(QGraphicsView):
     zoom_changed = Signal(float)
     cursor_moved = Signal(float, float)
     context_menu = Signal(object)  # глобальная точка: страница показывает меню действий с выделенным
+    files_dropped = Signal(list, float, float)  # картинки из проводника: пути и точка экрана
 
     def __init__(self, editor: Editor, parent=None):
         super().__init__(parent)
@@ -858,20 +881,33 @@ class CanvasView(QGraphicsView):
                 ed.set_props({node.id: {"text": text}}, "Изменить текст")
 
     # ---------- перетаскивание заготовки из галереи ----------
+    @staticmethod
+    def _image_paths(md) -> list[str]:
+        from app.ui.workspace.images import IMAGE_SUFFIXES
+        return [u.toLocalFile() for u in md.urls() if u.isLocalFile()
+                and u.toLocalFile().lower().endswith(IMAGE_SUFFIXES)] if md.hasUrls() else []
+
     def dragEnterEvent(self, event):
-        if event.mimeData().hasFormat("application/x-ads-component") and self.editor.screen():
+        md = event.mimeData()
+        if (md.hasFormat("application/x-ads-component") or self._image_paths(md)) and self.editor.screen():
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasFormat("application/x-ads-component"):
+        if event.mimeData().hasFormat("application/x-ads-component") or self._image_paths(event.mimeData()):
             event.acceptProposedAction()
         else:
             super().dragMoveEvent(event)
 
     def dropEvent(self, event):
         md = event.mimeData()
+        paths = self._image_paths(md)
+        if paths:  # фото из проводника — в точку отпускания
+            p = self.mapToScene(event.position().toPoint())
+            self.files_dropped.emit(paths, p.x(), p.y())
+            event.acceptProposedAction()
+            return
         if not md.hasFormat("application/x-ads-component"):
             return super().dropEvent(event)
         kind = bytes(md.data("application/x-ads-component")).decode("utf-8")

@@ -882,6 +882,58 @@ class Editor(QObject):
             doc.asset_data.pop(asset_id, None)
         return self.patch("Удалить ресурс", mutate)
 
+    # ---------- картинки и фото ----------
+    def add_or_reuse_asset(self, asset: Asset, data: bytes) -> str | None:
+        """Добавить ресурс; тот же файл уже есть — вернуть его id (без дубликата)."""
+        if not self.doc:
+            return None
+        same = next((x for x in self.doc.assets if x.sha256 == asset.sha256 and x.kind == asset.kind), None)
+        if same is not None:
+            return same.id
+        return asset.id if self.add_asset(asset, data) else None
+
+    def place_image(self, asset_id: str, pixel_size: tuple[int, int], at: tuple[float, float] | None = None,
+                    target_id: str | None = None, fit: str = "cover") -> Node | None:
+        """Поставить картинку на экран (по центру или в точку) или в выбранный элемент: у картинки меняется
+        файл, другой элемент (заглушка, прямоугольник, контейнер-фото) заменяется картинкой того же места и
+        размера со скруглением. Новая картинка — до 60 % ширины экрана с сохранением пропорций."""
+        s = self.screen()
+        a = self.doc.asset(asset_id) if self.doc else None
+        if not s or a is None:
+            return None
+        if target_id:
+            target = tree.find(s, target_id)[0]
+            if target.type == "image":
+                return target if self.set_props({target.id: {"asset_id": asset_id, "fit": fit}},
+                                                f"Картинка: {a.name}") else None
+            img = Node(type="image", name=a.name, asset_id=asset_id, fill="", fit=fit, x=target.x, y=target.y,
+                       w=target.w, h=target.h, radius=target.radius, sizing_h=target.sizing_h,
+                       sizing_v=target.sizing_v if target.sizing_v != "hug" else "fixed",
+                       constraint_h=target.constraint_h, constraint_v=target.constraint_v)
+            data = img.to_dict()
+
+            def mutate(doc):
+                scr = next(x for x in doc.screens if x.id == s.id)
+                old, parent, idx = tree.find(scr, target_id)
+                (parent.children if parent is not None else scr.nodes)[idx] = Node.from_dict(data)
+            if self.patch(f"Картинка вместо «{target.name}»", mutate):
+                self.select([img.id])
+                return tree.find(self.screen(), img.id)[0]
+            return None
+        iw, ih = pixel_size
+        w = min(s.width * 0.6, float(iw)) if iw else s.width * 0.6
+        h = w * ih / iw if iw else w * 0.75
+        if h > s.height * 0.6:
+            h = s.height * 0.6
+            w = h * iw / ih if ih else h
+        x, y = at if at is not None else ((s.width - w) / 2, (s.height - h) / 2)
+        n = Node(type="image", name=a.name, asset_id=asset_id, fill="", fit=fit, x=round(x, 2), y=round(y, 2),
+                 w=round(w, 2), h=round(h, 2))
+        if self.execute(AddNodes(s.id, [n], self._container_id(), label=f"Вставить: {a.name}")):
+            self.select([n.id])
+            return n
+        return None
+
     def insert_image(self, asset_id: str, size: tuple[float, float] | None = None) -> Node | None:
         s = self.screen()
         a = self.doc.asset(asset_id) if self.doc else None

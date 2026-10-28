@@ -88,7 +88,7 @@ ELEVATION_DP = (0, 1, 3, 6, 8, 12)  # уровни тени Material 3, dp
 GRADIENTS = ("none", "linear", "radial")
 # Значения по умолчанию, которые не записываются в файл (старые проекты и экспорт не меняются).
 _OMIT_DEFAULT = {"ref": "", "role": "", "elevation": 0, "gradient": "none", "fill2": "", "grad_angle": 180.0,
-                 "blur": 0.0, "scale": 1.0, "rotation": 0.0}
+                 "blur": 0.0, "scale": 1.0, "rotation": 0.0, "fit": "fill"}
 TEXT_PROPS = ("text", "font_family", "font_size", "font_weight", "text_color", "align", "text_style")
 # ref — идентификатор узла мастер-компонента, из которого получен узел экземпляра.
 COMMON_PROPS = ("name", "visible", "locked", "ref")
@@ -108,7 +108,7 @@ ALLOWED_PROPS = {
     "frame": COMMON_PROPS + GEOMETRY_PROPS + _STYLE + CHILD_PROPS + FRAME_PROPS,
     "instance": COMMON_PROPS + GEOMETRY_PROPS + _STYLE + CHILD_PROPS + FRAME_PROPS + INSTANCE_PROPS,
     "vector": COMMON_PROPS + GEOMETRY_PROPS + _STYLE + CHILD_PROPS + VECTOR_PROPS,
-    "image": COMMON_PROPS + GEOMETRY_PROPS + _STYLE + CHILD_PROPS + ("asset_id",),
+    "image": COMMON_PROPS + GEOMETRY_PROPS + _STYLE + CHILD_PROPS + ("asset_id", "fit"),
 }
 # Свойства, которые экземпляр может переопределить у узлов мастера (и состояния компонента).
 OVERRIDABLE = ("visible", "fill", "stroke", "stroke_width", "opacity", "radius", "text", "text_color", "font_family",
@@ -129,6 +129,7 @@ ENUMS = {
     "fill_rule": ("nonzero", "evenodd"),
     "scroll": ("none", "vertical", "horizontal"),
     "gradient": GRADIENTS,
+    "fit": ("fill", "cover", "contain"),  # картинка: растянуть / заполнить с обрезкой / вписать целиком
 }
 MAX_DEPTH = 32
 MAX_COORD = 1_000_000.0
@@ -289,6 +290,7 @@ class Node:
     vb_h: float = 24.0
     fill_rule: str = "nonzero"
     asset_id: str = ""
+    fit: str = "fill"             # картинка в рамке: fill — растянуть, cover — заполнить с обрезкой, contain — вписать
     component_id: str = ""
     overrides: dict = field(default_factory=dict)
     state: str = "default"
@@ -330,7 +332,7 @@ class Node:
         if self.type == "vector":
             props += VECTOR_PROPS
         if self.type == "image":
-            props += ("asset_id",)
+            props += ("asset_id", "fit")
         return props
 
     def to_dict(self) -> dict:

@@ -67,6 +67,7 @@ class WorkspacePage(QMainWindow):
         self.editor.view_changed.connect(self._sync_tools)
         self.canvas.zoom_changed.connect(lambda z: self.zoom_combo.setEditText(f"{round(z * 100)}%"))
         self.canvas.context_menu.connect(self.show_context_menu)
+        self.canvas.files_dropped.connect(self.drop_images)
         self._build_selection_bar()
         self._build_start_hint()
         self.editor.selection_changed.connect(self._sync_selection_bar)
@@ -169,6 +170,8 @@ class WorkspacePage(QMainWindow):
         self.a_replace = self._action("Заменить на компонент…", self.replace_dialog, "Ctrl+R")
         self.a_symbols = self._action("Значки Material…", self.symbols_dialog, "Ctrl+Shift+I")
         self.a_theme = self._action("Тема и стиль…", self.theme_dialog, "Ctrl+Shift+T")
+        self.a_image = self._action("Картинка из файла…", self.image_dialog, "Ctrl+Shift+P")
+        self.a_image.setToolTip("PNG, JPEG или WebP: на экран, а если выделен элемент — вместо него")
         self.a_theme.setToolTip("Готовые темы, цвет бренда, светлая / тёмная, шрифт, скругления — для всего проекта")
         self.a_symbols.setToolTip("Около 3900 значков Google Material Symbols: поиск по-русски, три стиля, заливка")
         self.a_replace_symbol = self._action("Заменить значок…", self.replace_symbol_dialog)
@@ -179,7 +182,8 @@ class WorkspacePage(QMainWindow):
         self.a_run = self._action("▶ Просмотр", lambda: self.window().run_prototype()
                                   if hasattr(self.window(), "run_prototype") else None)
         self.a_run.setToolTip("Интерактивный предпросмотр на устройстве с текущего экрана (F5)")
-        self.edit_actions[8:8] = [self.a_replace, self.a_add_component, self.a_symbols, self.a_replace_symbol]
+        self.edit_actions[8:8] = [self.a_replace, self.a_add_component, self.a_symbols, self.a_replace_symbol,
+                                  self.a_image]
         self.view_actions += [None, self.a_theme, self.a_simple]
         self.tools_actions = [self.a_wrap_v, self.a_wrap_h, self.a_unwrap, None, self.a_make_component,
                               self.a_detach, self.a_reset_over, None, self.a_responsive]
@@ -289,12 +293,12 @@ class WorkspacePage(QMainWindow):
         self.anim_button.setMenu(self.anim_menu)
         lay.addWidget(self.anim_button)
         self.sel_buttons = []
-        for action, text, danger in ((self.a_replace_symbol, "Значок…", False),
-                                     (self.a_replace, "Заменить…", False), (self.a_dup, "Дублировать", False),
-                                     (self.a_delete, "Удалить", True)):
+        for action, text, danger in ((self.a_replace_symbol, "Значок…", False), (self.a_image, "Картинка…", False),
+                                     (self.a_replace, "Заменить…", False), (self.a_dup, "⧉", False),
+                                     (self.a_delete, "✕", True)):
             b = QToolButton()  # своя короткая подпись: setDefaultAction подставил бы длинное имя команды
             b.setText(text)
-            b.setToolTip(f"{action.text()} ({action.shortcut().toString()})")
+            b.setToolTip(f"{action.text()} ({action.shortcut().toString()})")  # «⧉» и «✕» — по подсказке
             b.setAutoRaise(True)
             if danger:
                 b.setStyleSheet("color:#FF6B6B")
@@ -337,6 +341,8 @@ class WorkspacePage(QMainWindow):
                     n_anim = len(self.editor.node_animations(nodes[0].id))
                     self.anim_button.setText(f"Анимация ({n_anim}) ▾" if n_anim else "Анимация ▾")
                 self.sel_buttons[0].setVisible(len(nodes) == 1 and nodes[0].type == "vector")
+                self.sel_buttons[1].setVisible(len(nodes) == 1 and nodes[0].type in ("image", "rect", "frame")
+                                               and not nodes[0].role.startswith("m3.button"))
                 if len(nodes) == 1:
                     self.tap_button.setText(self._tap_text(nodes[0].id))
                 bar.adjustSize()
@@ -478,6 +484,7 @@ class WorkspacePage(QMainWindow):
         else:
             m.addAction(self.a_add_component)
             m.addAction(self.a_symbols)
+            m.addAction(self.a_image)
             m.addAction(self.a_paste)
             m.addSeparator()
             m.addAction(self.a_zoom_fit)
@@ -494,6 +501,61 @@ class WorkspacePage(QMainWindow):
         kind = self._pick_component("Заменить выделенный элемент на…")
         if kind:
             self.editor.replace_selection(kind)
+
+    def image_dialog(self, path: str | None = None) -> None:
+        """Картинка из файла: на экран или вместо выделенного элемента (картинки, заглушки, контейнера-фото)."""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from app.ui.workspace.images import FILE_FILTER, asset_from_file
+        ed = self.editor
+        if not ed.screen():
+            return
+        if path is None:
+            from pathlib import Path
+            path, _ = QFileDialog.getOpenFileName(self, "Картинка", str(Path.home() / "Pictures"), FILE_FILTER)
+            if not path:
+                return
+        try:
+            a, data, size = asset_from_file(path)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Картинка", str(exc))
+            return
+        aid = ed.add_or_reuse_asset(a, data)
+        sel = ed.selected_nodes()
+        target = sel[0].id if len(sel) == 1 and sel[0].type in ("image", "rect", "frame") else None
+        if aid:
+            ed.place_image(aid, size, target_id=target)
+
+    def drop_images(self, paths: list, x: float, y: float) -> None:
+        """Фото, перетащенные из проводника: каждое — в точку отпускания (следующие — со сдвигом)."""
+        from PySide6.QtWidgets import QMessageBox
+        from app.ui.workspace.images import asset_from_file
+        ed = self.editor
+        problems = []
+        for i, path in enumerate(paths[:20]):
+            try:
+                a, data, size = asset_from_file(path)
+            except (ValueError, OSError) as exc:
+                problems.append(str(exc))
+                continue
+            aid = ed.add_or_reuse_asset(a, data)
+            if aid:
+                ed.place_image(aid, size, at=(x + 24 * i, y + 24 * i))
+        if problems:
+            QMessageBox.warning(self, "Картинки", "\n".join(problems))
+
+    def placeholder_photo(self, kind: str) -> None:
+        from app.engines.material.color import scheme
+        from app.ui.workspace.images import placeholder_asset
+        ed = self.editor
+        if not ed.doc or not ed.screen():
+            return
+        ap = ed.doc.meta.appearance
+        a, data, size = placeholder_asset(kind, scheme(ap.accent, ap.theme != "light"))
+        aid = ed.add_or_reuse_asset(a, data)
+        sel = ed.selected_nodes()
+        target = sel[0].id if len(sel) == 1 and sel[0].type in ("image", "rect", "frame") else None
+        if aid:
+            ed.place_image(aid, size, target_id=target)
 
     def theme_dialog(self) -> None:
         from app.ui.studio.theme import ThemeDialog
@@ -552,6 +614,11 @@ class WorkspacePage(QMainWindow):
         bar = getattr(self, "sel_bar", None)
         if bar is not None:
             vp = self.canvas.viewport().geometry()
+            self.sel_label.setVisible(True)
+            bar.adjustSize()
+            if bar.width() > vp.width() - 16:  # узкий холст: без имени элемента
+                self.sel_label.setVisible(False)
+                bar.adjustSize()
             bar.move(vp.left() + max(8, (vp.width() - bar.width()) // 2), vp.top() + 10)
             bar.raise_()
         hint = getattr(self, "start_hint", None)

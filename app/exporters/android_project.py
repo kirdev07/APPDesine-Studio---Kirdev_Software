@@ -217,6 +217,8 @@ class _Screen:
         shape = "CircleShape" if n.type == "ellipse" else (f"RoundedCornerShape({self.dp(n.radius)})" if n.radius
                                                            else "RectangleShape")
         m += effects(n, self.dp, shape, ind + "    ")
+        if n.type == "image" and n.radius > 0:  # маска картинки: круг или скругление
+            m.append(f"{ind}    .clip({'CircleShape' if n.radius >= min(n.w, n.h) / 2 - 0.5 else shape})")
         if n.fill and n.type not in ("text", "image", "vector"):
             m.append(f"{ind}    .clip({shape})")
             m.append(f"{ind}    .background({brush(n, self.g.color) or self.g.color(n.fill)})")
@@ -304,7 +306,8 @@ class _Screen:
             res = self.g.drawables.get(n.asset_id)
             if res:
                 out += [f"{ind2}Image(", f"{ind2}    painter = painterResource(R.drawable.{res}),",
-                        f"{ind2}    contentDescription = {kstr(n.name)},", f"{ind2}    contentScale = ContentScale.Crop,",
+                        f"{ind2}    contentDescription = {kstr(n.name)},",
+                        f"{ind2}    contentScale = ContentScale.{ {'cover': 'Crop', 'contain': 'Fit'}.get(n.fit, 'FillBounds') },",
                         f"{ind2}    modifier = {modtxt},", f"{ind2})"]
             else:
                 out += [f"{ind2}// TODO: изображение «{n.name}» (SVG или не включено в пакет)",
