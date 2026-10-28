@@ -520,6 +520,19 @@ class Editor(QObject):
             doc.interactions = [it for it in doc.interactions if it.actions]
         return self.patch("Убрать анимации элемента", mutate)
 
+    def apply_appearance(self, new) -> bool:
+        """Тема и стиль проекта: перекраска всех экранов и компонентов по ролям цвета, шрифт, скругления.
+        Одна запись истории."""
+        from app.engines.material.restyle import restyle
+        if not self.doc:
+            return False
+        data = new.to_dict()
+
+        def mutate(doc):
+            from app.core.document.model import Appearance
+            restyle(doc, Appearance.from_dict(data))
+        return self.patch("Тема и стиль", mutate)
+
     def replace_selection(self, kind: str) -> Node | None:
         """Заменить выделенный элемент заготовкой: новый встаёт на то же место (родитель, порядок, положение),
         старый удаляется; одна запись истории."""

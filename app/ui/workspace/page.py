@@ -168,6 +168,8 @@ class WorkspacePage(QMainWindow):
         self.a_reset_over = self._action("Сбросить переопределения", ed.reset_overrides_selection)
         self.a_replace = self._action("Заменить на компонент…", self.replace_dialog, "Ctrl+R")
         self.a_symbols = self._action("Значки Material…", self.symbols_dialog, "Ctrl+Shift+I")
+        self.a_theme = self._action("Тема и стиль…", self.theme_dialog, "Ctrl+Shift+T")
+        self.a_theme.setToolTip("Готовые темы, цвет бренда, светлая / тёмная, шрифт, скругления — для всего проекта")
         self.a_symbols.setToolTip("Около 3900 значков Google Material Symbols: поиск по-русски, три стиля, заливка")
         self.a_replace_symbol = self._action("Заменить значок…", self.replace_symbol_dialog)
         self.a_add_component = self._action("Добавить компонент…", self.add_dialog, "Ctrl+Shift+N")
@@ -178,7 +180,7 @@ class WorkspacePage(QMainWindow):
                                   if hasattr(self.window(), "run_prototype") else None)
         self.a_run.setToolTip("Интерактивный предпросмотр на устройстве с текущего экрана (F5)")
         self.edit_actions[8:8] = [self.a_replace, self.a_add_component, self.a_symbols, self.a_replace_symbol]
-        self.view_actions += [None, self.a_simple]
+        self.view_actions += [None, self.a_theme, self.a_simple]
         self.tools_actions = [self.a_wrap_v, self.a_wrap_h, self.a_unwrap, None, self.a_make_component,
                               self.a_detach, self.a_reset_over, None, self.a_responsive]
 
@@ -196,6 +198,8 @@ class WorkspacePage(QMainWindow):
         design.setToolTip("Режим дизайна")
         bar.addWidget(design)
         bar.addAction(self.a_run)
+        self.a_theme.setIconText("🎨 Тема")
+        bar.addAction(self.a_theme)
         bar.addSeparator()
         for key, *_ in TOOLS:
             bar.addAction(self.tool_actions[key])
@@ -490,6 +494,14 @@ class WorkspacePage(QMainWindow):
         kind = self._pick_component("Заменить выделенный элемент на…")
         if kind:
             self.editor.replace_selection(kind)
+
+    def theme_dialog(self) -> None:
+        from app.ui.studio.theme import ThemeDialog
+        if not self.editor.doc:
+            return
+        dlg = ThemeDialog(self.editor, self)
+        if dlg.exec():
+            self.editor.apply_appearance(dlg.appearance())
 
     def symbols_dialog(self) -> None:
         from app.ui.workspace.symbol_picker import SymbolPicker

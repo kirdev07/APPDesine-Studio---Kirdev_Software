@@ -63,6 +63,8 @@ class _Ctx:
         else:
             self.k = 1.0
         self.font = ap.font_family
+        # стиль формы из оформления: строгие (4) / обычные (12) / мягкие (20) скругления
+        self.shape = {4: 0.35, 12: 1.0, 20: 1.6}.get(ap.corner_radius, 1.0)
 
     def d(self, v: float) -> float:
         return round(v * self.k, 2)
@@ -85,6 +87,8 @@ class _Ctx:
                     "w", "h", "min_w", "max_w", "min_h", "max_h"):
             if key in kw:
                 kw[key] = self.d(kw[key])
+        if kw.get("radius"):
+            kw["radius"] = round(kw["radius"] * self.shape, 2)
         kw.setdefault("fill", "")
         return Node(type="frame", name=name, layout=layout, children=children, **kw)
 

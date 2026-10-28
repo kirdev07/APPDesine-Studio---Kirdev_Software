@@ -50,6 +50,8 @@ class Appearance:
     font_family: str = "Segoe UI"
     corner_radius: int = 12
     density: str = "comfortable"
+    app_theme: str = "design"     # тема готового приложения: design — как в дизайне, system — как в телефоне
+    dynamic_color: bool = False   # цвета из обоев телефона (Android 12+)
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +60,8 @@ class Appearance:
             "font_family": self.font_family,
             "corner_radius": self.corner_radius,
             "density": self.density,
+            "app_theme": self.app_theme,
+            "dynamic_color": self.dynamic_color,
         }
 
     @classmethod
@@ -70,6 +74,8 @@ class Appearance:
             font_family=str(d.get("font_family", "Segoe UI")),
             corner_radius=int(d.get("corner_radius", 12)),
             density=str(d.get("density", "comfortable")),
+            app_theme="system" if d.get("app_theme") == "system" else "design",
+            dynamic_color=bool(d.get("dynamic_color", False)),
         )
 
 

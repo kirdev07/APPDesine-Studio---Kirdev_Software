@@ -219,9 +219,9 @@ class _Screen:
         m += effects(n, self.dp, shape, ind + "    ")
         if n.fill and n.type not in ("text", "image", "vector"):
             m.append(f"{ind}    .clip({shape})")
-            m.append(f"{ind}    .background({brush(n, kcolor) or kcolor(n.fill)})")
+            m.append(f"{ind}    .background({brush(n, self.g.color) or self.g.color(n.fill)})")
         if n.stroke and n.stroke_width and n.type not in ("text", "vector"):
-            m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {kcolor(n.stroke)}, {shape})")
+            m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {self.g.color(n.stroke)}, {shape})")
         if handlers:
             m += self.handlers(n, ind + "    ")
         if n.is_frame and n.scroll in ("vertical", "horizontal"):
@@ -310,11 +310,13 @@ class _Screen:
                 out += [f"{ind2}// TODO: изображение «{n.name}» (SVG или не включено в пакет)",
                         f"{ind2}Box(modifier = {modtxt}.background(Color(0x22FFFFFF)))"]
         elif n.type == "vector" and n.path:
+            tint = self.ident(f"tint {n.name}")  # цвет темы читается до рисования (в Canvas он недоступен)
+            out.append(f"{ind2}val {tint} = {self.g.color(n.fill or '#00000000')}")
             out += [f"{ind2}Canvas(modifier = {modtxt}) {{",
                     f"{ind2}    scale(size.width / {_num(n.vb_w)}f, size.height / {_num(n.vb_h)}f, pivot = Offset.Zero) {{",
                     f"{ind2}        val p = PathParser().parsePathString({kstr(n.path)}).toPath()"
                     + (".apply { fillType = PathFillType.EvenOdd }" if n.fill_rule == "evenodd" else ""),
-                    f"{ind2}        drawPath(p, {kcolor(n.fill or '#00000000')})"]
+                    f"{ind2}        drawPath(p, {tint})"]
             if n.stroke and n.stroke_width:
                 out.append(f"{ind2}        drawPath(p, {kcolor(n.stroke)}, style = Stroke(width = {_num(n.stroke_width)}f))")
             out += [f"{ind2}    }}", f"{ind2}}}"]
@@ -334,7 +336,7 @@ class _Screen:
 
     def text(self, n, modtxt: str, ind: str) -> list[str]:
         align = {"left": "TextAlign.Start", "center": "TextAlign.Center", "right": "TextAlign.End"}[n.align]
-        style = (f"color = {kcolor(n.text_color)}, fontSize = {_num(n.font_size / self.k)}.sp, "
+        style = (f"color = {self.g.color(n.text_color)}, fontSize = {_num(n.font_size / self.k)}.sp, "
                  f"fontWeight = FontWeight({n.font_weight}), textAlign = {align}")
         if n.id in self.inputs:
             var = self.inputs[n.id]
@@ -342,10 +344,10 @@ class _Screen:
                      f"{ind}    onValueChange = {{ {var} = it"] + self.input_change(n, var, ind + "        ") +
                     [f"{ind}    }},",
                      f"{ind}    textStyle = TextStyle({style}),",
-                     f"{ind}    cursorBrush = SolidColor({kcolor(n.text_color)}),",
+                     f"{ind}    cursorBrush = SolidColor({self.g.color(n.text_color)}),",
                      f"{ind}    modifier = {modtxt},",
                      f"{ind}    decorationBox = {{ inner ->",
-                     f"{ind}        if ({var}.isEmpty()) Text({kstr(n.text)}, {style.replace(kcolor(n.text_color), kcolor(n.text_color[:7] + '88'))})",
+                     f"{ind}        if ({var}.isEmpty()) Text({kstr(n.text)}, {style.replace(self.g.color(n.text_color), self.g.color(n.text_color[:7] + '88'))})",
                      f"{ind}        inner()", f"{ind}    }},", f"{ind})"])
         value = self.texts.get(n.id) or kstr(n.text)
         return [f"{ind}Text(", f"{ind}    text = {value},", f"{ind}    {style},", f"{ind}    modifier = {modtxt},",
@@ -372,7 +374,7 @@ class _Screen:
         L = []
         if nav is not None:
             L.append("    val wide = LocalConfiguration.current.screenWidthDp >= 600  // планшет, сложенный экран")
-        L += ["    Scaffold(", f"        containerColor = {bg},",
+        L += ["    Scaffold(", "        containerColor = MaterialTheme.colorScheme.background,",
               "        contentColor = MaterialTheme.colorScheme.onBackground,"]
         if top is not None:
             L += ["        topBar = {"] + self.node(top, None, "slot", "            ") + ["        },"]
@@ -487,6 +489,30 @@ class AndroidProject:
         self.routes = {s.id: f"screen{i + 1}" for i, s in enumerate(self.screens)}
         vused: set[str] = set()
         self.state_names = {v.id: ident(v.name, False, vused, "value") for v in doc.variables}
+        self.roles = self._role_map()
+
+    def _role_map(self) -> dict[str, str]:
+        """#RRGGBB → роль схемы дизайна (фон дизайна — background): такие цвета в коде берутся из темы."""
+        ap = self.doc.meta.appearance
+        sch = scheme(ap.accent, ap.theme != "light")
+        from app.engines.material.restyle import ORDERED_ROLES
+        out = {self.artboard.upper(): "background"}
+        for r in ORDERED_ROLES:
+            if r not in ("shadow", "scrim", "background", "onBackground"):
+                out.setdefault(sch[r].upper(), r)
+        return out
+
+    def color(self, c: str) -> str:
+        """Цвет для кода: роль темы (меняется со светлой / тёмной темой и цветами обоев) или точный цвет."""
+        if not c:
+            return kcolor(c)
+        role = self.roles.get(c[:7].upper())
+        if role is None:
+            return kcolor(c)
+        alpha = c[7:9]
+        if alpha and alpha.upper() != "FF":
+            return f"MaterialTheme.colorScheme.{role}.copy(alpha = {int(alpha, 16) / 255:.2f}f)"
+        return f"MaterialTheme.colorScheme.{role}"
 
     def imports(self) -> list[str]:
         return [f"import {x}" for x in (
@@ -658,9 +684,10 @@ dependencies {{
             out[f"app/src/main/res/drawable/{name}.{ext}"] = data
         src = f"app/src/main/java/{path}"
         start = self.routes[self.screens[0].id] if self.screens else "screen1"
+        ap = self.doc.meta.appearance
         bars = ("statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT), "
                 "navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)"
-                if self.doc.meta.appearance.theme != "light" else "")  # светлые значки панелей на тёмной теме
+                if ap.theme != "light" and ap.app_theme != "system" else "")  # светлые значки на тёмной теме
         out[f"{src}/MainActivity.kt"] = f'''package {pkg}
 
 import android.os.Bundle
@@ -764,16 +791,22 @@ fun AppNavHost() {{
             return f"private val {name} = {fn}(\n{roles}\n)"
         light, darks = scheme(ap.accent, False), scheme(ap.accent, True)
         if dark:  # фон дизайна (AMOLED-чёрный и т. п.) сохраняется
-            darks = darks | {"background": self.artboard, "surface": self.artboard}
+            darks = darks | {"background": self.artboard}
         else:
-            light = light | {"background": self.artboard, "surface": self.artboard}
+            light = light | {"background": self.artboard}
+        follow = ap.app_theme == "system"
         return f"""package {self.pkg}.ui.theme
 
+import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 
 // Цвет бренда и фон дизайна
 val Accent = {kcolor(ap.accent)}
@@ -789,13 +822,23 @@ const val DesignIsDark = {"true" if dark else "false"}
 
 {block("DarkScheme", "darkColorScheme", darks)}
 
+/** Светлая или тёмная: {"как в телефоне" if follow else "как в дизайне"}. Цвета из обоев (Android 12+): {"да" if ap.dynamic_color else "нет"}. */
+const val FollowSystemTheme = {"true" if follow else "false"}
+const val UseWallpaperColors = {"true" if ap.dynamic_color else "false"}
+
 @Composable
-fun AppTheme(darkTheme: Boolean = DesignIsDark, content: @Composable () -> Unit) {{
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkScheme else LightScheme,
-        typography = AppTypography,
-        content = content,
-    )
+fun AppTheme(
+    darkTheme: Boolean = if (FollowSystemTheme) isSystemInDarkTheme() else DesignIsDark,
+    dynamicColor: Boolean = UseWallpaperColors,
+    content: @Composable () -> Unit,
+) {{
+    val colors = when {{
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            if (darkTheme) dynamicDarkColorScheme(LocalContext.current) else dynamicLightColorScheme(LocalContext.current)
+        darkTheme -> DarkScheme
+        else -> LightScheme
+    }}
+    MaterialTheme(colorScheme = colors, typography = AppTypography, content = content)
 }}
 """
 

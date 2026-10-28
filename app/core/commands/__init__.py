@@ -154,6 +154,7 @@ class DocPatch(Command):
         doc.asset_data.update(snap["asset_data"])
         meta = ProjectMeta.from_dict(snap["meta"])
         doc.meta.title, doc.meta.description = meta.title, meta.description
+        doc.meta.appearance = meta.appearance  # тема и стиль тоже отменяются
 
     def redo(self, doc):
         if self.after is not None:
