@@ -196,7 +196,7 @@ ACTION_FIELDS = {
 }
 ACTION_NAMES = {"navigate": "Перейти на экран", "back": "Назад", "set_variable": "Изменить переменную",
                 "set_state": "Состояние компонента", "set_visible": "Показать / скрыть", "set_text": "Задать текст",
-                "play_animation": "Запустить анимацию", "open_overlay": "Открыть окно (оверлей)",
+                "play_animation": "Запустить анимацию", "open_overlay": "Открыть всплывающее окно",
                 "close_overlay": "Закрыть окно"}
 VAR_MODES = ("set", "toggle", "increment", "decrement")
 VIS_MODES = ("show", "hide", "toggle")

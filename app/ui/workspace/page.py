@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from app.context import AppContext
 from app.core.document.model import ProjectDocument
 from app.ui.widgets import glyph_icon, label, stage_badge
+from app.core.document import tree
 from app.ui.workspace.canvas import CanvasView
 from app.ui.workspace.editor import (
     CLIPBOARD_MIME, TOOL_ELLIPSE, TOOL_FRAME, TOOL_HAND, TOOL_PEN, TOOL_RECT, TOOL_SELECT, TOOL_TEXT, TYPE_NAMES, Editor,
@@ -20,7 +21,7 @@ from app.ui.workspace.layout_tools import DiagnosticsPanel, ResponsiveDialog
 from app.ui.workspace.panels import Inspector, LayersPanel, ScreensStrip
 
 TOOLS = [(TOOL_SELECT, "➤", "Выделение", "V"), (TOOL_HAND, "✋", "Рука (или пробел)", "H"),
-         (TOOL_FRAME, "#", "Фрейм", "F"), (TOOL_RECT, "▭", "Прямоугольник", "R"), (TOOL_ELLIPSE, "◯", "Эллипс", "O"),
+         (TOOL_FRAME, "#", "Контейнер", "F"), (TOOL_RECT, "▭", "Прямоугольник", "R"), (TOOL_ELLIPSE, "◯", "Эллипс", "O"),
          (TOOL_TEXT, "T", "Текст", "T"), (TOOL_PEN, "✎", "Перо (щелчки — точки, двойной щелчок — готово)", "P")]
 ZOOMS = [25, 50, 75, 100, 150, 200, 400, 800]
 
@@ -127,7 +128,7 @@ class WorkspacePage(QMainWindow):
 
         self.a_grid = self._action("Сетка", lambda v: self._set_view("grid_visible", "workspace/grid_visible", v),
                                    "Ctrl+'", checkable=True)
-        self.a_snap = self._action("Привязка", lambda v: self._set_view("snap_enabled", "workspace/snap", v),
+        self.a_snap = self._action("Прилипание", lambda v: self._set_view("snap_enabled", "workspace/snap", v),
                                    "Ctrl+Shift+;", checkable=True)
         self.a_guides = self._action("Направляющие", lambda v: self._set_view("guides_visible",
                                                                              "workspace/guides_visible", v),
@@ -156,19 +157,19 @@ class WorkspacePage(QMainWindow):
         self.view_actions = [self.a_zoom_in, self.a_zoom_out, self.a_zoom_fit, self.a_zoom_100, None,
                              self.a_grid, self.a_snap, self.a_guides]
 
-        self.a_wrap_v = self._action("Обернуть в Auto Layout ↓", lambda: ed.wrap_in_auto_layout("vertical"),
+        self.a_wrap_v = self._action("Выстроить в столбец ↓", lambda: ed.wrap_in_auto_layout("vertical"),
                                      "Shift+A")
-        self.a_wrap_h = self._action("Обернуть в Auto Layout →", lambda: ed.wrap_in_auto_layout("horizontal"),
+        self.a_wrap_h = self._action("Выстроить в строку →", lambda: ed.wrap_in_auto_layout("horizontal"),
                                      "Ctrl+Shift+A")
-        self.a_unwrap = self._action("Убрать фрейм / разгруппировать", ed.ungroup_selection)
+        self.a_unwrap = self._action("Убрать контейнер / разгруппировать", ed.ungroup_selection)
         self.a_responsive = self._action("Проверка адаптивности…", self.show_responsive, "Ctrl+Alt+R")
         self.a_make_component = self._action("Создать компонент…", self.make_component, "Ctrl+Alt+K")
-        self.a_detach = self._action("Отсоединить экземпляр", ed.detach_selection)
+        self.a_detach = self._action("Отвязать копию от компонента", ed.detach_selection)
         self.a_reset_over = self._action("Сбросить переопределения", ed.reset_overrides_selection)
         self.a_replace = self._action("Заменить на компонент…", self.replace_dialog, "Ctrl+R")
         self.a_add_component = self._action("Добавить компонент…", self.add_dialog, "Ctrl+Shift+N")
         self.a_simple = self._action("Простой режим", self.set_simple, checkable=True)
-        self.a_simple.setToolTip("Только основные кнопки и свойства. Выключите, чтобы видеть привязки, "
+        self.a_simple.setToolTip("Только основные кнопки и свойства. Выключите, чтобы видеть поведение при изменении размера, "
                                  "размеры в раскладке, направляющие и группы")
         self.a_run = self._action("▶ Просмотр", lambda: self.window().run_prototype()
                                   if hasattr(self.window(), "run_prototype") else None)
@@ -197,8 +198,8 @@ class WorkspacePage(QMainWindow):
             bar.addAction(self.tool_actions[key])
         bar.addSeparator()
         for action, short in ((self.a_undo, "↶"), (self.a_redo, "↷"), (self.a_group, "Группа"),
-                              (self.a_ungroup, "Разгр."), (self.a_wrap_v, "Auto Layout"),
-                              (self.a_responsive, "Адаптивность"), (self.a_grid, "Сетка"), (self.a_snap, "Привязка"),
+                              (self.a_ungroup, "Разгр."), (self.a_wrap_v, "В столбец"),
+                              (self.a_responsive, "Адаптивность"), (self.a_grid, "Сетка"), (self.a_snap, "Прилипание"),
                               (self.a_guides, "Направл.")):
             action.setIconText(short)
             bar.addAction(action)
@@ -263,6 +264,14 @@ class WorkspacePage(QMainWindow):
         self.sel_label = QLabel("")
         self.sel_label.setMaximumWidth(220)
         lay.addWidget(self.sel_label)
+        self.tap_button = QToolButton()
+        self.tap_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.tap_button.setAutoRaise(True)
+        self.tap_button.setToolTip("Что произойдёт, если нажать на этот элемент в приложении")
+        self.tap_menu = QMenu(self.tap_button)
+        self.tap_menu.aboutToShow.connect(self._fill_tap_menu)
+        self.tap_button.setMenu(self.tap_menu)
+        lay.addWidget(self.tap_button)
         self.sel_buttons = []
         for action, text, danger in ((self.a_replace, "Заменить…", False), (self.a_dup, "Дублировать", False),
                                      (self.a_delete, "Удалить", True)):
@@ -305,6 +314,9 @@ class WorkspacePage(QMainWindow):
                 self.sel_label.setText(self.sel_label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight,
                                                                                200))
                 self.sel_label.setToolTip(text)
+                self.tap_button.setVisible(len(nodes) == 1)
+                if len(nodes) == 1:
+                    self.tap_button.setText(self._tap_text(nodes[0].id))
                 bar.adjustSize()
             bar.setVisible(bool(nodes))
         hint = getattr(self, "start_hint", None)
@@ -314,12 +326,88 @@ class WorkspacePage(QMainWindow):
             hint.setVisible(bool(s is not None and not s.nodes))
         self._place_zoom_box()
 
+    def _tap_text(self, node_id: str) -> str:
+        ed = self.editor
+        a = ed.tap_action(node_id)
+        if a is None:
+            return "При нажатии…"
+        if a == "custom":
+            return "При нажатии: своё правило"
+        if a["type"] == "navigate":
+            s = next((x for x in ed.doc.screens if x.id == a.get("screen_id")), None)
+            name = s.name if s else "?"
+            return "При нажатии → «" + (name if len(name) <= 18 else name[:17] + "…") + "»"
+        if a["type"] == "back":
+            return "При нажатии ← назад"
+        if a["type"] == "set_visible":
+            n = tree.node_map(ed.screen()).get(a.get("node_id"))
+            return "При нажатии: показать / скрыть «" + ((n.name if n else "?")[:14]) + "»"
+        return "При нажатии: своё правило"
+
+    def _fill_tap_menu(self) -> None:
+        ed = self.editor
+        m = self.tap_menu
+        for old in getattr(self, "_tap_submenus", []):  # прошлые подменю не копятся при каждом открытии
+            old.deleteLater()
+        self._tap_submenus = []
+        m.clear()
+        if len(ed.selection) != 1:
+            return
+        nid = ed.selection[0]
+        cur = ed.tap_action(nid)
+        if cur == "custom":
+            m.addAction("Настроено правило в «Логике» — открыть…", self._open_logic)
+            return
+        none = m.addAction("Ничего не делать", lambda: ed.set_tap_action(nid, None))
+        none.setCheckable(True)
+        none.setChecked(cur is None)
+        s = ed.screen()
+        go = self._submenu(m, "Открыть экран")
+        others = [x for x in ed.doc.screens if x.id != s.id and x.platform == s.platform]
+        for x in others:
+            a = go.addAction(x.name, lambda sid=x.id: ed.set_tap_action(nid, {"type": "navigate", "screen_id": sid}))
+            a.setCheckable(True)
+            a.setChecked(isinstance(cur, dict) and cur.get("type") == "navigate" and cur.get("screen_id") == x.id)
+        if not others:
+            go.addAction("Других экранов нет — добавьте экран внизу").setEnabled(False)
+        back = m.addAction("Вернуться назад", lambda: ed.set_tap_action(nid, {"type": "back"}))
+        back.setCheckable(True)
+        back.setChecked(isinstance(cur, dict) and cur.get("type") == "back")
+        vis = self._submenu(m, "Показать или скрыть")
+        targets = [n for n in s.nodes if n.id != nid]
+        for n in targets:
+            a = vis.addAction(n.name or TYPE_NAMES.get(n.type, ""),
+                              lambda tid=n.id: ed.set_tap_action(nid, {"type": "set_visible", "node_id": tid}))
+            a.setCheckable(True)
+            a.setChecked(isinstance(cur, dict) and cur.get("type") == "set_visible" and cur.get("node_id") == n.id)
+        if not targets:
+            vis.addAction("На экране нет других элементов").setEnabled(False)
+        m.addSeparator()
+        m.addAction("Сложнее (условия, переменные, анимации) — в «Логике»…", self._open_logic)
+
+    def _submenu(self, parent: QMenu, title: str) -> QMenu:
+        """Подменю с явным родителем и ссылкой: подменю из addMenu(str) PySide может удалить раньше времени."""
+        sub = QMenu(title, parent)
+        parent.addMenu(sub)
+        self._tap_submenus = getattr(self, "_tap_submenus", []) + [sub]
+        return sub
+
+    def _open_logic(self) -> None:
+        w = self.window()
+        if hasattr(w, "open_logic"):
+            w.open_logic()
+
     def show_context_menu(self, global_pos) -> None:
         ed = self.editor
         m = QMenu(self)
         if ed.selection:
             for a in (self.a_replace, self.a_dup, self.a_copy, self.a_delete):
                 m.addAction(a)
+            if len(ed.selection) == 1:
+                self._fill_tap_menu()
+                sub = self._submenu(m, self._tap_text(ed.selection[0]))
+                for a in self.tap_menu.actions():
+                    sub.addAction(a)
             m.addSeparator()
             for a in (self.a_top, self.a_bottom, self.a_hide, self.a_lock):
                 m.addAction(a)

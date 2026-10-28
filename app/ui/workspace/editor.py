@@ -28,8 +28,8 @@ log = logging.getLogger(__name__)
 TOOL_SELECT, TOOL_HAND, TOOL_RECT, TOOL_ELLIPSE, TOOL_TEXT, TOOL_FRAME, TOOL_PEN = (
     "select", "hand", "rect", "ellipse", "text", "frame", "pen")
 CLIPBOARD_MIME = "application/x-ads-nodes"
-TYPE_NAMES = {"rect": "Прямоугольник", "ellipse": "Эллипс", "text": "Текст", "group": "Группа", "frame": "Фрейм",
-              "vector": "Вектор", "image": "Изображение", "instance": "Экземпляр"}
+TYPE_NAMES = {"rect": "Прямоугольник", "ellipse": "Эллипс", "text": "Текст", "group": "Группа", "frame": "Контейнер",
+              "vector": "Фигура", "image": "Изображение", "instance": "Копия компонента"}
 from app.core.document.model import ARTBOARD_COLORS  # noqa: E402 — общий с проверкой проекта
 
 
@@ -447,7 +447,7 @@ class Editor(QObject):
         s = self.screen()
         if not s or not self.doc or len(self.selection) != 1 or self.inside_instance(self.selection[0]):
             if self.selection:
-                self.message.emit("Заменить можно один элемент верхнего уровня или внутри фрейма")
+                self.message.emit("Заменить можно один элемент (не часть копии компонента)")
             return None
         old_id = self.selection[0]
         new = components.build(kind, s, self.doc.meta.appearance)
@@ -471,11 +471,50 @@ class Editor(QObject):
         self.select([holder["id"]])
         return tree.find(self.screen(), holder["id"])[0]
 
+    # ---------- простое действие при нажатии (без студии «Логика») ----------
+    def tap_rules(self, node_id: str) -> list:
+        s = self.screen()
+        if not s or not self.doc:
+            return []
+        return [it for it in self.doc.interactions if it.screen_id == s.id and it.node_id == node_id
+                and it.trigger == "tap"]
+
+    def tap_action(self, node_id: str) -> dict | None | str:
+        """Действие при нажатии: словарь простого действия, None — ничего, "custom" — своё правило в «Логике»."""
+        rules = self.tap_rules(node_id)
+        if not rules:
+            return None
+        if len(rules) == 1 and not rules[0].condition and len(rules[0].actions) == 1:
+            return dict(rules[0].actions[0])
+        return "custom"
+
+    def set_tap_action(self, node_id: str, action: dict | None) -> bool:
+        """Простое правило «нажатие → одно действие». Сложные правила из «Логики» не трогаются."""
+        from app.core.document.behavior import Interaction
+        s = self.screen()
+        if not s or not self.doc or self.tap_action(node_id) == "custom":
+            return False
+        full = None
+        if action is not None:
+            t = action["type"]
+            base = {"navigate": {"transition": "slide_left", "duration": 300, "easing": "ease_in_out"},
+                    "back": {"transition": "slide_right", "duration": 300, "easing": "ease_in_out"},
+                    "set_visible": {"mode": "toggle"}}.get(t, {})
+            full = Interaction.from_dict(Interaction(screen_id=s.id, node_id=node_id, trigger="tap",
+                                                     actions=[{**base, **action}]).to_dict())
+        old_ids = {it.id for it in self.tap_rules(node_id)}
+
+        def mutate(doc):
+            doc.interactions = [it for it in doc.interactions if it.id not in old_ids]
+            if full is not None:
+                doc.interactions.append(Interaction.from_dict(full.to_dict()))
+        return self.patch("При нажатии" if action else "Убрать действие при нажатии", mutate)
+
     def delete_selection(self) -> None:
         s = self.screen()
         if s and self.selection:
             if any(self.inside_instance(i) for i in self.selection):
-                self.message.emit("Содержимое экземпляра нельзя удалить — скройте элемент или отсоедините экземпляр")
+                self.message.emit("Часть копии компонента нельзя удалить — скройте её или отвяжите копию от компонента")
                 return
             self.execute(DeleteNodes(s.id, self.selection))
             self.select([])
@@ -591,11 +630,11 @@ class Editor(QObject):
         rects = [tree.bounds(n) for n in ordered]
         gaps = [rects[i + 1][axis] - (rects[i][axis] + rects[i][axis + 2]) for i in range(len(rects) - 1)]
         gap = max(0.0, round(sum(gaps) / len(gaps))) if gaps else 0.0
-        frame = Node(type="frame", name="Auto Layout", x=bb[0], y=bb[1], w=bb[2], h=bb[3], fill="",
+        frame = Node(type="frame", name="Контейнер", x=bb[0], y=bb[1], w=bb[2], h=bb[3], fill="",
                      layout=direction, gap=gap, sizing_h="hug", sizing_v="hug")
-        cmds: list[Command] = [Group(s.id, [n.id for n in nodes], frame, label="Обернуть в Auto Layout")]
+        cmds: list[Command] = [Group(s.id, [n.id for n in nodes], frame, label="Выстроить в контейнер")]
         cmds += [MoveToIndex(s.id, n.id, i) for i, n in enumerate(ordered)]
-        if self.execute(Batch(cmds, "Обернуть в Auto Layout")):
+        if self.execute(Batch(cmds, "Выстроить в контейнер")):
             self.select([frame.id], entered_group=self.entered_group)
 
     # ---------- мастер-компоненты ----------
@@ -682,7 +721,7 @@ class Editor(QObject):
 
     def delete_component(self, component_id: str) -> bool:
         if self.component_usage(component_id):
-            self.message.emit("Компонент используется — сначала удалите или отсоедините его экземпляры")
+            self.message.emit("Компонент используется — сначала удалите его копии или отвяжите их")
             return False
         return self.patch("Удалить компонент",
                           lambda doc: doc.components.remove(doc.component(component_id)))
@@ -1000,6 +1039,28 @@ class Editor(QObject):
     def add_screen(self, screen: Screen) -> None:
         if self.execute(AddScreen(screen)):
             self.set_screen(screen.id)
+
+    def add_template_screen(self, key: str) -> Screen | None:
+        """Готовый экран (вход, список, профиль…) для того же устройства, что текущий; одна запись истории."""
+        from app.libraries import screen_templates
+        cur = self.screen()
+        if cur is None or not self.doc:
+            return None
+        s = screen_templates.build(key, cur, self.doc.meta.appearance)
+        if self.execute(AddScreen(s)):
+            self.set_screen(s.id)
+            return self.screen()
+        return None
+
+    def add_blank_screen(self) -> Screen | None:
+        """Пустой экран того же устройства, что текущий."""
+        cur = self.screen()
+        if cur is None or not self.doc:
+            return None
+        s = Screen(name=f"Экран {len(self.doc.screens) + 1}", platform=cur.platform, width=cur.width,
+                   height=cur.height, device_id=cur.device_id, orientation=cur.orientation)
+        self.add_screen(s)
+        return self.screen()
 
     def remove_screen(self, screen_id: str) -> bool:
         return self.execute(RemoveScreen(screen_id))

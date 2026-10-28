@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import os
+
 import logging
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
-    QButtonGroup, QFrame, QHBoxLayout, QMainWindow, QMessageBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from app import APP_NAME, APP_VERSION, COPYRIGHT
@@ -154,11 +156,16 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, p=page: self.show_page(p))
             self.nav_group.addButton(b)
         v.addWidget(self.nav_hub)
+        # три шага работы вместо длинного списка студий; редкие студии — под «Ещё»
+        steps = QLabel("ШАГИ")
+        steps.setStyleSheet("color:#6A6A6A;font-size:10px;letter-spacing:1px;padding:6px 0 0 4px")
+        v.addWidget(steps)
+        self.nav_project.setText("1 · Рисую")
+        self.nav_project.setToolTip("Рисовать экраны: добавлять компоненты, менять текст, цвета и размеры")
         v.addWidget(self.nav_project)
         self.nav_layers = self._nav_button("Слои", "layers")
         self.nav_layers.setToolTip("Панель слоёв открытого проекта")
         self.nav_layers.clicked.connect(self._show_layers)
-        v.addWidget(self.nav_layers)
         self.nav_studios = {}
         for page, text, icon, _ in STUDIOS:
             b = self._nav_button(text, icon)
@@ -166,11 +173,37 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _=False, pg=page: self.show_page(pg))
             self.nav_group.addButton(b)
             self.nav_studios[page] = b
+        for page, text, tip in ((PAGE_PREVIEW, "2 · Проверяю", "Проверить экраны на телефоне, планшете или в окне: "
+                                 "нажимать кнопки, листать, вводить текст (F5)"),
+                                (PAGE_EXPORT, "3 · Выгружаю", "Получить проект Android Studio, тестовый APK и "
+                                 "задание для ИИ")):
+            b = self.nav_studios[page]
+            b.setText(text)
+            b.setToolTip(tip)
             v.addWidget(b)
         self.nav_task = self._nav_button("ИИ-задание", "ai")
         self.nav_task.setToolTip("Задание для Claude Code (AI_TASK.md) на странице экспорта")
         self.nav_task.clicked.connect(self.open_task)
-        v.addWidget(self.nav_task)
+        self.nav_more = QToolButton()
+        self.nav_more.setObjectName("NavMore")
+        self.nav_more.setCheckable(True)
+        self.nav_more.setText("Ещё ▾")
+        self.nav_more.setToolTip("Компоненты, значки, шрифты, цвета, ресурсы, анимации, логика, проверка ошибок")
+        self.nav_more.setFixedSize(94, 30)
+        self.nav_more.toggled.connect(self._toggle_more)
+        v.addSpacing(6)
+        v.addWidget(self.nav_more)
+        self.more_box = QWidget()
+        mv = QVBoxLayout(self.more_box)
+        mv.setContentsMargins(0, 0, 0, 0)
+        mv.setSpacing(2)
+        for page, *_ in STUDIOS:
+            if page not in (PAGE_PREVIEW, PAGE_EXPORT):
+                mv.addWidget(self.nav_studios[page])
+        mv.addWidget(self.nav_layers)
+        mv.addWidget(self.nav_task)
+        self.more_box.setVisible(False)
+        v.addWidget(self.more_box)
         for text, icon, stage in NAV_FUTURE:
             b = self._nav_button(text, icon)
             b.setEnabled(False)
@@ -182,6 +215,19 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.nav_settings)
         outer.addLayout(sl)
         return nav
+
+    def show_tour(self) -> None:
+        from app.ui.shell.tour import TourDialog
+        self.tour = TourDialog(self)
+        self.tour.setModal(False)  # не мешает работать: окно можно закрыть или отодвинуть
+        self.tour.show()
+
+    def open_logic(self) -> None:
+        self.show_page(PAGE_LOGIC)
+
+    def _toggle_more(self, on: bool) -> None:
+        self.more_box.setVisible(on)
+        self.nav_more.setText("Ещё ▴" if on else "Ещё ▾")
 
     def _build_menu(self) -> None:
         mb = self.menuBar()
@@ -233,6 +279,8 @@ class MainWindow(QMainWindow):
                 a = sub.addAction(f"{text}  —  этап {stage}")
                 a.setEnabled(False)
         h = mb.addMenu("Помощь")
+        self._act(h, "Как пользоваться", QKeySequence("F1"), self.show_tour)
+        h.addSeparator()
         self._act(h, "Открыть папку журнала", None,
                   lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.ctx.paths.logs))))
         self._act(h, "О программе", None, lambda: QMessageBox.about(
@@ -259,8 +307,11 @@ class MainWindow(QMainWindow):
         if page == PAGE_HUB:
             self.hub.refresh()
         self.pages.setCurrentIndex(page)
-        {PAGE_HUB: self.nav_hub, PAGE_PROJECT: self.nav_project, PAGE_SETTINGS: self.nav_settings,
-         **self.nav_studios}[page].setChecked(True)
+        btn = {PAGE_HUB: self.nav_hub, PAGE_PROJECT: self.nav_project, PAGE_SETTINGS: self.nav_settings,
+               **self.nav_studios}[page]
+        btn.setChecked(True)
+        if btn.parent() is self.more_box and not self.nav_more.isChecked():
+            self.nav_more.setChecked(True)  # открытый раздел из «Ещё» должен быть виден в меню
         if page in (PAGE_COLORS, PAGE_RESOURCES, PAGE_FONTS, PAGE_ANIMATIONS, PAGE_LOGIC, PAGE_VALIDATE, PAGE_EXPORT):
             self.pages.widget(page).refresh()
         if page != PAGE_ANIMATIONS and hasattr(self, "animations"):
@@ -351,6 +402,10 @@ class MainWindow(QMainWindow):
             return
         self._set_document(doc, Path(path))
         self.show_page(PAGE_PROJECT)
+        if not self.ctx.settings.get("general/tour_done") and not os.environ.get("ADS_NO_TOUR"):
+            # первый проект — короткое обучение по шагам (в тестах и самопроверке не показывается)
+            self.ctx.settings.set("general/tour_done", True)
+            self.show_tour()
 
     def _set_document(self, doc: ProjectDocument | None, path: Path | None, dirty: bool = False) -> None:
         self.doc, self.doc_path = doc, path

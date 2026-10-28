@@ -9,6 +9,7 @@ AI-экспорт, перечитывает архив. Данные польз�
 from __future__ import annotations
 
 import json
+import os
 import platform
 import sys
 import tempfile
@@ -18,6 +19,7 @@ from pathlib import Path
 
 
 def run(report_path: str | None = None) -> int:
+    os.environ.setdefault("ADS_NO_TOUR", "1")  # самопроверка без окна обучения
     tmp = Path(tempfile.mkdtemp(prefix="ads_smoke_"))
     from PySide6.QtWidgets import QApplication
 

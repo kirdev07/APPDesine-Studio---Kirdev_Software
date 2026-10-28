@@ -1,4 +1,8 @@
+import os
+
 import pytest
+
+os.environ.setdefault("ADS_NO_TOUR", "1")  # обучение при первом запуске мешало бы тестам клавиатуры
 
 from app.core.paths import AppPaths
 from app.core.project.index import ProjectIndex

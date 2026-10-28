@@ -107,7 +107,7 @@ class ComponentBuilderPage(QWidget):
         lay.addWidget(self.tree, 1)
         grid = QHBoxLayout()
         grid.addWidget(button("+ Новый", self.new_component, "Новый пустой компонент"))
-        grid.addWidget(button("Вставить", self.insert_on_screen, "Вставить экземпляр на текущий экран"))
+        grid.addWidget(button("Вставить", self.insert_on_screen, "Вставить копию компонента на текущий экран"))
         lay.addLayout(grid)
         row = QHBoxLayout()
         row.addWidget(button("Импорт…", self.import_file, "Импорт файла .adscomp"))
@@ -192,9 +192,9 @@ class ComponentBuilderPage(QWidget):
         v.addLayout(top)
         canvas_box, cl = panel(margins=0)
         self.toolbar = editor_toolbar(self.editor, [
-            (TOOL_SELECT, "➤", "Выделение (V)"), (TOOL_FRAME, "#", "Фрейм"), (TOOL_RECT, "▭", "Прямоугольник"),
+            (TOOL_SELECT, "➤", "Выделение (V)"), (TOOL_FRAME, "#", "Контейнер"), (TOOL_RECT, "▭", "Прямоугольник"),
             (TOOL_ELLIPSE, "◯", "Эллипс"), (TOOL_TEXT, "T", "Текст"), (TOOL_PEN, "✎", "Перо")],
-            [button("Целиком", lambda: self.canvas.fit()), button("Auto Layout ↓",
+            [button("Целиком", lambda: self.canvas.fit()), button("В столбец ↓",
                                                                  lambda: self.editor.wrap_in_auto_layout("vertical"))])
         cl.addWidget(self.toolbar)
         self.center_stack = QStackedWidget()
@@ -587,8 +587,8 @@ class ComponentBuilderPage(QWidget):
     def save(self) -> bool:
         defn = self._current_def()
         if defn is None:
-            QMessageBox.warning(self, "Компонент", "На холсте компонента должен быть ровно один корневой фрейм. "
-                                                   "Сгруппируйте элементы во фрейм (Auto Layout) и повторите.")
+            QMessageBox.warning(self, "Компонент", "На холсте компонента должен быть ровно один главный контейнер. "
+                                                   "Выстройте элементы в контейнер («В столбец») и повторите.")
             return False
         if not self.main.update_component(defn):
             return False

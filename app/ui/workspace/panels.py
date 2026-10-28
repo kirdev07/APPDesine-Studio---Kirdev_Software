@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox, QFormLayout, QGridLayout, QHBoxLayout,
     QHeaderView,
     QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
-    QScrollArea, QSpinBox, QSplitter, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QSpinBox, QSplitter, QTabWidget, QToolButton, QToolTip, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from app.core.document import tree
@@ -19,6 +19,30 @@ from app.ui.widgets import glyph_icon, label, pixmap_icon, separator
 from app.ui.workspace.canvas import qcolor, render_thumbnail
 from app.ui.workspace.editor import TYPE_NAMES, Editor
 from app.ui.workspace.gallery import ComponentGallery
+
+def _dp_factor(screen) -> float | None:
+    """Пикселей макета в одном dp (только Android)."""
+    if screen is None or screen.platform != "android":
+        return None
+    from app.engines.preview.devices import screen_dpi
+    return screen_dpi(screen) / 160
+
+
+# Короткие объяснения разделов свойств (кнопка «?»): простыми словами, без терминов
+HELP = {
+    "geom": "X и Y — где элемент на экране (от левого верхнего угла), Ш и В — ширина и высота. Значения в пикселях "
+            "макета; в Android их делят на плотность экрана — рядом показан размер в dp.",
+    "al": "Контейнер сам расставляет вложенные элементы столбцом или строкой с одинаковыми промежутками и отступами. "
+          "Меняете текст — кнопка сама становится шире; добавляете пункт — список сам удлиняется.",
+    "size": "Как элемент занимает место в контейнере: «фиксированный» — свой размер, «заполнить» — растянуться "
+            "на свободное место, «по содержимому» — ровно по тексту и вложенным элементам.",
+    "cons": "Что происходит с элементом на экране другого размера (телефон, планшет): остаётся у левого края, "
+            "у правого, растягивается между краями или держится по центру.",
+    "inst": "Это копия компонента из библиотеки проекта. Изменения главного компонента сразу появляются во всех "
+            "копиях; здесь можно поменять текст и цвета только этой копии.",
+    "fx": "Тень — насколько элемент «приподнят» над фоном (уровни Material 3). Градиент — плавный переход между "
+          "двумя цветами. Размытие — элемент становится нечётким.",
+}
 
 ROLE_ID = Qt.ItemDataRole.UserRole
 TYPE_GLYPH = {"rect": "▭", "ellipse": "◯", "text": "T", "group": "▣", "frame": "#", "vector": "✎", "image": "▨",
@@ -59,7 +83,7 @@ class LayersPanel(QWidget):
         lay.addWidget(label("Простые элементы", "H2"))
         grid = QGridLayout()
         grid.setSpacing(6)
-        for i, (kind, key, short) in enumerate((("frame", "F", "Фрейм"), ("rect", "R", "Прямоуг."),
+        for i, (kind, key, short) in enumerate((("frame", "F", "Контейнер"), ("rect", "R", "Прямоуг."),
                                                 ("ellipse", "O", "Эллипс"), ("text", "T", "Текст"))):
             b = QPushButton(f"{TYPE_GLYPH[kind]}  {short}")
             b.setStyleSheet("padding:6px 2px")
@@ -309,11 +333,25 @@ class Inspector(QScrollArea):
         editor.screen_changed.connect(self.refresh)
 
     # --- узел
-    def _section(self, title: str):
+    def _section(self, title: str, help_text: str = ""):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 6, 0, 6)
-        v.addWidget(label(title, "H2"))
+        head = QHBoxLayout()
+        head.addWidget(label(title, "H2"))
+        if help_text:  # «?» рядом с заголовком: короткое объяснение по наведению и щелчку
+            q = QToolButton()
+            q.setText("?")
+            q.setObjectName("HelpButton")
+            q.setFixedSize(22, 22)
+            q.setStyleSheet("QToolButton{border:1px solid #3A3A3A;border-radius:11px;color:#A0A0A0;padding:0}"
+                            "QToolButton:hover{border-color:#2F7BFF;color:#FFFFFF}")
+            q.setToolTip(help_text)
+            q.clicked.connect(lambda _=False, b=q, t=help_text: QToolTip.showText(
+                b.mapToGlobal(b.rect().bottomLeft()), t, b))
+            head.addWidget(q)
+        head.addStretch()
+        v.addLayout(head)
         f = QFormLayout()
         f.setHorizontalSpacing(12)
         v.addLayout(f)
@@ -336,7 +374,7 @@ class Inspector(QScrollArea):
         flags.addWidget(self.locked)
         f.addRow(flags)
 
-        self.sec_geom, f = self._section("Положение и размер")
+        self.sec_geom, f = self._section("Положение и размер", HELP["geom"])
         self.gx, self.gy, self.gw, self.gh = _spin(), _spin(), _spin(0, 100000), _spin(0, 100000)
         r1, r2 = QHBoxLayout(), QHBoxLayout()
         for row, (a, b, la, lb) in ((r1, (self.gx, self.gy, "X", "Y")), (r2, (self.gw, self.gh, "Ш", "В"))):
@@ -346,6 +384,9 @@ class Inspector(QScrollArea):
             row.addWidget(b)
         f.addRow(r1)
         f.addRow(r2)
+        self.dp_hint = label("", "Muted")
+        self.dp_hint.setToolTip("Размер в dp — так его считают в Android: пиксели макета, делённые на плотность")
+        f.addRow(self.dp_hint)
         for s in (self.gx, self.gy, self.gw, self.gh):
             s.valueChanged.connect(self._commit_geometry)
         al = QHBoxLayout()
@@ -393,7 +434,7 @@ class Inspector(QScrollArea):
         self.opacity.valueChanged.connect(lambda v: self._commit_leaves("opacity", v / 100, "Непрозрачность"))
         f.addRow("Непрозрачность", self.opacity)
 
-        self.sec_fx, f = self._section("Эффекты")
+        self.sec_fx, f = self._section("Эффекты", HELP["fx"])
         self.elevation = QComboBox()
         for lvl, dp in enumerate(ELEVATION_DP):
             self.elevation.addItem("Нет" if lvl == 0 else f"Уровень {lvl} · {dp} dp", lvl)
@@ -461,7 +502,7 @@ class Inspector(QScrollArea):
 
     # --- раскладка
     def _build_layout(self) -> None:
-        self.sec_al, f = self._section("Auto Layout")
+        self.sec_al, f = self._section("Выстраивание содержимого", HELP["al"])
         self.al_mode = _combo(LAYOUTS)
         self.al_mode.currentIndexChanged.connect(lambda: self._commit_frames("layout", self.al_mode.currentData(),
                                                                              "Режим раскладки"))
@@ -498,7 +539,7 @@ class Inspector(QScrollArea):
         self.al_cross.currentIndexChanged.connect(
             lambda: self._commit_frames("cross_align", self.al_cross.currentData(), "Выравнивание"))
         f.addRow("По поперечной", self.al_cross)
-        self.al_clip = QCheckBox("Обрезать содержимое по фрейму")
+        self.al_clip = QCheckBox("Обрезать содержимое по краю")
         self.al_clip.clicked.connect(lambda v: self._commit_frames("clip", v, "Обрезка"))
         f.addRow(self.al_clip)
         self.al_scroll = _combo([("none", "Нет"), ("vertical", "Вертикальная"), ("horizontal", "Горизонтальная")])
@@ -507,7 +548,7 @@ class Inspector(QScrollArea):
             lambda: self._commit_frames("scroll", self.al_scroll.currentData(), "Прокрутка"))
         f.addRow("Прокрутка", self.al_scroll)
 
-        self.sec_size, f = self._section("Размер в раскладке")
+        self.sec_size, f = self._section("Размер внутри контейнера", HELP["size"])
         self.sz_h, self.sz_v = _combo(SIZING), _combo(SIZING)
         self.sz_h.currentIndexChanged.connect(lambda: self._commit_geo_nodes("sizing_h", self.sz_h.currentData(),
                                                                             "Ширина: режим"))
@@ -527,15 +568,15 @@ class Inspector(QScrollArea):
                 row.addWidget(s)
             f.addRow(row_label, row)
 
-        self.sec_cons, f = self._section("Привязки")
+        self.sec_cons, f = self._section("При изменении размера экрана", HELP["cons"])
         self.cons_h, self.cons_v = _combo(CONSTRAINT_H), _combo(CONSTRAINT_V)
         self.cons_h.currentIndexChanged.connect(
-            lambda: self._commit_geo_nodes("constraint_h", self.cons_h.currentData(), "Привязка"))
+            lambda: self._commit_geo_nodes("constraint_h", self.cons_h.currentData(), "Поведение при изменении размера"))
         self.cons_v.currentIndexChanged.connect(
-            lambda: self._commit_geo_nodes("constraint_v", self.cons_v.currentData(), "Привязка"))
+            lambda: self._commit_geo_nodes("constraint_v", self.cons_v.currentData(), "Поведение при изменении размера"))
         f.addRow("По горизонтали", self.cons_h)
         f.addRow("По вертикали", self.cons_v)
-        f.addRow(label("Как элемент ведёт себя при изменении размера экрана или фрейма.", "Muted", wrap=True))
+        f.addRow(label("Как элемент ведёт себя на экране другого размера или в растянутом контейнере.", "Muted", wrap=True))
 
     # --- вектор и экземпляр
     def _build_extra(self) -> None:
@@ -556,7 +597,7 @@ class Inspector(QScrollArea):
         self.vec_info = label("", "Muted")
         f.addRow(self.vec_info)
 
-        self.sec_inst, f = self._section("Экземпляр компонента")
+        self.sec_inst, f = self._section("Копия компонента", HELP["inst"])
         self.inst_info = label("", "Muted", wrap=True)
         f.addRow(self.inst_info)
         self.inst_state = QComboBox()
@@ -789,7 +830,9 @@ class Inspector(QScrollArea):
                 self.s_w.setValue(s.width)
                 self.s_h.setValue(s.height)
                 orient = {"portrait": "портрет", "landscape": "ландшафт"}.get(s.orientation, s.orientation)
-                self.s_info.setText(f"Android · {orient}" if s.platform == "android" else "Windows · окно")
+                k = _dp_factor(s)
+                self.s_info.setText(f"Android · {orient} · {s.width / k:.0f} × {s.height / k:.0f} dp" if k
+                                    else "Windows · окно")
                 self.guides.clear()
                 for g in s.guides:
                     it = QListWidgetItem(f"{'Вертикальная' if g.axis == 'x' else 'Горизонтальная'} · {g.pos:g}")
@@ -823,6 +866,11 @@ class Inspector(QScrollArea):
             s.blockSignals(True)
             s.setValue(v)
             s.blockSignals(False)
+        scr = self.editor.screen()
+        k = _dp_factor(scr)
+        self.dp_hint.setVisible(k is not None)
+        if k:
+            self.dp_hint.setText(f"В Android: {bb[2] / k:.0f} × {bb[3] / k:.0f} dp, отступ слева {bb[0] / k:.0f} dp")
         self._loading = was
 
     # --- запись
@@ -906,8 +954,11 @@ class ScreensStrip(QWidget):
         self.list.customContextMenuRequested.connect(self._menu)
         lay.addWidget(self.list, 1)
         add = QPushButton("+  Экран")
-        add.setToolTip("Добавить экран")
-        add.clicked.connect(self.add_screen)
+        add.setToolTip("Добавить пустой или готовый экран (вход, список, профиль, настройки, чат, корзина)")
+        self.add_menu = QMenu(add)
+        self.add_menu.aboutToShow.connect(self._fill_add_menu)
+        add.setMenu(self.add_menu)
+        self.add_button = add
         lay.addWidget(add, 0, Qt.AlignmentFlag.AlignTop)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -940,6 +991,19 @@ class ScreensStrip(QWidget):
     def _on_current(self, item, _prev=None) -> None:
         if item:
             self.editor.set_screen(item.data(ROLE_ID))
+
+    def _fill_add_menu(self) -> None:
+        from app.libraries.screen_templates import TEMPLATES
+        m = self.add_menu
+        m.clear()
+        cur = self.editor.screen()
+        m.addAction("Пустой экран", self.editor.add_blank_screen).setEnabled(cur is not None)
+        m.addAction("Пустой экран для другого устройства…", self.add_screen)
+        if cur is not None and cur.platform == "android":
+            m.addSeparator()
+            m.addSection("Готовые экраны")
+            for key, (title, _) in TEMPLATES.items():
+                m.addAction(title, lambda k=key: self.editor.add_template_screen(k))
 
     def add_screen(self) -> None:
         doc = self.editor.doc
