@@ -35,6 +35,30 @@ def render_screen(screen: Screen, doc, color: str, scale: float = 1.0) -> QImage
     return img
 
 
+def widget_previews(doc, screens: list[Screen]) -> dict[str, bytes]:
+    """Снимки виджетов рабочего стола на прозрачном фоне (PNG) — картинка в списке виджетов телефона."""
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    out = {}
+    for s in screens:
+        img = QImage(s.width, s.height, QImage.Format.Format_ARGB32)
+        img.fill(QColor(0, 0, 0, 0))
+        scene = _scene(s, doc, "#00000000")
+        for item in scene.items():
+            if isinstance(item, ArtboardItem):
+                item.setVisible(False)  # рамка холста не должна попасть в картинку на скруглённых углах
+        p = QPainter(img)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
+                         | QPainter.RenderHint.SmoothPixmapTransform)
+        scene.render(p, QRectF(0, 0, s.width, s.height), QRectF(0, 0, s.width, s.height))
+        p.end()
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        img.save(buf, "PNG")
+        out[s.id] = bytes(ba.data())
+    return out
+
+
 def file_names(screens: list[Screen], ext: str) -> list[str]:
     """Имена файлов по экранам: «01 Главная.png», без недопустимых символов и повторов."""
     out, used = [], set()

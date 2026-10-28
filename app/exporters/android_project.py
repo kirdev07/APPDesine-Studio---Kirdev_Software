@@ -868,10 +868,15 @@ class _Screen:
 
 class AndroidProject:
     def __init__(self, doc: ProjectDocument, screens: list[Screen], drawables: dict[str, tuple[str, bytes, str]],
-                 fonts: dict[str, tuple[str, bytes, str]] | None = None):
+                 fonts: dict[str, tuple[str, bytes, str]] | None = None,
+                 widget_previews: dict[str, bytes] | None = None):
         """drawables — {asset_id: (имя ресурса, данные, расширение)} для включённых растровых изображений;
         fonts — то же для файлов шрифтов (ttf / otf)."""
         self.doc = doc
+        from app.exporters.glance import is_widget
+        self.widget_screens = [s for s in screens if is_widget(s)]  # виджеты рабочего стола — Glance, не экраны
+        self.widget_previews = {k: v for k, v in (widget_previews or {}).items() if v}  # картинка в списке виджетов
+        screens = [s for s in screens if not is_widget(s)]
         self._font_files = fonts or {}
         # семейство шрифта → имя FontFamily в коде и начертания (ресурс, насыщенность, курсив)
         from app.exporters.fontinfo import weight_italic
@@ -1003,6 +1008,9 @@ class AndroidProject:
         out: dict[str, str | bytes] = {}
         v, pkg, path = VERSIONS, self.pkg, self.pkg.replace(".", "/")
         app_name = self.doc.meta.title
+        from app.exporters.glance import GLANCE_VERSION
+        glance_dep = (f'\n    implementation("androidx.glance:glance-appwidget:{GLANCE_VERSION}")'
+                      if self.widget_screens else "")  # виджеты рабочего стола — библиотека Glance
         out["settings.gradle.kts"] = f'''pluginManagement {{
     repositories {{
         google()
@@ -1119,13 +1127,18 @@ dependencies {{
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
-    debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation(libs.androidx.ui.tooling){glance_dep}
 }}
 '''
         has_icon = bool(self.doc.meta.appearance.app_icon
                         and self.doc.asset_data.get(self.doc.meta.appearance.app_icon))
         icon_attrs = ('\n        android:icon="@mipmap/ic_launcher"\n        android:roundIcon="@mipmap/ic_launcher_round"'
                       if has_icon else "")
+        from app.exporters.glance import GLANCE_VERSION, GlanceWidget
+        wused: set[str] = set()
+        widgets = [GlanceWidget(self, s, ident(s.name.replace("Виджет", ""), True, wused, "Home"))
+                   for s in self.widget_screens]
+        receivers = "".join(w.receiver_xml() for w in widgets)
         out["app/src/main/AndroidManifest.xml"] = f'''<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
@@ -1141,7 +1154,7 @@ dependencies {{
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-    </application>
+{receivers}    </application>
 </manifest>
 '''
         esc = app_name.replace("&", "&amp;").replace("<", "&lt;").replace("'", "\\'").replace('"', '\\"')
@@ -1162,7 +1175,10 @@ dependencies {{
                    '</adaptive-icon>\n')
             out["app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml"] = xml
             out["app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml"] = xml
-        out["app/src/main/res/values/strings.xml"] = f'<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <string name="app_name">{esc}</string>\n</resources>\n'
+        wstr = "".join(f'    <string name="{w.res}_widget_label">{w.title().replace("&", "&amp;").replace("<", "&lt;")}</string>\n'
+                       f'    <string name="{w.res}_widget_description">{w.s.name.replace("&", "&amp;").replace("<", "&lt;")}</string>\n'
+                       for w in widgets)
+        out["app/src/main/res/values/strings.xml"] = f'<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <string name="app_name">{esc}</string>\n{wstr}</resources>\n'
         for aid, (name, data, ext) in sorted(self._drawable_files.items()):
             out[f"app/src/main/res/drawable/{name}.{ext}"] = data
         for aid, (name, data, ext) in sorted(self._font_files.items()):
@@ -1276,6 +1292,9 @@ fun AppNavHost() {{
 '''
         out[f"{src}/ui/theme/Theme.kt"] = self.theme_kt()
         out[f"{src}/ui/theme/Type.kt"] = self.type_kt()
+        for w in widgets:  # виджеты рабочего стола (Jetpack Glance)
+            for path, text in w.files(src).items():
+                out[path] = text
         if self.families:
             out[f"{src}/ui/theme/Fonts.kt"] = self.fonts_kt()
         out[f"{src}/ui/components/DesignIcon.kt"] = DESIGN_ICON.replace("{pkg}", pkg)

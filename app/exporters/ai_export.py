@@ -232,7 +232,7 @@ def build_package(doc: ProjectDocument, opts: ExportOptions, issues: list[Issue]
         fused: set[str] = set()
         fonts = {r["id"]: ("font_" + drawable_name(r["name"], fused), files[r["path"]], r["path"].rsplit(".", 1)[-1])
                  for r in included if r["kind"] == "font" and r["path"].rsplit(".", 1)[-1].lower() in ("ttf", "otf")}
-        proj = AndroidProject(doc, screens, drawables, fonts)
+        proj = AndroidProject(doc, screens, drawables, fonts, widget_previews=previews or {})
         files.update(proj.files())
         android = {"root": A_ROOT, "package": proj.pkg, "versions": VERSIONS,
                    "screens": {s.id: {"composable": proj.fns[s.id], "route": proj.routes[s.id]} for s in proj.screens}}

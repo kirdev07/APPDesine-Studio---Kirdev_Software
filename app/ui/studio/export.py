@@ -498,7 +498,10 @@ class ExportPage(QWidget):
     def _android_files(self):
         o = self.options()
         o.include_previews = False
-        return build_package(self.main.doc, o, self.issues).files
+        from app.exporters.glance import is_widget  # снимки виджетов — картинка предпросмотра в списке виджетов
+        from app.ui.workspace.render_export import widget_previews
+        widgets = [s for s in self.main.doc.screens if is_widget(s) and (o.screen_ids is None or s.id in o.screen_ids)]
+        return build_package(self.main.doc, o, self.issues, widget_previews(self.main.doc, widgets)).files
 
     def save_android(self, folder: str | None = None) -> Path | None:
         from app.exporters.apk_builder import find_toolchain, write_project

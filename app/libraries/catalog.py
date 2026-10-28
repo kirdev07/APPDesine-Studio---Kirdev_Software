@@ -27,8 +27,16 @@ DEVICES: tuple[DeviceProfile, ...] = (
 )
 
 
+# Виджеты рабочего стола Android: размер в клетках лаунчера (в списки устройств проекта не входят)
+WIDGET_DEVICES: tuple[DeviceProfile, ...] = tuple(
+    DeviceProfile(f"android_widget_{key}", f"Виджет {key.replace('x', '×')}", PLATFORM_ANDROID,
+                  round(w * 420 / 160), round(h * 420 / 160), 420, "widget")
+    for key, (w, h) in (("2x1", (152, 72)), ("2x2", (152, 152)), ("4x1", (320, 72)), ("4x2", (320, 152)),
+                        ("4x4", (320, 320))))
+
+
 def device(device_id: str) -> DeviceProfile:
-    for d in DEVICES:
+    for d in DEVICES + WIDGET_DEVICES:
         if d.id == device_id:
             return d
     raise KeyError(device_id)

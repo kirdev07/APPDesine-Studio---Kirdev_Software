@@ -1643,6 +1643,16 @@ class ScreensStrip(QWidget):
                 for key, title in items:
                     sub.addAction(title, lambda k=key: self.editor.add_template_screen(k))
             m.addSeparator()
+            from app.libraries.widget_templates import SIZES, WIDGETS
+            wid = QMenu("Виджет рабочего стола", m)
+            wid.setToolTip("Виджет для главного экрана телефона — в Android переводится в Jetpack Glance")
+            m.addMenu(wid)
+            self._submenus.append(wid)
+            for key, (title, size, _fn) in WIDGETS.items():
+                wid.addAction(f"{title} · {size.replace('x', '×')}", lambda k=key: self.editor.add_widget(k))
+            wid.addSeparator()
+            for size in SIZES:
+                wid.addAction(f"Пустой {size.replace('x', '×')}", lambda z=size: self.editor.add_widget("", z))
             apps = QMenu("Готовое приложение (связанные экраны)", m)
             m.addMenu(apps)
             self._submenus.append(apps)

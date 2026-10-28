@@ -1737,6 +1737,17 @@ class Editor(QObject):
         if self.execute(AddScreen(screen)):
             self.set_screen(screen.id)
 
+    def add_widget(self, key: str = "", size: str = "2x2") -> Screen | None:
+        """Виджет рабочего стола Android: готовый (key) или пустой размера size в клетках; одна запись истории."""
+        from app.libraries import widget_templates as wt
+        if not self.doc or (key and key not in wt.WIDGETS) or (not key and size not in wt.SIZES):
+            return None
+        s = wt.build(key, self.doc.meta.appearance) if key else wt.blank(size, f"Виджет {size.replace('x', '×')}")
+        if self.execute(AddScreen(s)):
+            self.set_screen(s.id)
+            return self.screen()
+        return None
+
     def add_ready_app(self, key: str) -> Screen | None:
         """Готовое приложение: набор связанных экранов — нижнее меню ведёт на свои экраны (на каждом выбран свой
         пункт), кнопки — к следующему шагу, «Назад» в шапке — назад. Одна запись истории."""
@@ -1744,7 +1755,7 @@ class Editor(QObject):
         from app.engines.preview import live
         from app.libraries import screen_templates
         from app.libraries.screen_templates_apps import APPS, find_target, localize, relabel_nav
-        cur = self.screen()
+        cur = self.screen_like()
         if cur is None or not self.doc or key not in APPS or cur.platform != "android":
             return None
         _title, keys, nav_kind, nav_targets, taps = APPS[key]
@@ -1788,7 +1799,7 @@ class Editor(QObject):
     def add_template_screen(self, key: str) -> Screen | None:
         """Готовый экран (вход, список, профиль…) для того же устройства, что текущий; одна запись истории."""
         from app.libraries import screen_templates
-        cur = self.screen()
+        cur = self.screen_like()
         if cur is None or not self.doc:
             return None
         s = screen_templates.build(key, cur, self.doc.meta.appearance)
@@ -1797,9 +1808,23 @@ class Editor(QObject):
             return self.screen()
         return None
 
+    def screen_like(self) -> Screen | None:
+        """Образец устройства для нового экрана: текущий экран, а если открыт виджет — экран телефона проекта
+        (или стандартный телефон), иначе новый экран получился бы размером с виджет."""
+        from app.exporters.glance import is_widget
+        cur = self.screen()
+        if cur is None or not is_widget(cur):
+            return cur
+        phone = next((s for s in self.doc.screens if s.platform == "android" and not is_widget(s)), None)
+        if phone is not None:
+            return phone
+        from app.libraries.catalog import device
+        d = device("android_phone")
+        return Screen(name="Телефон", platform=d.platform, width=d.width, height=d.height, device_id=d.id)
+
     def add_blank_screen(self) -> Screen | None:
         """Пустой экран того же устройства, что текущий."""
-        cur = self.screen()
+        cur = self.screen_like()
         if cur is None or not self.doc:
             return None
         s = Screen(name=f"Экран {len(self.doc.screens) + 1}", platform=cur.platform, width=cur.width,
