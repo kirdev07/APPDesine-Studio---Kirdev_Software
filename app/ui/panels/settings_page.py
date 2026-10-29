@@ -72,6 +72,11 @@ class SettingsPage(QWidget):
         self.show_hub = QCheckBox("Показывать Project Hub при запуске")
         self.show_hub.toggled.connect(lambda v: self._set("general/show_hub_on_start", v))
         form.addRow("", self.show_hub)
+        self.auto_update = QCheckBox("Проверять обновления при запуске (раз в день)")
+        self.auto_update.setToolTip("Программа спрашивает у официальной страницы только номер последней версии — "
+                                    "никаких сведений о вас и ваших проектах не отправляется")
+        self.auto_update.toggled.connect(lambda v: self._set("updates/auto_check", v))
+        form.addRow("", self.auto_update)
         self.recent = QSpinBox()
         self.recent.setRange(5, 100)
         self.recent.valueChanged.connect(lambda v: self._set("general/recent_limit", v))
@@ -100,7 +105,8 @@ class SettingsPage(QWidget):
         self.b_restart.setVisible(False)
         row.addWidget(self.b_restart)
         form.addRow("Масштаб интерфейса", row)
-        lay.addWidget(label("Программа работает полностью офлайн: без учётной записи, облака, рекламы и сбора аналитики.",
+        lay.addWidget(label("Без учётной записи, облака, рекламы и сбора аналитики. В интернет программа ходит только за номером "
+                            "последней версии — если включена проверка обновлений.",
                             "Muted", wrap=True))
         lay.addStretch()
         return w
@@ -181,7 +187,8 @@ class SettingsPage(QWidget):
         lay.addWidget(label("Локальная студия дизайна интерфейсов для Android (Jetpack Compose / Material 3) и "
                             "Windows (Python / PySide6) с передачей структурированного пакета в Claude Code.\n\n"
                             "Это не компилятор Android и не гарантирует точную отрисовку Compose.\n\n"
-                            f"{COPYRIGHT}\nИспользование без письменного разрешения правообладателя запрещено. "
+                            f"{COPYRIGHT}\nБесплатная программа: пользоваться можно свободно, ваши дизайны и "
+                            "выгруженные проекты — ваши (см. LICENSE). "
                             "Использует PySide6 / Qt (LGPLv3) — см. THIRD_PARTY_NOTICES.", wrap=True))
         lay.addStretch()
         return w
@@ -189,11 +196,12 @@ class SettingsPage(QWidget):
     # ---------- данные ----------
     def load(self) -> None:
         s = self.ctx.settings
-        widgets = (self.show_hub, self.recent, self.autosave, self.autosave_min, self.backups, self.def_android,
+        widgets = (self.show_hub, self.auto_update, self.recent, self.autosave, self.autosave_min, self.backups, self.def_android,
                    self.def_windows, self.export_previews, self.ui_scale)
         for wdg in widgets:
             wdg.blockSignals(True)
         self.show_hub.setChecked(s.get("general/show_hub_on_start"))
+        self.auto_update.setChecked(s.get("updates/auto_check"))
         self.recent.setValue(s.get("general/recent_limit"))
         self.projects_dir.setText(s.get("general/projects_dir"))
         self.autosave.setChecked(s.get("project/autosave_enabled"))

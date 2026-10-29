@@ -53,10 +53,16 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationVersion(APP_VERSION)
     apply_theme(app)
     install_qt_russian(app)
+    from app.ui import logo
+    from app.ui.themes import titlebar
+    from app.ui.themes.fusion_amoled import TOKENS
+    app.setWindowIcon(logo.icon())  # значок окна и панели задач
+    titlebar.install(app, TOKENS["bg"], TOKENS["text"], TOKENS["border"])  # строка заголовка — в цвет программы
     ctx = AppContext.create(paths)
     win = MainWindow(ctx)
     win.show()
     QTimer.singleShot(0, win.check_recovery)
+    QTimer.singleShot(2000, win.updates.check_on_start)  # раз в день, в фоне; выключается в настройках
     files = [a for a in argv[1:] if a.lower().endswith(".adsproj")]
     if not files and not ctx.settings.get("general/show_hub_on_start"):
         recent = ctx.index.query(filter="recent", recent_limit=1)

@@ -32,6 +32,10 @@ $zip = Join-Path $root "dist\AppDesignStudio-$version-win64.zip"
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path (Join-Path $root "dist\AppDesignStudio") -DestinationPath $zip
 Write-Host "Portable: $zip"
+# контрольная сумма для автообновления (без неё программа обновление не ставит)
+$sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+Set-Content -Path "$zip.sha256" -Value "$sha  $(Split-Path $zip -Leaf)" -Encoding ascii -NoNewline
+Write-Host "SHA-256: $sha"
 
 $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
     Where-Object { Test-Path $_ } | Select-Object -First 1

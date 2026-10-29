@@ -8,6 +8,7 @@ AppId={{6C7E2B1A-4E0D-4B6F-9F3C-0AD5100000A1}
 AppName=App Design Studio
 AppVersion={#AppVersion}
 AppPublisher=Kirdev Software
+AppPublisherURL=https://github.com/kirdev07/APPDesine-Studio---Kirdev_Software
 AppCopyright=© 2026 Kirdev Software. Все права защищены.
 DefaultDirName={autopf}\App Design Studio
 DefaultGroupName=App Design Studio

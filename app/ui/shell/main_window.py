@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
-from app import APP_NAME, APP_VERSION, COPYRIGHT
+from app import APP_NAME, APP_VERSION, COPYRIGHT, WINDOW_TITLE
 from app.context import AppContext
 from app.core.document.model import ProjectDocument
 from app.core.persistence.container import ProjectFormatError
@@ -57,7 +57,9 @@ class MainWindow(QMainWindow):
         self.doc: ProjectDocument | None = None
         self.doc_path: Path | None = None
         self.dirty = False
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(WINDOW_TITLE)
+        from app.ui.shell.updates import Updates
+        self.updates = Updates(self)
         self.resize(1480, 920)
         self.setMinimumSize(1100, 700)
 
@@ -113,7 +115,7 @@ class MainWindow(QMainWindow):
         self.autosave_timer = QTimer(self)
         self.autosave_timer.timeout.connect(self.autosave)
         self._settings_changed()
-        self.statusBar().showMessage("Fusion AMOLED · офлайн")
+        self.statusBar().showMessage("Fusion AMOLED · без облака и аналитики")
         self._update_state()
         self.show_page(PAGE_HUB)
 
@@ -297,9 +299,10 @@ class MainWindow(QMainWindow):
         h.addSeparator()
         self._act(h, "Открыть папку журнала", None,
                   lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.ctx.paths.logs))))
+        self._act(h, "Проверить обновления…", None, lambda: self.updates.check_now())
         self._act(h, "О программе", None, lambda: QMessageBox.about(
             self, APP_NAME, f"{APP_NAME} {APP_VERSION}\nЛокальная студия дизайна интерфейсов Android и Windows.\n\n"
-                            f"{COPYRIGHT}\nИспользование без письменного разрешения правообладателя запрещено.\n"
+                            f"{COPYRIGHT}\nБесплатная программа: пользоваться можно свободно, ваши дизайны — ваши.\n"
                             "Использует PySide6 / Qt (LGPLv3) — см. THIRD_PARTY_NOTICES."))
 
     def shortcut_rows(self) -> list[tuple[str, str]]:
@@ -521,9 +524,9 @@ class MainWindow(QMainWindow):
         self.act_version.setEnabled(has)
         self.act_history.setEnabled(has)
         self.nav_project.setToolTip("" if has else "Откройте или создайте проект")
-        title = APP_NAME
+        title = WINDOW_TITLE
         if has:
-            title = f"{'● ' if self.dirty else ''}{self.doc.meta.title} — {APP_NAME}"
+            title = f"{'● ' if self.dirty else ''}{self.doc.meta.title} — {WINDOW_TITLE}"
             self.statusBar().showMessage(f"{self.doc_path}  ·  {'есть несохранённые изменения' if self.dirty else 'сохранено'}")
         self.setWindowTitle(title)
 
@@ -941,7 +944,7 @@ class MainWindow(QMainWindow):
                 self.ctx.recovery.clear(entry.project_id)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._confirm_discard():
+        if getattr(self, "_skip_confirm", False) or self._confirm_discard():  # обновление уже спросило
             if self.doc:
                 self.ctx.recovery.clear(self.doc.meta.id)
             event.accept()
