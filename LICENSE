@@ -1,10 +1,11 @@
-App Design Studio — лицензионное соглашение (бесплатная программа, закрытый код)
+App Design Studio — лицензионное соглашение (бесплатная программа; исходный код открыт для чтения)
 Copyright (c) 2026 Kirdev Software. Все права защищены. All rights reserved.
 
 1. Разрешено бесплатно, без регистрации и ограничения срока:
    * скачивать программу с официальной страницы и устанавливать её на любое число своих компьютеров;
    * пользоваться ею для личных, учебных и коммерческих задач;
-   * распространять неизменённый архив программы бесплатно, со ссылкой на официальную страницу.
+   * распространять неизменённый архив программы бесплатно, со ссылкой на официальную страницу;
+   * читать исходный код на официальной странице, изучать его и сообщать об ошибках.
 
 2. Ваши результаты принадлежат вам. Проекты, дизайны, картинки, а также выгруженные программой код и
    проекты Android и Windows — ваша собственность; Kirdev Software не претендует на них, и вы можете
@@ -12,8 +13,9 @@ Copyright (c) 2026 Kirdev Software. Все права защищены. All righ
 
 3. Запрещено без письменного разрешения Kirdev Software:
    * продавать программу, сдавать её в аренду или включать в платные сборники и сервисы;
-   * изменять, декомпилировать, дизассемблировать программу или восстанавливать её исходный код,
-     кроме случаев, прямо разрешённых законом;
+   * копировать исходный код или его части в свои программы, изменять его, собирать и распространять
+     свои сборки программы;
+   * изменять, декомпилировать или дизассемблировать программу, кроме случаев, прямо разрешённых законом;
    * удалять или менять сведения об авторских правах, выдавать программу за свою;
    * распространять изменённые сборки программы.
 
@@ -31,8 +33,9 @@ Copyright (c) 2026 Kirdev Software. Все права защищены. All righ
 Официальная страница: https://github.com/kirdev07/APPDesine-Studio---Kirdev_Software
 
 ----------------------------------------------------------------------------------------------------
-English summary: App Design Studio is freeware by Kirdev Software. You may download, install and use it
-free of charge for personal and commercial work, and share the unmodified archive for free. Everything
-you design and export belongs to you. You may not sell, modify, decompile or redistribute modified
-builds of the program. Provided "as is", without warranty. The only network access is the daily update
-check against the official page, which can be turned off in Settings.
+English summary: App Design Studio is freeware by Kirdev Software; its source code is published for
+reading only. You may download, install and use the program free of charge for personal and commercial
+work, read the source, and share the unmodified archive for free. Everything you design and export
+belongs to you. You may not sell the program, copy its source code into other projects, modify it, or
+distribute your own builds. Provided "as is", without warranty. The only network access is the daily
+update check against the official page, which can be turned off in Settings.
