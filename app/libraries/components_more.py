@@ -322,9 +322,9 @@ def bottom_actions(c: _Ctx) -> Node:
                    stroke_width=1)
     nxt = _button(c, "Кнопка «Далее»", "m3.button_filled", "Далее", c.s["onPrimary"], fill=c.s["primary"])
     back.sizing_h = nxt.sizing_h = "fill"
-    h = 72
+    h = 96  # 72 dp кнопок + 24 dp над жестовой полоской (фон уходит под неё, кнопки — выше)
     return c.frame("Кнопки внизу", "horizontal", [back, nxt], x=0, y=c.screen.height - c.d(h), w=c.width_dp, h=h,
-                   pad_l=16, pad_r=16, gap=12, cross_align="center", fill=c.s["surfaceContainer"],
+                   pad_l=16, pad_r=16, pad_b=24, gap=12, cross_align="center", fill=c.s["surfaceContainer"],
                    constraint_h="left_right", constraint_v="bottom", role="m3.bottom_actions")
 
 

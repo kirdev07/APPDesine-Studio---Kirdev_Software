@@ -337,8 +337,8 @@ def test_runtime_card_grows_with_text_and_window_gets_taller(tmp_path, qtbot, pl
     lab = scr.texts["desc"]
     grown = lab.heightForWidth(g("desc").width()) - max(20, scr.design_h["desc"])
     assert grown > 20
-    assert g("card").height() == 60 + grown                                 # карточка выше на рост текста
-    assert g("next").y() >= 80 + grown - 1                                  # следующая карточка ниже
+    assert g("card").height() == 60 + grown - 6                             # выше на рост текста (6 px внизу были свободны)
+    assert g("next").y() >= 80 + grown - 6 - 1                              # следующая карточка ниже
     assert g("btn").y() > 250
     qtbot.waitUntil(lambda: scr.height() >= g("btn").y() + g("btn").height())  # окно стало выше — кнопка видна
 

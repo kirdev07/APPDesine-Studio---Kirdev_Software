@@ -350,3 +350,15 @@ def test_windows_preview_frame_and_scale(qtbot, app_win):
     from app.ui.studio.prototype import frame_rect
     assert frame_rect(p.screen, p.spec).top() < 0        # заголовок окна над содержимым
     assert any("наведен" not in page.checks.item(i).text() for i in range(page.checks.count()))
+
+
+def test_material_field_under_gesture_bar_is_flagged():
+    """1.37: поле ввода Material на жестовой полоске — замечание, даже без своих правил; нижнее меню — нет."""
+    doc, _ = doc_with_form()
+    s = doc.screens[0]
+    field = Node(type="frame", name="Сообщение", role="m3.text_field", x=0, y=s.height - 120, w=600, h=150)
+    menu = Node(type="frame", name="Меню", role="m3.nav_bar", x=0, y=s.height - 210, w=s.width, h=210)
+    s.nodes += [field, menu]
+    msgs = [d.message for d in checks.check(doc, s.id, s, ViewSpec(profile("phone")))]
+    assert any("Сообщение" in t and "панель навигации" in t for t in msgs)
+    assert not any("Меню" in t and "панель навигации" in t for t in msgs)

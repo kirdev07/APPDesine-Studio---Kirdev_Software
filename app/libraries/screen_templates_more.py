@@ -126,7 +126,7 @@ def checkout(s: Screen, ap) -> list[Node]:
                     cross_align="center", sizing_h="fill", sizing_v="hug")
     kids = [steps, _text(c, "Доставка", 16, c.s["primary"], 500, "Раздел"), addr, date,
             _text(c, "Оплата", 16, c.s["primary"], 500, "Раздел"), radio, _fill(_b(s, ap, "m3_divider")), total]
-    return [_top_bar(s, ap, "Оформление", back=True), _content(c, s, kids, 64, 72, gap=12),
+    return [_top_bar(s, ap, "Оформление", back=True), _content(c, s, kids, 64, 96, gap=12),
             _b(s, ap, "m3_bottom_actions")]
 
 
@@ -145,7 +145,7 @@ def search(s: Screen, ap) -> list[Node]:
                    gap=12, sizing_h="fill", sizing_v="hug")
     for card in grid.children:
         card.sizing_h = "fill"
-    return [_content(c, s, [bar, chips, found, grid], 0, 80, gap=12), _b(s, ap, "m3_nav_bar")]
+    return [_content(c, s, [bar, chips, found, grid], 24, 80, gap=12), _b(s, ap, "m3_nav_bar")]  # ниже строки состояния
 
 
 def player(s: Screen, ap) -> list[Node]:

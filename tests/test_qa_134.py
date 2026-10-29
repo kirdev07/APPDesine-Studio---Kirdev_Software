@@ -199,3 +199,21 @@ def test_short_video_feed_keeps_black_and_carousel_follows_theme():
     assert not tree.is_light(tree.color_under(s, s.width / 2, 20, "#FFFFFF"))   # под строкой — тёмное видео
     kt = "".join(v.decode() for k, v in build_package(doc, ExportOptions()).files.items() if k.endswith("Screen.kt"))
     assert "isAppearanceLightStatusBars" not in kt
+
+
+def test_zoom_buttons_keep_short_labels(qtbot, paths, projects_dir):
+    """1.37: кнопки масштаба на холсте — «−», «+», «⤢», и после того, как команды включились или выключились."""
+    from PySide6.QtWidgets import QToolButton
+    from app.context import AppContext
+    from app.ui.shell.main_window import MainWindow
+    ctx = AppContext.create(paths)
+    w = MainWindow(ctx)
+    qtbot.addWidget(w)
+    page = w.project_page
+    for on in (False, True):
+        for a in (page.a_zoom_in, page.a_zoom_out, page.a_zoom_fit):
+            a.setEnabled(on)
+    texts = {b.text() for b in page.findChildren(QToolButton) if b.defaultAction() in
+             (page.a_zoom_in, page.a_zoom_out, page.a_zoom_fit)}
+    assert texts == {"−", "+", "⤢"}
+    ctx.close()

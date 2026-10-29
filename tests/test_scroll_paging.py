@@ -213,3 +213,49 @@ def test_vertical_paging_follows_size_fullscreen_and_swipe(win):
     head = src.split("VerticalPager(")[1].split(") { page ->")[0]
     assert "fillMaxWidth()" in head or "fillMaxSize()" in head
     assert ".width(" not in head                                           # не жёсткая ширина телефона
+
+
+def test_vertical_feed_makes_dots_white(win):
+    """1.37: у ленты коротких видео точки страниц поверх неё — белые (неактивные полупрозрачные), их видно на видео."""
+    ed = win.project_page.editor
+    s = ed.screen()
+    sid = s.id
+
+    def add(doc):
+        sc = doc.screen(sid)
+        clips = [Node(type="frame", name=f"Видео {k}", w=sc.width, h=300, fill="#202020", sizing_h="fill")
+                 for k in range(3)]
+        dots = Node(type="frame", name="Точки", role="m3.page_dots", x=sc.width - 60, y=sc.height / 2, w=20, h=60,
+                    children=[Node(type="rect", w=20, h=8, fill="#454652"), Node(type="rect", w=8, h=8, fill="#454652"),
+                              Node(type="rect", w=8, h=8, fill="#454652")])
+        sc.nodes += [Node(type="frame", name="Лента видео", layout="vertical", x=0, y=0, w=sc.width, h=sc.height,
+                          fill="#000000", children=clips), dots]
+    assert ed.patch("лента", add)
+    feed = next(n for n in ed.screen().nodes if n.name == "Лента видео")
+    assert ed.set_paging(feed.id, True)
+    dots = next(n for n in ed.screen().nodes if n.name == "Точки")
+    assert [c.fill for c in dots.children] == ["#FFFFFF", "#FFFFFF80", "#FFFFFF80"]
+    from app.core.document.model import Appearance
+    assert ed.apply_appearance(Appearance(theme="dark", accent="#2F7BFF"))   # тёмная тема — точки остаются белыми
+    dots = next(n for n in ed.screen().nodes if n.name == "Точки")
+    assert [c.fill for c in dots.children] == ["#FFFFFF", "#FFFFFF80", "#FFFFFF80"]
+
+
+def test_paging_hides_extra_dots(win):
+    """1.37: точек страниц на холсте столько, сколько страниц (лишние скрыты), как в прототипе и в Android."""
+    ed = win.project_page.editor
+    sid = ed.screen().id
+
+    def add(doc):
+        sc = doc.screen(sid)
+        pages = [Node(type="frame", name=f"Стр {k}", w=200, h=150, fill="#FF0000") for k in range(3)]
+        row = Node(type="frame", name="Листалка", layout="horizontal", x=0, y=200, w=400, h=150, children=pages)
+        dots = Node(type="frame", name="Точки", role="m3.page_dots", x=150, y=360, w=60, h=8,
+                    children=[Node(type="rect", w=20, h=8), Node(type="rect", w=8, h=8), Node(type="rect", w=8, h=8),
+                              Node(type="rect", w=8, h=8)])
+        sc.nodes += [row, dots]
+    assert ed.patch("листалка", add)
+    row = next(n for n in ed.screen().nodes if n.name == "Листалка")
+    assert ed.set_paging(row.id, True)
+    dots = next(n for n in ed.screen().nodes if n.name == "Точки")
+    assert [c.visible for c in dots.children] == [True, True, True, False]

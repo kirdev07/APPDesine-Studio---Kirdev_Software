@@ -183,10 +183,11 @@ def chat(s: Screen, ap) -> list[Node]:
     ico.name, ico.path, ico.fill_rule, ico.fill = "Отправить", ICONS["arrow_forward"][1], ICONS["arrow_forward"][2], \
         c.s["primary"]
     field = _field(c, s, ap, "Сообщение")
-    row = c.frame("Ввод сообщения", "horizontal", [field, send], x=0, y=s.height - c.d(72), w=c.width_dp, h=72,
-                  pad_l=16, pad_r=8, gap=8, cross_align="center", fill=c.s["surfaceContainer"],
+    # строка ввода над жестовой полоской (24 dp): фон уходит под неё, поле и кнопка — выше
+    row = c.frame("Ввод сообщения", "horizontal", [field, send], x=0, y=s.height - c.d(96), w=c.width_dp, h=96,
+                  pad_l=16, pad_r=8, pad_b=24, gap=8, cross_align="center", fill=c.s["surfaceContainer"],
                   constraint_h="left_right", constraint_v="bottom")
-    return [_top_bar(s, ap, "Анна Смирнова", back=True), _content(c, s, msgs, 64, 72, gap=8), row]
+    return [_top_bar(s, ap, "Анна Смирнова", back=True), _content(c, s, msgs, 64, 96, gap=8), row]
 
 
 def cart(s: Screen, ap) -> list[Node]:

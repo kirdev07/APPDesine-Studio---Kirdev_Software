@@ -453,7 +453,8 @@ SHRINK = ("search", "textbox", "combobox")  # в тесном ряду сужа�
 
 def _stack_delta(flat: list, fills: set, dmain: float, horiz: bool) -> dict:
     """На сколько меняется размер каждого элемента стека по главной оси: «заполняющие» делят прирост поровну,
-    при сжатии уменьшаются до нуля; чего не хватило — отдают поля ввода и поиска. Пусто — двигать нечего."""
+    при сжатии уменьшаются до нуля; чего не хватило — отдают поля ввода и поиска, потом промежутки ряда (ключ
+    ("gap", i) — промежуток после элемента i). Пусто — двигать нечего."""
     key = "w" if horiz else "h"
     if dmain >= 0:
         return {i: dmain / len(fills) for i in fills} if fills else {}
@@ -470,6 +471,14 @@ def _stack_delta(flat: list, fills: set, dmain: float, horiz: bool) -> dict:
         k = min(1.0, need / room)
         for i in soft:
             out[i] = out.get(i, 0.0) - flat[i][key] * 0.6 * k
+        need -= room * k
+    if need > 0 and horiz and len(flat) > 1:  # ряд всё ещё шире места — сжимаются промежутки (до четверти)
+        gaps = [max(0.0, flat[i + 1]["x"] - flat[i]["x"] - flat[i]["w"]) for i in range(len(flat) - 1)]
+        total_gap = sum(gaps)
+        if total_gap > 0:
+            k = min(0.75, need / total_gap)
+            for i, g in enumerate(gaps):  # промежуток перед элементом i+1 — как уменьшение предыдущего
+                out[("gap", i)] = -g * k
     return out if fills or out else {}
 
 
@@ -600,19 +609,38 @@ class Screen(QWidget):
         """Заново разместить всё (текст, заданный правилом, мог стать длиннее). Если выросший текст увёл
         содержимое за нижний край, окно становится выше (не выше экрана компьютера)."""
         self._place(self.data["nodes"], self.data["w"], self.data["h"], self.width(), self.height(), None)
-        low = max((w.geometry().bottom() + 1 for ws in self.byid.values() for w in ws[:1]
-                   if w.parent() is self and not w.isHidden()), default=0)
         base = round(self.data["h"] * MIN_SCALE)
+        # сколько не влезает при самой низкой высоте окна (пробная раскладка — от нынешней высоты не зависит)
+        self._low = 0.0
+        self._place(self.data["nodes"], self.data["w"], self.data["h"], self.width(), base, None, dry=True)
         scr = QApplication.primaryScreen()
         cap = scr.availableGeometry().height() - 60 if scr is not None else 10 ** 5
-        want = min(cap, max(base, low if low > self.height() else 0))
-        if want != self.minimumHeight() and (low > self.height() or self.minimumHeight() > base):
-            self.setMinimumHeight(max(base, want))
+        want = max(base, min(cap, round(self._low + 0.49)))
+        if want != self.minimumHeight():
+            self.setMinimumHeight(want)
             win = self.app  # окно задаёт свой предел сам (при переходе на экран) — обновить и его
             if self.app.current is self:
                 win.setMinimumHeight(self.minimumHeight() + max(0, win.height() - self.height()))
                 if win.height() < win.minimumHeight():
                     win.resize(win.width(), win.minimumHeight())
+
+    def _text_font(self, n, lab: QLabel, w: float) -> QFont:
+        """Шрифт надписи при ширине w: короткая строка или самое длинное слово, которые не влезают, —
+        шрифт меньше (до 60%), а не обрезка; абзацы не уменьшаются — переносятся."""
+        f = lab.font()
+        f.setPixelSize(max(1, round(n["size"])))
+        fm = QFontMetrics(f)
+        text = lab.property("full") or lab.text()
+        single = not n.get("wrap") or self.design_h.get(n["id"], 0) < fm.lineSpacing() * 1.6
+        full = fm.horizontalAdvance(text)
+        word = max((fm.horizontalAdvance(x) for x in text.replace("-", "- ").split()),
+                   default=0)  # слово не переносится (по дефису — переносится)
+        need = full if single and len(text) <= 24 else (word if n.get("wrap") else 0)
+        if need > w >= need * 0.6:
+            f.setPixelSize(max(1, int(n["size"] * w / need)))
+        if f.pixelSize() != lab.font().pixelSize():
+            lab.setFont(f)
+        return f
 
     def _fit(self, n, w: float, h: float) -> tuple[float, float]:
         """(высота на экране, на сколько сдвинуть то, что ниже) при ширине w. Текст с переносом в узком окне
@@ -622,6 +650,7 @@ class Screen(QWidget):
             lab = self.texts.get(n["id"])
             if lab is None or lab.isHidden():
                 return h, 0.0
+            self._text_font(n, lab, w)
             need = float(lab.heightForWidth(max(1, round(w))) if n.get("wrap") else lab.sizeHint().height())
             at_design = self.design_h.get(n["id"], need)  # текст из дизайна при ширине из дизайна
             push = max(0.0, need - max(h, at_design))
@@ -636,7 +665,10 @@ class Screen(QWidget):
             ws = self.byid.get(n["id"], [])
             if ws and ws[0].isHidden():
                 return h, 0.0
-            push = self._place(n["children"], n["w"], n["h"], w, h, n, dry=True)
+            grow = self._place(n["children"], n["w"], n["h"], w, h, n, dry=True)
+            low = max((c["y"] + c["h"] for c in self._flat(n["children"])), default=0.0)
+            spare = max(0.0, h - low)  # свободное место внизу рамки (при её нынешней высоте) — сначала занимается оно
+            push = max(0.0, grow - spare) if grow > 0 else (grow if spare < 2 else 0.0)
             return h + push, push
         return h, 0.0
 
@@ -675,7 +707,10 @@ class Screen(QWidget):
             if not dry:
                 for n, x, y, w, h, draw, _ in placed:
                     self._set(n, x, y, w, draw)
-            return max(0.0, max((y + h + g for _, _, y, _, h, _, g in placed), default=0.0) - base)
+            low = max((y + h + g for _, _, y, _, h, _, g in placed), default=0.0)
+            if box is None:
+                self._low = low  # низ всего содержимого экрана (для высоты окна)
+            return max(0.0, low - base)
         horiz = box["layout"] == "horizontal"
         dmain, dcross = (dw, dh) if horiz else (dh, dw)
         fills = {i for i, n in enumerate(flat) if n.get("sh" if horiz else "sv") == "fill"}
@@ -688,6 +723,7 @@ class Screen(QWidget):
             if delta:
                 mp += shift
                 ms, shift = max(0.0, ms + delta.get(i, 0.0)), shift + delta.get(i, 0.0)
+                shift += delta.get(("gap", i), 0.0)
             elif box.get("main") == "center":
                 mp += dmain / 2
             elif box.get("main") == "end":
@@ -700,7 +736,8 @@ class Screen(QWidget):
                 cp += dcross / 2
             elif box.get("cross") == "end":
                 cp += dcross
-            if not horiz and n["kind"] == "text":  # надпись не шире места в столбце (иначе её режет край)
+            if not horiz and (n["kind"] == "text" or n.get("layout") == "horizontal"):  # надпись и ряд — не шире
+                # места в столбце (иначе их режет край); ряд тогда сжимает промежутки
                 room = nw - cp - box.get("pad_r", 0.0)
                 cs = max(1.0, min(cs, room))
             if horiz:
@@ -720,17 +757,9 @@ class Screen(QWidget):
         for wd in self.byid.get(n["id"], [])[:1]:
             wd.setGeometry(round(x), round(y), max(1, round(w)), max(1, round(h)))
         lab = self.texts.get(n["id"]) if n["kind"] == "text" else None
-        if lab is not None:  # короткая строка в тесном месте — шрифт меньше (до 60%), а не обрезка
-            f = lab.font()
-            f.setPixelSize(max(1, round(n["size"])))
-            fm = QFontMetrics(f)
-            single = not n.get("wrap") or self.design_h.get(n["id"], 0) < fm.lineSpacing() * 1.6
+        if lab is not None:
+            f = self._text_font(n, lab, w)
             text = lab.property("full") or lab.text()
-            full = fm.horizontalAdvance(text)
-            if single and len(text) <= 24 and full > w >= full * 0.6:  # абзацы не уменьшаются — переносятся
-                f.setPixelSize(max(1, int(n["size"] * w / full)))
-            if f.pixelSize() != lab.font().pixelSize():
-                lab.setFont(f)
             if not n.get("wrap"):  # строка без переноса не влезает и так — с многоточием, целиком — в подсказке
                 one = " ".join(text.splitlines())
                 cut = QFontMetrics(f).elidedText(one, Qt.TextElideMode.ElideRight, max(1, round(w)))
@@ -1029,10 +1058,12 @@ class Screen(QWidget):
         p = QProgressBar()
         p.setValue(int(n.get("value", 50)))
         p.setTextVisible(False)
-        p.setFixedHeight(4)
-        p.setStyleSheet(f"QProgressBar {{ border: none; border-radius: 2px; background: "
-                        f"{'#3A3A3A' if self.app.dark else '#E5E5E5'}; }} "
-                        f"QProgressBar::chunk {{ border-radius: 2px; background: {self.app.accent_text}; }}")
+        p.setFixedHeight(3)  # Windows 11: тонкая линия дорожки и полоса акцента толщиной 3 px поверх неё
+        line = "#9A9A9A" if self.app.dark else "#8A8A8A"
+        p.setStyleSheet(f"QProgressBar {{ border: none; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                        f"stop:0 transparent, stop:0.33 transparent, stop:0.34 {line}, stop:0.66 {line}, "
+                        f"stop:0.67 transparent, stop:1 transparent); }} "
+                        f"QProgressBar::chunk {{ border-radius: 1px; background: {self.app.accent_text}; }}")
         lay.addWidget(p)
         return box
 

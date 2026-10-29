@@ -264,6 +264,8 @@ class WorkspacePage(QMainWindow):
             b = QToolButton()
             b.setDefaultAction(action)
             b.setText(text)
+            # включение и выключение команды возвращает кнопке полное название — снова короткий значок
+            action.changed.connect(lambda b=b, text=text: b.setText(text))
             b.setAutoRaise(True)
             lay.addWidget(b)
         box.adjustSize()

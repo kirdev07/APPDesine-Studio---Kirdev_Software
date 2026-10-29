@@ -142,11 +142,11 @@ def restyle(doc: ProjectDocument, new: Appearance) -> int:
     roots = [(n, s.platform == "windows") for s in doc.screens for n in s.nodes] + \
         [(c.root, False) for c in doc.components]
     media = set()  # лента коротких видео (листание вверх-вниз) и точки страниц поверх неё — со всем содержимым
-    for root, _win in roots:
-        feeds = [n for n, _, _ in tree.walk([root]) if n.is_frame and n.paging and n.scroll == "vertical"]
+    for group in [s.nodes for s in doc.screens] + [[c.root] for c in doc.components]:
+        feeds = [n for n, _, _ in tree.walk(group) if n.is_frame and n.paging and n.scroll == "vertical"]
         for f in feeds:
             media |= {d.id for d, _, _ in tree.walk([f])}
-        for n, _, _ in tree.walk([root]):
+        for n, _, _ in tree.walk(group):
             if n.role == "m3.page_dots" and any(f.x <= n.x and n.x + n.w <= f.x + f.w and f.y <= n.y
                                                 and n.y + n.h <= f.y + f.h for f in feeds):
                 media |= {d.id for d, _, _ in tree.walk([n])}

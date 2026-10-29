@@ -1238,6 +1238,11 @@ class Editor(QObject):
                 inner = fr.h - fr.pad_t - fr.pad_b
                 for c in fr.children:
                     c.sizing_v, c.h = "fixed", inner
+                for d, _, _ in tree.walk(doc.screen(sid).nodes):  # точки поверх ленты видео — белые, их видно
+                    if d.role == "m3.page_dots" and d.children and fr.x <= d.x and d.x + d.w <= fr.x + fr.w                             and fr.y <= d.y and d.y + d.h <= fr.y + fr.h:
+                        wide = max(c.w for c in d.children)
+                        for c in d.children:
+                            c.fill = "#FFFFFF" if c.w >= wide else "#FFFFFF80"
             elif on:
                 fr.scroll, fr.clip = "horizontal", True
                 if fr.layout == "none":
@@ -1245,6 +1250,17 @@ class Editor(QObject):
                 inner = fr.w - fr.pad_l - fr.pad_r
                 for c in fr.children:
                     c.sizing_h, c.w = "fixed", inner
+            if on:  # точек столько, сколько страниц (лишние скрыты): точки сразу после контейнера или поверх него
+                sc = doc.screen(sid)
+                _, parent, idx = tree.find(sc, frame_id)
+                sib = parent.children if parent is not None else sc.nodes
+                near = [sib[idx + 1]] if idx + 1 < len(sib) else []
+                for d, _, _ in tree.walk(near + sc.nodes):
+                    if d.role == "m3.page_dots" and d.children and (
+                            any(d is x for x, _, _ in tree.walk(near)) or
+                            (fr.x <= d.x and d.x + d.w <= fr.x + fr.w and fr.y <= d.y and d.y + d.h <= fr.y + fr.h)):
+                        for i, c in enumerate(d.children):
+                            c.visible = i < len(fr.children)
         return self.patch("Листать страницами" if on else "Без листания", mutate)
 
     # ---------- графики ----------

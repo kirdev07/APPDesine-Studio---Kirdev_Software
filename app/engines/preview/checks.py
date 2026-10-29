@@ -20,7 +20,15 @@ def interactive_ids(doc: ProjectDocument, screen_id: str, screen: Screen) -> set
                 ids.add(n.id)
         if n.type == "text" and n.editable:
             ids.add(n.id)
+        if n.role in TOUCH_ROLES or n.role.startswith(("m3.button_", "m3.icon_button", "m3.chip_", "m3.fab")):
+            ids.add(n.id)  # стандартные кнопки и поля Material — их нажимают, даже без своих правил
     return ids
+
+
+# поля и переключатели Material (верхняя панель и нижнее меню сами обходят строку состояния и жестовую полоску)
+TOUCH_ROLES = ("m3.text_field", "m3.text_field_filled", "m3.text_area", "m3.password_field", "m3.phone_field",
+               "m3.search_bar", "m3.date_field", "m3.dropdown_field", "m3.otp_code", "m3.switch", "m3.checkbox",
+               "m3.slider", "m3.segmented", "m3.split_button", "m3.quantity")
 
 
 def _scrolls(screen: Screen) -> set[str]:
