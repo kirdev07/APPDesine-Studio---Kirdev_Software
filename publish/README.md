@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-<a href="../../releases/latest"><b>⬇ Скачать последнюю версию</b></a>
+<a href="https://github.com/kirdev07/APPDesine-Studio---Kirdev_Software/releases/latest"><b>⬇ Скачать последнюю версию</b></a>
 </p>
 
 ![Дизайн экрана Android](screenshots/02_android_design.png)
@@ -53,7 +53,7 @@
 
 ## Установка
 
-1. Скачайте `AppDesignStudio-<версия>-win64.zip` со страницы [выпусков](../../releases/latest).
+1. Скачайте `AppDesignStudio-<версия>-win64.zip` со страницы [выпусков](https://github.com/kirdev07/APPDesine-Studio---Kirdev_Software/releases/latest).
 2. Распакуйте в любую папку и запустите `AppDesignStudio.exe`. Python и интернет не нужны.
 3. Windows может показать «Windows защитила ваш компьютер» — программа не подписана платным сертификатом.
    Нажмите «Подробнее» → «Выполнить в любом случае».
