@@ -1,6 +1,7 @@
 """1.34: списки из данных, сохранение состояния, понятные маршруты, подписи TalkBack ресурсами, переключатель
 Material 1, анимация обводки и градиента, фигуры виджетов картинкой."""
 
+from app.core.document import tree
 from app.core.document.behavior import Animation, Interaction, Keyframe, Track
 from app.core.document.model import Appearance, Node, Screen
 from app.exporters.ai_export import ExportOptions, build_package
@@ -217,3 +218,25 @@ def test_zoom_buttons_keep_short_labels(qtbot, paths, projects_dir):
              (page.a_zoom_in, page.a_zoom_out, page.a_zoom_fit)}
     assert texts == {"−", "+", "⤢"}
     ctx.close()
+
+
+def test_android_hover_rules_are_exported():
+    """1.39: наведение и уход указателя (мышь, тачпад, стилус) — в приложение Android, и у обычных элементов,
+    и у компонентов Material."""
+    from app.core.document.behavior import Interaction, Variable
+    doc, ids = doc_with_form()
+    s = doc.screens[0]
+    card = Node(type="frame", name="Карточка", x=0, y=400, w=300, h=200, fill="#EEEEEE")
+    btn = components.build("m3_button_filled", s, doc.meta.appearance)
+    s.nodes += [card, btn]
+    v = Variable(name="навели", type="text", default="")
+    doc.variables.append(v)
+    label = next(d for d in tree.descendants(btn) if d.type == "text")      # наведение на подпись кнопки
+    for nid, trig, val in ((card.id, "hover_enter", "да"), (card.id, "hover_leave", "нет"), (btn.id, "hover_enter", "кнопка"),
+                           (label.id, "hover_leave", "ушли")):
+        doc.interactions.append(Interaction(screen_id=s.id, trigger=trig, node_id=nid,
+                                            actions=[{"type": "set_variable", "var_id": v.id, "mode": "set", "value": val}]))
+    kt = "".join(x.decode() for k, x in build_package(doc, ExportOptions()).files.items() if k.endswith("Screen.kt"))
+    assert kt.count("PointerEventType.Enter ->") == 2 and kt.count("PointerEventType.Exit ->") == 2  # подпись — у кнопки
+    assert "import androidx.compose.ui.input.pointer.PointerEventType" in kt and "не перенесены" not in kt
+    assert _balanced(kt)

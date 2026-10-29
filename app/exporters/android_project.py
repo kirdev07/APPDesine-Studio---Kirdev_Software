@@ -298,7 +298,31 @@ class _Screen:
         return '"' + re.sub(r"\{([0-9A-Za-zА-Яа-яЁё_ -]{1,64})\}", sub, body) + '"'
 
     def handlers(self, n, ind: str) -> list[str]:
-        """Modifier-обработчики событий узла (нажатие, долгое, двойное)."""
+        """Modifier-обработчики событий узла (нажатие, долгое, двойное, свайп, наведение)."""
+        return self._handlers(n, ind) + self.hover_handler(n, ind)
+
+    def hover_handler(self, n, ind: str, inner: bool = False) -> list[str]:
+        """Наведение и уход указателя — мышь, тачпад или стилус (планшет, Chromebook, режим компьютера).
+        inner — и правила вложенных элементов (подпись, значок компонента Material: его рисует Compose целиком)."""
+        ids = {n.id} | ({d.id for d in tree.descendants(n)} if inner else set())
+        mine = {}
+        for it in self.its:
+            if it.node_id in ids and it.trigger in ("hover_enter", "hover_leave"):
+                mine.setdefault(it.trigger, []).append(it)
+        if not mine:
+            return []
+        i3, i4 = ind + "            ", ind + "                "
+        out = [f"{ind}.pointerInput(Unit) {{", f"{ind}    awaitPointerEventScope {{", f"{ind}        while (true) {{",
+               f"{i3}when (awaitPointerEvent().type) {{"]
+        for trig, kind in (("hover_enter", "Enter"), ("hover_leave", "Exit")):
+            if trig in mine:
+                out.append(f"{i4}PointerEventType.{kind} -> {{")
+                for it in mine[trig]:
+                    out += self.actions_code(it, i4 + "    ")
+                out.append(f"{i4}}}")
+        return out + [f"{i4}else -> Unit", f"{i3}}}", f"{ind}        }}", f"{ind}    }}", f"{ind}}}"]
+
+    def _handlers(self, n, ind: str) -> list[str]:
         if n.id in self.row_click:  # строка списка: своё действие у каждой строки — в её данных
             return [f"{ind}.clickable {{ {self.row_click[n.id]} }}"]
         mine, swipes = {}, {}
@@ -1078,10 +1102,6 @@ class _Screen:
             L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)"),
                      "// TODO: анимации, которые не переведены автоматически (обводка):\n"
                      + "\n".join(f"//   {t}" for t in self.motion.todo))
-        hovers = [it for it in self.its if it.trigger in ("hover_enter", "hover_leave")]
-        if hovers:
-            L.insert(L.index("@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)"),
-                     "// Наведение мыши на телефоне не бывает — эти правила в приложение не перенесены")
         return "\n".join(L)
 
 
@@ -1200,6 +1220,7 @@ class AndroidProject:
             "androidx.compose.ui.unit.DpOffset", "androidx.compose.animation.slideInVertically",
             "androidx.compose.ui.unit.IntOffset", "androidx.compose.ui.zIndex",
             "androidx.compose.foundation.gestures.detectDragGestures", "androidx.compose.ui.input.pointer.pointerInput",
+            "androidx.compose.ui.input.pointer.PointerEventType",
             "androidx.compose.ui.res.stringResource", "androidx.compose.ui.semantics.heading",
             "androidx.compose.ui.semantics.semantics",
             "androidx.compose.runtime.saveable.rememberSaveable",

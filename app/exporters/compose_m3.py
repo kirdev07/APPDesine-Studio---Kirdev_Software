@@ -129,6 +129,7 @@ class Material:
                        sizing_v="hug",
                        sizing_h="hug" if n.role in _INTRINSIC and n.sizing_h != "fill" else n.sizing_h)  # «заполнить» — как в дизайне
         m = self.g.modifier(bare, parent, mode, ind, handlers=False)
+        m += self.g.hover_handler(n, ind + "    ", inner=True)  # наведение — и на подпись или значок компонента
         m[0] = m[0].lstrip()
         return "\n".join(m)
 

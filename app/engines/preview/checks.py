@@ -90,6 +90,6 @@ def check(doc: ProjectDocument, screen_id: str, screen: Screen, spec: ViewSpec, 
     if screen.platform == PLATFORM_ANDROID and any(i.screen_id == screen_id and i.trigger in ("hover_enter",
                                                                                               "hover_leave")
                                                    for i in doc.interactions):
-        out.append(Diagnostic("info", "", "На телефоне нет наведения мышью: взаимодействия «Наведение» "
-                                          "сработают только в режиме мыши"))
+        out.append(Diagnostic("info", "", "«Наведение» срабатывает от мыши, тачпада или стилуса (планшет, "
+                                          "Chromebook, режим компьютера); пальцем на телефоне — нет"))
     return out
