@@ -383,3 +383,42 @@ def test_runtime_tight_window_layout_and_fluent_inputs(tmp_path, qtbot, plain_ap
     assert big.font().pixelSize() < 22                                      # шрифт меньше, а не обрезка
     find = scr.byid["find"][0]
     assert isinstance(find, QLineEdit) and find.actions() and "border-bottom" in find.styleSheet()
+
+
+def test_nav_pane_reflows_columns_and_centered_content(win):
+    """1.38: панель навигации на экране без неё — содержимое подстраивается по привязкам: средняя колонка уже,
+    правая у края, центрированное — по центру оставшегося места, вложенное — не вылезает; одна отмена."""
+    from app.core.document.model import Node
+    ed = win.project_page.editor
+    blank = ed.screen().id
+    settings = ed.add_template_screen("win_settings")
+    login = ed.add_template_screen("win_login")
+    cols = ed.add_blank_screen()
+    ed.remove_screen(blank)
+    W, H = ed.screen().width, ed.screen().height
+
+    def add(doc):
+        s = doc.screen(cols.id)
+        s.nodes += [Node(type="frame", name="Список", x=0, y=88, w=320, h=H - 88),
+                    Node(type="frame", name="Середина", x=320, y=88, w=W - 640, h=H - 88, children=[
+                        Node(type="rect", name="Карточка", x=352, y=120, w=W - 704, h=200),
+                        Node(type="rect", name="Значок", x=W - 400, y=340, w=48, h=48, constraint_h="right")]),
+                    Node(type="frame", name="Справа", x=W - 320, y=88, w=320, h=H - 88)]
+        doc.screen(login.id).nodes.append(Node(type="frame", name="Сетка", layout="grid", x=24, y=600, w=W - 48,
+                                               h=150))
+    assert ed.patch("колонки", add)
+    ed.set_screen(settings.id)
+    pane = next(n for n in ed.screen().nodes if n.role == "win.navpane")
+    edge = pane.x + pane.w
+    assert ed.link_nav_item(pane.id, 0, login.id) and ed.link_nav_item(pane.id, 1, cols.id)
+    by = {n.name: n for n, _, _ in tree.walk(ed.doc.screen(cols.id).nodes)}
+    assert by["Список"].x == pytest.approx(edge) and by["Справа"].x == pytest.approx(W - 320)  # правая — у края
+    mid = by["Середина"]
+    assert mid.x == pytest.approx(edge + 320) and mid.x + mid.w == pytest.approx(W - 320)     # средняя — уже
+    card, icon = by["Карточка"], by["Значок"]
+    assert mid.x <= card.x and card.x + card.w <= mid.x + mid.w + 0.5                          # не вылезает
+    assert icon.x + icon.w <= mid.x + mid.w + 0.5 and icon.x > mid.x + mid.w / 2                # у правого края колонки
+    grid = next(n for n in ed.doc.screen(login.id).nodes if n.name == "Сетка")  # поля по бокам — те же
+    assert grid.x == pytest.approx(edge + 24) and grid.x + grid.w == pytest.approx(W - 24)
+    card_login = next(n for n in ed.doc.screen(login.id).nodes if n.name == "Карточка входа")
+    assert card_login.x + card_login.w / 2 == pytest.approx(edge + (W - edge) / 2, abs=1)      # по центру места

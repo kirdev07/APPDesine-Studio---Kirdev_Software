@@ -33,6 +33,62 @@ TYPE_NAMES = {"rect": "Прямоугольник", "ellipse": "Эллипс", "
 from app.core.document.model import ARTBOARD_COLORS  # noqa: E402 — общий с проверкой проекта
 
 
+
+def _reflow_h(nodes: list, old_l: float, old_w: float, new_l: float, new_w: float, root: bool = False) -> None:
+    """Область по горизонтали стала [new_l, new_l + new_w] вместо [old_l, old_l + old_w] (слева встала панель
+    навигации): элементы встают по своим привязкам — растянутые становятся уже, прижатые к правому краю остаются
+    у края, по центру — по центру. На верхнем уровне привязка «слева» уточняется по месту, как в приложении
+    Windows: во всю ширину — тянется, узкий у правого края — у края, колонка перед правой панелью — до неё.
+    Детей контейнеров потом расставляет движок раскладки по тем же привязкам; здесь заранее уменьшаются только
+    те, кто иначе вылез бы за край (пропорционально)."""
+    k = new_w / old_w if old_w > 0 else 1.0
+    old_r, new_r = old_l + old_w, new_l + new_w
+    flat = []
+    for n in nodes:
+        if n.is_group:  # у группы размер — по её элементам: они встают в той же области
+            _reflow_h(n.children, old_l, old_w, new_l, new_w, root)
+        else:
+            flat.append(n)
+    modes = {}
+    for n in flat:
+        mode = n.constraint_h
+        if root and mode == "left" and abs(n.x + n.w - old_r) <= 1:
+            mode = "left_right" if n.w >= old_w / 2 else "right"
+        elif root and mode == "left" and n.w >= old_w / 2 and 0 < old_r - (n.x + n.w) <= 32:
+            mode = "left_right"  # широкий блок с полем справа (сетка плиток с отступами) — тянется, поля те же
+        modes[n.id] = mode
+    for n in flat:
+        if root and modes[n.id] == "left" and any(
+                modes[s.id] == "right" and 0 <= s.x - (n.x + n.w) <= 32
+                and min(n.y + n.h, s.y + s.h) - max(n.y, s.y) > 1 for s in flat if s is not n):
+            modes[n.id] = "left_right"
+    for n in flat:
+        mode, x, w = modes[n.id], n.x, n.w
+        if mode == "right":
+            nx, nw = new_r - (old_r - x - w) - w, w
+        elif mode == "left_right":
+            nx = new_l + (x - old_l)
+            nw = max(1.0, new_r - (old_r - x - w) - nx)
+        elif mode == "center":
+            nx, nw = new_l + new_w / 2 + (x + w / 2 - old_l - old_w / 2) - w / 2, w
+        elif mode == "scale":
+            nx, nw = new_l + (x - old_l) * k, w * k
+        else:  # слева: на том же расстоянии от левого края; не влезает — пропорционально
+            nx, nw = new_l + (x - old_l), w
+            if nx + nw > new_r + 0.5:
+                nx, nw = new_l + (x - old_l) * k, max(1.0, w * k)
+        if root:  # верхний уровень движок не двигает — ставим сами
+            n.x, n.w = nx, nw
+        elif mode == "left" and abs(nw - w) > 0.01:  # движок сдвинет «слева» без уменьшения — подготовить
+            n.x, n.w = old_l + (nx - new_l), nw
+        if n.is_container and not n.auto_layout and n.children:  # обычный контейнер: его дети — так же
+            _fit_children(n.children, x, w, nx, nw)
+
+
+def _fit_children(nodes: list, old_l: float, old_w: float, new_l: float, new_w: float) -> None:
+    """Дети обычного контейнера, которые при его новой ширине вылезли бы за край, — пропорционально уже."""
+    _reflow_h(nodes, old_l, old_w, new_l, new_w, root=False)
+
 class Editor(QObject):
     document_changed = Signal()   # структура или свойства документа
     selection_changed = Signal()
@@ -642,16 +698,12 @@ class Editor(QObject):
                             copy.h = old.h
                             drop(old, scr)
                             scr.nodes[scr.nodes.index(old)] = copy
-                        else:  # панели не было: содержимое рядом с ней сдвигается вправо
+                        else:  # панели не было: содержимое подстраивается под оставшееся место справа
                             copy.h = max(1.0, scr.height - copy.y)
                             edge = copy.x + copy.w
                             band = [n for n in scr.nodes if n.y + n.h > copy.y + 0.5]  # всё ниже шапки окна
-                            dx = max(0.0, edge - min((n.x for n in band), default=edge))
-                            for n in band:  # вся раскладка сдвигается целиком, колонки не налезают друг на друга
-                                for d, _, _ in tree.walk([n]):
-                                    d.x += dx
-                                if n.x + n.w > scr.width:  # то, что упёрлось в правый край, — уже
-                                    n.w = max(1.0, scr.width - n.x)
+                            if edge > 0:  # было окно во всю ширину — стало место справа от панели
+                                _reflow_h(band, 0.0, scr.width, edge, scr.width - edge, root=True)
                             scr.nodes.append(copy)
                             added.append(scr.name)
                     elif old is not None:  # меню на экране уже было — новое встаёт на его место
@@ -688,7 +740,7 @@ class Editor(QObject):
                               " — у прежнего были другие пункты, их переходы убраны")
         if ok and added and role == "win.navpane":
             self.message.emit("Панель навигации добавлена слева: " + ", ".join(f"«{x}»" for x in added) +
-                              " — содержимое сдвинуто вправо, проверьте экран")
+                              " — содержимое подстроено под оставшееся место")
         elif ok and added:  # меню не было — оно встало внизу и может закрыть поле ввода или кнопки
             self.message.emit("Меню добавлено внизу: " + ", ".join(f"«{x}»" for x in added) +
                               " — нижние элементы подняты над ним, проверьте экран")

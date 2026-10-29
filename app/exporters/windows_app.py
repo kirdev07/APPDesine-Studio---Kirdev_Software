@@ -152,6 +152,8 @@ def anchor(nodes: list[dict], pw: float, ph: float, free: bool = True) -> None:
             n["ch"] = "left_right"
         elif right:
             n["ch"] = "right" if n["w"] < pw / 2 else "left_right"
+        elif n["w"] >= pw / 2 and 0 < pw - (n["x"] + n["w"]) <= GAP:  # широкий блок с полем справа — тянется
+            n["ch"] = "left_right"
     for n in loose_v:
         top, bottom = n["y"] <= 1, abs(n["y"] + n["h"] - ph) <= 1
         if top and bottom:
@@ -584,7 +586,11 @@ class Screen(QWidget):
         self.scrims: dict[str, QWidget] = {}  # затемнения под открытыми окнами
         self._seq = 0
         self.resize(round(data["w"]), round(data["h"]))
-        self.setMinimumSize(round(data["w"] * MIN_SCALE), round(data["h"] * MIN_SCALE))
+        # окно не уже, чем нужно растянутым колонкам: каждая — не меньше 240 px (или 60% своей ширины в дизайне)
+        room = min((n["w"] - max(n["w"] * 0.6, min(240.0, n["w"])) for n in self._flat(data["nodes"])
+                    if n.get("ch") == "left_right" and n["w"] < data["w"] - 1), default=data["w"])
+        self.setMinimumSize(max(round(data["w"] * MIN_SCALE), round(data["w"] - max(0.0, room))),
+                            round(data["h"] * MIN_SCALE))
         self.setObjectName("screen")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)  # без этого фон экрана не рисуется
         self.setStyleSheet(f"#screen {{ background: {data['bg']}; }}")
@@ -623,6 +629,10 @@ class Screen(QWidget):
                 win.setMinimumHeight(self.minimumHeight() + max(0, win.height() - self.height()))
                 if win.height() < win.minimumHeight():
                     win.resize(win.width(), win.minimumHeight())
+
+    def _kids_low(self, n) -> float:
+        """Низ содержимого рамки (относительно её верха) — без пустого места под ним."""
+        return max((c["y"] + c["h"] for c in self._flat(n["children"])), default=n["h"])
 
     def _text_font(self, n, lab: QLabel, w: float) -> QFont:
         """Шрифт надписи при ширине w: короткая строка или самое длинное слово, которые не влезают, —
@@ -708,8 +718,10 @@ class Screen(QWidget):
                 for n, x, y, w, h, draw, _ in placed:
                     self._set(n, x, y, w, draw)
             low = max((y + h + g for _, _, y, _, h, _, g in placed), default=0.0)
-            if box is None:
-                self._low = low  # низ всего содержимого экрана (для высоты окна)
+            if box is None:  # низ всего содержимого экрана (для высоты окна): у рамки — по её содержимому
+                self._low = max((y + (h + g if g > 0 or not n.get("children") or n.get("scroll")
+                                      else min(h, self._kids_low(n))) for n, _, y, _, h, _, g in placed),
+                                default=0.0)  # рамка выросла — во всю высоту, иначе — по содержимому
             return max(0.0, low - base)
         horiz = box["layout"] == "horizontal"
         dmain, dcross = (dw, dh) if horiz else (dh, dw)
