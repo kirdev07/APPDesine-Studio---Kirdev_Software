@@ -108,3 +108,35 @@ def geometry(screen: Screen) -> dict[str, Rect]:
 
 # Совместимость: «листья» = узлы с геометрией, представляющие node.
 leaves = geo_nodes
+
+
+def color_under(screen: Screen, x: float, y: float, default: str) -> str:
+    """Цвет того, что видно в точке экрана: верхняя картинка или фигура с заливкой (картинка — как тёмное фото).
+    Строка состояния и жестовая панель выбирают по нему светлые или тёмные значки."""
+    color = default
+
+    def rec(nodes):
+        nonlocal color
+        for n in nodes:
+            if not n.visible:  # скрытое — вместе со всем, что внутри
+                continue
+            if n.type not in ("text", "vector") and not n.is_group and n.opacity >= 0.5                     and n.x <= x <= n.x + n.w and n.y <= y <= n.y + n.h:
+                if n.type == "image":
+                    color = "#000000"
+                elif n.fill and n.fill.startswith("#") and (len(n.fill) != 9 or int(n.fill[1:3], 16) > 128):
+                    color = n.fill if len(n.fill) != 9 else "#" + n.fill[3:]
+            if n.is_container:
+                rec(n.children)
+    rec(screen.nodes)
+    return color
+
+
+def is_light(color: str) -> bool:
+    """Светлый цвет — на нём нужны тёмные значки."""
+    c = (color or "#000000").lstrip("#")
+    c = c[2:] if len(c) == 8 else c
+    try:
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    except ValueError:
+        return False
+    return 0.299 * r + 0.587 * g + 0.114 * b > 150

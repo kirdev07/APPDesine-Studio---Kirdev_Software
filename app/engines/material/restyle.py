@@ -108,7 +108,7 @@ ABSOLUTE = ("#FFFFFF", "#000000")
 
 
 def restyle_node(n, cmap: dict[str, str], factor: float, old_font: str, new_font: str,
-                 exact: dict[str, str] | None = None) -> None:
+                 exact: dict[str, str] | None = None, media: bool = False) -> None:
     for prop in ("fill", "stroke", "text_color", "fill2"):
         v = getattr(n, prop)
         # окна Windows: фон и рамки — по палитре Fluent (значки и тексты — по ролям, белая галочка остаётся белой)
@@ -117,8 +117,8 @@ def restyle_node(n, cmap: dict[str, str], factor: float, old_font: str, new_font
             continue
         # чисто белый и чисто чёрный текст и значки — свои цвета (подписи на фото и видео), а не роль темы:
         # иначе «тёмная → светлая → тёмная» делала белые подписи почти чёрными
-        if (n.type in ("vector", "text") or prop == "text_color") and v and v[:7].upper() in ABSOLUTE:
-            continue
+        if (n.type in ("vector", "text") or prop == "text_color" or media) and v and v[:7].upper() in ABSOLUTE:
+            continue  # в ленте коротких видео и точках поверх неё — тоже: фон под видео остаётся чёрным
         setattr(n, prop, _map(cmap, v))
     if n.radius > 0 and factor != 1.0:
         pill = min(n.w, n.h) / 2
@@ -141,10 +141,19 @@ def restyle(doc: ProjectDocument, new: Appearance) -> int:
     wmap = win_map(old, new)
     roots = [(n, s.platform == "windows") for s in doc.screens for n in s.nodes] + \
         [(c.root, False) for c in doc.components]
+    media = set()  # лента коротких видео (листание вверх-вниз) и точки страниц поверх неё — со всем содержимым
+    for root, _win in roots:
+        feeds = [n for n, _, _ in tree.walk([root]) if n.is_frame and n.paging and n.scroll == "vertical"]
+        for f in feeds:
+            media |= {d.id for d, _, _ in tree.walk([f])}
+        for n, _, _ in tree.walk([root]):
+            if n.role == "m3.page_dots" and any(f.x <= n.x and n.x + n.w <= f.x + f.w and f.y <= n.y
+                                                and n.y + n.h <= f.y + f.h for f in feeds):
+                media |= {d.id for d, _, _ in tree.walk([n])}
     for root, win in roots:
         for n, _, _ in tree.walk([root]):
             before = (n.fill, n.stroke, n.text_color, n.fill2, n.radius, n.font_family)
-            restyle_node(n, cmap, factor, old.font_family, new.font_family, wmap if win else None)
+            restyle_node(n, cmap, factor, old.font_family, new.font_family, wmap if win else None, n.id in media)
             changed += before != (n.fill, n.stroke, n.text_color, n.fill2, n.radius, n.font_family)
     for comp in doc.components:  # состояния компонентов — тоже переопределения
         for state in comp.states.values():

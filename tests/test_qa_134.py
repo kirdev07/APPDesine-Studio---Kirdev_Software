@@ -171,3 +171,31 @@ def test_windows_middle_areas_and_grid_stretch():
     windows_app.anchor(nodes, 1280, 800)
     assert inp["cv"] == "bottom" and chat["cv"] == "top_bottom" and chat["ch"] == "left_right"
     assert grid["children"][1].get("ch", "left") == "left"                  # ячейки сетки — не по краям
+
+
+def test_short_video_feed_keeps_black_and_carousel_follows_theme():
+    """1.36: лента коротких видео (листание вверх-вниз) при смене темы остаётся чёрной, а обычная карусель с
+    белыми карточками перекрашивается; строка состояния в прототипе — светлая над тёмным видео. В Android
+    значки строки состояния — по теме приложения (там содержимое ниже строки состояния)."""
+    from app.core.document import tree
+    from app.engines.material.restyle import restyle
+    doc, _ = doc_with_form()
+    restyle(doc, Appearance(theme="light", accent="#2F7BFF"))              # белые карточки — цвет светлой темы
+    doc.meta.appearance = Appearance(theme="light", accent="#2F7BFF")
+    s = doc.screens[0]
+    feed = Node(type="frame", name="Лента видео", layout="vertical", scroll="vertical", paging=True, clip=True,
+                x=0, y=0, w=s.width, h=s.height, fill="#000000",
+                children=[Node(type="frame", name=f"Видео {k}", w=s.width, h=s.height, fill="#000000")
+                          for k in range(2)])
+    card = Node(type="frame", name="Карточка", w=200, h=100, fill="#FFFFFF")
+    carousel = Node(type="frame", name="Карусель", layout="horizontal", scroll="horizontal", paging=True,
+                    x=0, y=0, w=200, h=100, children=[card])
+    s.nodes += [feed, carousel]
+    restyle(doc, Appearance(theme="dark", accent="#2F7BFF"))
+    doc.meta.appearance = Appearance(theme="dark", accent="#2F7BFF")
+    assert feed.fill == "#000000" and feed.children[0].fill == "#000000"
+    assert card.fill != "#FFFFFF"                                            # карусель — по теме
+    carousel.visible = False
+    assert not tree.is_light(tree.color_under(s, s.width / 2, 20, "#FFFFFF"))   # под строкой — тёмное видео
+    kt = "".join(v.decode() for k, v in build_package(doc, ExportOptions()).files.items() if k.endswith("Screen.kt"))
+    assert "isAppearanceLightStatusBars" not in kt

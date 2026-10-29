@@ -323,7 +323,7 @@ def _state_view(b: _Builder, screen: Screen, edges: dict, scale: float) -> dict:
             base = nodes_by[f.id]
             out.append({"f": f.id, "x": round(d.children[0].x - ox, 2), "y": round(active.y - oy, 2),
                         "h": round(active.h, 2), "gap": d.gap, "aw": active.w, "ow": other.w,
-                        "ac": _css(active.fill), "oc": _css(other.fill), "n": len(d.children),
+                        "ac": _css(active.fill), "oc": _css(other.fill), "n": min(len(d.children), len(base.children)),
                         "pages": _pages(base), "v": base.scroll == "vertical"})
         return out
 

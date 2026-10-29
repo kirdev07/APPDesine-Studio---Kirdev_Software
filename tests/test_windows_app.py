@@ -250,3 +250,136 @@ def test_link_windows_nav_pane_items(win):
         assert ed.nav_targets(pane.id)[sel] == settings.id                  # выбранный пункт — этот же экран
     ed.undo()
     assert ed.nav_targets(pane.id)[1] != files.id
+
+
+def _t(nid, x, y, w, h, text, **kw):
+    return {"id": nid, "name": nid, "kind": "text", "x": x, "y": y, "w": w, "h": h, "visible": True, "opacity": 1,
+            "style": {"fill": "", "stroke": "", "stroke_width": 0, "radius": 0}, "text": text, "color": "#000000",
+            "font": "Segoe UI", "size": 14, "weight": 400, "align": "left", "wrap": True} | kw
+
+
+@pytest.fixture
+def plain_app():
+    """Без общего стиля тем студии (его ставят другие тесты в том же процессе): в готовом приложении его нет,
+    а шрифт надписи он подменяет."""
+    qa = QApplication.instance()
+    css = qa.styleSheet()
+    qa.setStyleSheet("")
+    yield
+    qa.setStyleSheet(css)
+
+
+def test_runtime_wrapped_text_grows_when_window_narrows(tmp_path, qtbot, plain_app):
+    """1.36: в узком окне текст с переносом становится выше, а то, что под ним, сдвигается вниз;
+    в прокрутке содержимое удлиняется; длинный текст из правила тоже раздвигает соседей."""
+    m = _runtime(tmp_path)
+    long = "Очень длинное описание параметра, которое в узком окне переносится на несколько строк " * 2
+    free_t = _t("ft", 0, 10, 400, 40, long, ch="left_right")
+    below = _f("below", 0, 60, 400, 30, ch="left_right")
+    aside = _f("aside", 0, 0, 10, 5)                                        # выше текста — не двигается
+    col = _f("col", 0, 100, 400, 200, layout="vertical", main="start", cross="stretch", scroll="vertical",
+             content_w=400, content_h=200, ch="left_right",
+             children=[_t("ct", 0, 0, 400, 40, long, sh="fill"), _f("after", 0, 40, 400, 30, sh="fill")])
+    short = _t("st", 0, 0, 400, 20, "Коротко", ch="left_right")
+    ui = _ui([{"id": "a", "name": "A", "nodes": [aside, free_t, below, col]},
+              {"id": "b", "name": "B", "nodes": [short, _f("under", 0, 30, 400, 30, ch="left_right"),
+                                                 _f("go", 300, 200, 80, 40)]}],
+             [_tap("b", "go", {"type": "set_text", "node_id": "st", "text": long * 2})])
+    app = m.App(ui)
+    qtbot.addWidget(app)
+    app.show()
+    scr = app.current
+    g = lambda nid: scr.byid[nid][0].geometry()                             # noqa: E731
+    qtbot.waitUntil(lambda: scr.width() >= 400)
+    wide_h, wide_below = g("ft").height(), g("below").y()
+    app.resize(290, 300)
+    qtbot.waitUntil(lambda: scr.width() <= 300)
+    lab = scr.texts["ft"]
+    assert g("ft").height() > wide_h and g("ft").height() >= lab.heightForWidth(g("ft").width())
+    assert g("below").y() - wide_below == g("ft").height() - wide_h        # сдвинулось ровно на рост текста
+    assert g("aside").y() == 0
+    ct = scr.texts["ct"]
+    grown = ct.heightForWidth(g("ct").width()) - max(40, ct.heightForWidth(400))
+    assert grown > 0 and abs(g("after").y() - (40 + grown)) <= 1          # в столбце — ниже на рост текста
+    assert scr.inner["col"].height() > 200                                  # прокрутка стала длиннее
+    app.resize(400, 300)
+    qtbot.waitUntil(lambda: scr.width() >= 400)
+    assert g("ft").height() == wide_h                                       # шире — снова как в дизайне
+    assert g("below").y() == wide_below == 60                               # при ширине дизайна ничего не сдвинулось
+    app.go("b")
+    b = app.current
+    gb = lambda nid: b.byid[nid][0].geometry()                              # noqa: E731
+    top = gb("under").y()
+    app.tap("b", "go")
+    assert gb("st").height() > 20 and gb("under").y() > top                 # длинный текст из правила раздвинул
+
+
+def test_runtime_card_grows_with_text_and_window_gets_taller(tmp_path, qtbot, plain_app):
+    """1.36 (замечания тестировщика): карточка растёт вместе с текстом и сдвигает следующую; если
+    содержимое ушло за низ окна, окно становится выше."""
+    m = _runtime(tmp_path)
+    long = "Описание параметра, которое в узком окне переносится на несколько строк подряд " * 3
+    card = _f("card", 0, 10, 400, 60, ch="left_right", children=[
+        _t("title", 10, 10, 380, 20, "Заголовок", ch="left_right"),
+        _t("desc", 10, 34, 380, 20, long[:40], ch="left_right")])
+    nxt = _f("next", 0, 80, 400, 40, ch="left_right")
+    btn = _f("btn", 0, 250, 100, 40)
+    ui = _ui([{"id": "a", "name": "A", "nodes": [card, nxt, btn]}],
+             [_tap("a", "next", {"type": "set_text", "node_id": "desc", "text": long})])
+    app = m.App(ui)
+    qtbot.addWidget(app)
+    app.show()
+    scr = app.current
+    g = lambda nid: scr.byid[nid][0].geometry()                             # noqa: E731
+    qtbot.waitUntil(lambda: scr.width() >= 400)
+    assert g("card").height() == 60 and g("next").y() == 80
+    app.tap("a", "next")
+    lab = scr.texts["desc"]
+    grown = lab.heightForWidth(g("desc").width()) - max(20, scr.design_h["desc"])
+    assert grown > 20
+    assert g("card").height() == 60 + grown                                 # карточка выше на рост текста
+    assert g("next").y() >= 80 + grown - 1                                  # следующая карточка ниже
+    assert g("btn").y() > 250
+    qtbot.waitUntil(lambda: scr.height() >= g("btn").y() + g("btn").height())  # окно стало выше — кнопка видна
+
+
+def test_runtime_tight_window_layout_and_fluent_inputs(tmp_path, qtbot, plain_app):
+    """Тесное окно: в ряду поиск сужается, а не наезжает на кнопки; окно по центру не заезжает на заголовок;
+    короткая строка уменьшает шрифт, длинная без переноса — с многоточием; поля и поиск — вид Windows 11."""
+    from PySide6.QtWidgets import QLineEdit
+    m = _runtime(tmp_path)
+
+    def w(kind, nid, x, y, ww, h, texts, **kw):
+        return {"id": nid, "name": nid, "kind": kind, "x": x, "y": y, "w": ww, "h": h, "visible": True,
+                "opacity": 1, "texts": texts, "label": {}, "style": {"fill": "", "stroke": "", "stroke_width": 0,
+                                                                     "radius": 4}} | kw
+    row = _f("row", 0, 40, 400, 40, layout="horizontal", main="start", cross="center", ch="left_right", pad_r=0,
+             children=[_f("cmds", 0, 0, 200, 40, sh="fixed"), _f("gap", 200, 0, 60, 10, sh="fill"),
+                       w("search", "find", 260, 4, 140, 32, ["Поиск"], sh="fixed")])
+    bar = _f("bar", 0, 0, 400, 32, ch="left_right", bar=True)
+    card = _f("card", 100, 120, 200, 150, ch="center", cv="center")
+    tile = _f("tile", 0, 90, 0, 26, layout="vertical", main="start", cross="start", ch="scale", pad_r=8,
+              children=[_t("big", 8, 0, 0, 26, "48 Мбит/с", size=22, wrap=False)])
+    long = _t("long", 0, 280, 100, 20, "Очень длинная подпись без переноса строки в узком месте", wrap=False)
+    from PySide6.QtGui import QFont, QFontMetrics
+    f = QFont("Segoe UI")
+    f.setPixelSize(22)
+    need = QFontMetrics(f).horizontalAdvance("48 Мбит/с") + 2           # во всю ширину — при ширине дизайна
+    tile["w"], tile["children"][0]["w"] = need + 16, need
+    ui = _ui([{"id": "a", "name": "A", "nodes": [bar, row, tile, long, card]}])
+    app = m.App(ui)
+    qtbot.addWidget(app)
+    app.show()
+    scr = app.current
+    g = lambda nid: scr.byid[nid][0].geometry()                             # noqa: E731
+    qtbot.waitUntil(lambda: scr.width() >= 400)
+    assert scr.texts["long"].text().endswith("…") and scr.texts["long"].toolTip().startswith("Очень")
+    app.resize(290, 210)
+    qtbot.waitUntil(lambda: scr.width() <= 300)
+    assert g("find").x() >= g("cmds").x() + g("cmds").width()              # поиск не наезжает на кнопки
+    assert g("find").x() + g("find").width() <= scr.width() + 1
+    assert g("card").y() >= 32                                              # окно по центру — под заголовком
+    big = scr.texts["big"]
+    assert big.font().pixelSize() < 22                                      # шрифт меньше, а не обрезка
+    find = scr.byid["find"][0]
+    assert isinstance(find, QLineEdit) and find.actions() and "border-bottom" in find.styleSheet()

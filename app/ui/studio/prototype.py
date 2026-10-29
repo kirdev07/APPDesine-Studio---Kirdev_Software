@@ -79,6 +79,11 @@ def _ink(color: str) -> QColor:
     return QColor("#000000") if 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue() > 150 else QColor("#FFFFFF")
 
 
+def _under(screen: Screen, x: float, y: float, artboard: str) -> str:
+    from app.core.document import tree as _tree
+    return _tree.color_under(screen, x, y, artboard)
+
+
 def paint_device(p: QPainter, screen: Screen, spec: ViewSpec, artboard: str, title: str,
                  show_safe: bool = False) -> None:
     """Системные панели, безопасные области и рамка поверх содержимого экрана (координаты экрана)."""
@@ -99,7 +104,8 @@ def paint_device(p: QPainter, screen: Screen, spec: ViewSpec, artboard: str, tit
             p.setPen(pen)
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(QRectF(ins.left, ins.top, W - ins.left - ins.right, H - ins.top - ins.bottom))
-        # строка состояния: время, сеть, батарея
+        # строка состояния: время, сеть, батарея — светлые на тёмном видео и фото, тёмные на светлом
+        ink = _ink(_under(screen, W / 2, ins.top / 2, artboard))
         p.setPen(ink)
         f = QFont("Segoe UI")
         f.setPixelSize(max(1, round(13 * u)))
@@ -127,7 +133,7 @@ def paint_device(p: QPainter, screen: Screen, spec: ViewSpec, artboard: str, tit
         # жестовая панель
         pw = min(108 * u, W * 0.3)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(ink)
+        p.setBrush(_ink(_under(screen, W / 2, H - ins.bottom / 2, artboard)))  # по тому, что под ней
         p.drawRoundedRect(QRectF((W - pw) / 2, H - ins.bottom / 2 - 2 * u, pw, 4 * u), 2 * u, 2 * u)
         # рамка: кольцо вокруг экрана со скруглением углов дисплея
         b = bezel(screen, spec)
@@ -462,6 +468,9 @@ class PrototypePlayer(QWidget):
         look_o = (other.w, other.fill, other.radius, other.type)
         x = dots.children[0].x
         for i, d in enumerate(dots.children):
+            d.visible = i < len(pages)  # точек столько, сколько страниц (как в приложении Android)
+            if not d.visible:
+                continue
             w, fill, radius, kind = look_a if i == page else look_o
             d.w, d.fill, d.radius, d.type, d.x = w, fill, radius, "rect", x
             d.radius = min(d.h / 2, d.w / 2)

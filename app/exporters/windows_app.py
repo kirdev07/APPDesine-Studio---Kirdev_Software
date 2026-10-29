@@ -78,6 +78,8 @@ def _node(n, parent, assets: dict) -> dict | None:
          "h": round(n.h, 2), "visible": n.visible, "opacity": n.opacity,
          # растягиваемое окно: привязки к краям родителя и размер в раскладке (заполнить / фиксированный)
          "ch": n.constraint_h, "cv": n.constraint_v, "sh": n.sizing_h, "sv": n.sizing_v}
+    if n.role == "win.titlebar":
+        d["bar"] = True
     if n.is_group:
         d.update(kind="group", x=0, y=0, w=0, h=0, children=[c for c in (_node(c, parent, assets) for c in n.children)
                                                               if c])
@@ -111,12 +113,14 @@ def _node(n, parent, assets: dict) -> dict | None:
         return d
     d["kind"] = "frame"
     if n.is_frame:
-        d.update(layout=n.layout if n.auto_layout else "none", main=n.main_align, cross=n.cross_align)
+        d.update(layout=n.layout if n.auto_layout else "none", main=n.main_align, cross=n.cross_align,
+                 pad_r=n.pad_r)
     if n.is_frame and n.scroll != "none" and n.children:
         leaves = [c for c, _, _ in tree.walk(n.children) if not c.is_group]
         d["scroll"] = n.scroll
         d["content_w"] = round(max([n.w] + [c.x + c.w - n.x + n.pad_r for c in leaves]), 2)
         d["content_h"] = round(max([n.h] + [c.y + c.h - n.y + n.pad_b for c in leaves]), 2)
+        d["content_b"] = round(max([0.0] + [c.y + c.h - n.y + n.pad_b for c in leaves]), 2)  # низ последнего
     if n.is_container:
         d["children"] = [c for c in (_node(c, n, assets) for c in n.children) if c]
     return d
@@ -174,6 +178,13 @@ def anchor(nodes: list[dict], pw: float, ph: float, free: bool = True) -> None:
 GAP = 32  # до соседа у края не дальше этого — область тянется до него
 
 
+def _flat_all(nodes: list[dict]) -> list[dict]:
+    out = []
+    for n in nodes:
+        out += [n] + _flat_all(n.get("children", []))
+    return out
+
+
 def _flat_dicts(nodes: list[dict]) -> list[dict]:
     out = []
     for n in nodes:
@@ -194,6 +205,11 @@ def build_ui(doc: ProjectDocument, screens: list[Screen], assets: dict[str, str]
     out_screens = []
     for s in screens:
         nodes = [x for x in (_node(n, None, assets) for n in s.nodes) if x]
+        for pane in (n for n, _, _ in tree.walk(s.nodes) if n.role == "win.navpane"):  # подписи пунктов — в строку
+            one_line = {d.id for d, _, _ in tree.walk([pane]) if d.type == "text"}
+            for d in _flat_all(nodes):
+                if d["id"] in one_line:
+                    d["wrap"] = False
         anchor(nodes, s.width, s.height)
         out_screens.append({"id": s.id, "name": s.name, "w": s.width, "h": s.height, "bg": bg, "nodes": nodes})
     return {
@@ -295,7 +311,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (QAbstractButton, QAbstractSlider, QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame,
                                QGraphicsOpacityEffect, QLabel, QLineEdit, QMainWindow, QProgressBar, QPushButton,
@@ -432,6 +448,31 @@ LONG_MS, SWIPE_PX = 500, 48
 MIN_SCALE = 0.7  # окно можно сузить до 70 % размера дизайна
 
 
+SHRINK = ("search", "textbox", "combobox")  # в тесном ряду сужаются (не уже 40% дизайна)
+
+
+def _stack_delta(flat: list, fills: set, dmain: float, horiz: bool) -> dict:
+    """На сколько меняется размер каждого элемента стека по главной оси: «заполняющие» делят прирост поровну,
+    при сжатии уменьшаются до нуля; чего не хватило — отдают поля ввода и поиска. Пусто — двигать нечего."""
+    key = "w" if horiz else "h"
+    if dmain >= 0:
+        return {i: dmain / len(fills) for i in fills} if fills else {}
+    out, need = {}, -dmain
+    total = sum(flat[i][key] for i in fills)
+    if total > 0:
+        k = min(1.0, need / total)
+        for i in fills:
+            out[i] = -flat[i][key] * k
+        need -= total * k
+    soft = [i for i, n in enumerate(flat) if horiz and n["kind"] in SHRINK]
+    room = sum(flat[i][key] * 0.6 for i in soft)
+    if need > 0 and room > 0:
+        k = min(1.0, need / room)
+        for i in soft:
+            out[i] = out.get(i, 0.0) - flat[i][key] * 0.6 * k
+    return out if fills or out else {}
+
+
 def _constrain(mode: str, pos: float, size: float, old: float, new: float) -> tuple[float, float]:
     """Привязка к краям родителя, когда он стал размером new вместо old."""
     if mode in ("right", "bottom"):
@@ -444,6 +485,12 @@ def _constrain(mode: str, pos: float, size: float, old: float, new: float) -> tu
         k = new / old if old else 1.0
         return pos * k, size * k
     return pos, size
+
+
+def _put(lab: QLabel, text: str) -> None:
+    """Новый текст надписи: полный — в свойстве (на экране он может быть с многоточием)."""
+    lab.setProperty("full", text)
+    lab.setText(text)
 
 
 class _Scrim(QWidget):
@@ -523,6 +570,7 @@ class Screen(QWidget):
         self.app, self.data = app, data
         self.byid: dict[str, list[QWidget]] = {}  # у группы — все её элементы
         self.texts: dict[str, QLabel] = {}
+        self.design_h: dict[str, float] = {}  # высота надписи с текстом из дизайна: от неё считается рост
         self.inner: dict[str, QWidget] = {}  # содержимое прокручиваемых областей
         self.scrims: dict[str, QWidget] = {}  # затемнения под открытыми окнами
         self._seq = 0
@@ -539,7 +587,7 @@ class Screen(QWidget):
         super().resizeEvent(e)
         for s in self.scrims.values():
             s.setGeometry(self.rect())
-        self._place(self.data["nodes"], self.data["w"], self.data["h"], self.width(), self.height(), None)
+        self.relayout()
 
     @staticmethod
     def _flat(nodes: list[dict]) -> list[dict]:
@@ -548,34 +596,98 @@ class Screen(QWidget):
             out += Screen._flat(n.get("children", [])) if n["kind"] == "group" else [n]
         return out
 
-    def _place(self, nodes, ow, oh, nw, nh, box) -> None:
+    def relayout(self) -> None:
+        """Заново разместить всё (текст, заданный правилом, мог стать длиннее). Если выросший текст увёл
+        содержимое за нижний край, окно становится выше (не выше экрана компьютера)."""
+        self._place(self.data["nodes"], self.data["w"], self.data["h"], self.width(), self.height(), None)
+        low = max((w.geometry().bottom() + 1 for ws in self.byid.values() for w in ws[:1]
+                   if w.parent() is self and not w.isHidden()), default=0)
+        base = round(self.data["h"] * MIN_SCALE)
+        scr = QApplication.primaryScreen()
+        cap = scr.availableGeometry().height() - 60 if scr is not None else 10 ** 5
+        want = min(cap, max(base, low if low > self.height() else 0))
+        if want != self.minimumHeight() and (low > self.height() or self.minimumHeight() > base):
+            self.setMinimumHeight(max(base, want))
+            win = self.app  # окно задаёт свой предел сам (при переходе на экран) — обновить и его
+            if self.app.current is self:
+                win.setMinimumHeight(self.minimumHeight() + max(0, win.height() - self.height()))
+                if win.height() < win.minimumHeight():
+                    win.resize(win.width(), win.minimumHeight())
+
+    def _fit(self, n, w: float, h: float) -> tuple[float, float]:
+        """(высота на экране, на сколько сдвинуть то, что ниже) при ширине w. Текст с переносом в узком окне
+        выше — соседи ниже сдвигаются; при ширине как в дизайне ничего не двигается, а надпись лишь не
+        обрезает низ букв. Карточка растёт вместе с текстом внутри."""
+        if n["kind"] == "text":
+            lab = self.texts.get(n["id"])
+            if lab is None or lab.isHidden():
+                return h, 0.0
+            need = float(lab.heightForWidth(max(1, round(w))) if n.get("wrap") else lab.sizeHint().height())
+            at_design = self.design_h.get(n["id"], need)  # текст из дизайна при ширине из дизайна
+            push = max(0.0, need - max(h, at_design))
+            if n.get("wrap") and need < at_design and abs(h - at_design) <= 3:  # шире окно — строк меньше,
+                push = need - at_design                                           # то, что ниже, подтягивается
+                return h + push, push
+            return max(h + push, need), push
+        if n["kind"] == "textbox":  # подпись и поле — во всю нужную высоту, рамка снизу не срезается
+            ws = self.byid.get(n["id"], [])
+            return (max(h, float(ws[0].sizeHint().height())) if ws else h), 0.0
+        if n["kind"] == "frame" and n.get("children") and not n.get("scroll"):
+            ws = self.byid.get(n["id"], [])
+            if ws and ws[0].isHidden():
+                return h, 0.0
+            push = self._place(n["children"], n["w"], n["h"], w, h, n, dry=True)
+            return h + push, push
+        return h, 0.0
+
+    def _place(self, nodes, ow, oh, nw, nh, box, dry: bool = False) -> float:
         """Новое место элементов, когда родитель стал nw × nh вместо ow × oh: в раскладке-стеке растут элементы
-        «заполнить» (остальные сдвигаются за ними), в обычном контейнере — по привязкам к краям."""
+        «заполнить» (остальные сдвигаются за ними), в обычном контейнере — по привязкам к краям. Текст с
+        переносом в узком окне становится выше, а то, что под ним, сдвигается вниз. Возвращает, на сколько
+        выросло содержимое по высоте; dry — только посчитать, ничего не двигая."""
         flat = self._flat(nodes)
         dw, dh = nw - ow, nh - oh
         stack = box is not None and box.get("layout") in ("horizontal", "vertical")
         if box is not None and box.get("layout") in ("grid", "wrap"):  # сетка: колонки шире / уже вместе с окном
+            grow = 0.0
             for n in flat:
                 x, w = _constrain("scale", n["x"], n["w"], ow, nw)
-                self._set(n, x, n["y"], w, n["h"])
-            return
+                h, push = self._fit(n, w, n["h"])
+                grow = max(grow, push)
+                if not dry:
+                    self._set(n, x, n["y"], w, h)
+            return grow
         if not stack:
+            placed = []
+            bar = max((n["y"] + n["h"] for n in flat if n.get("bar")), default=0.0)  # строка заголовка окна
             for n in flat:
                 x, w = _constrain(n.get("ch", "left"), n["x"], n["w"], ow, nw)
                 y, h = _constrain(n.get("cv", "top"), n["y"], n["h"], oh, nh)
-                self._set(n, x, y, w, h)
-            return
+                if bar and not n.get("bar") and n.get("cv") in ("center", "bottom") and y < bar + 8:
+                    y = min(n["y"], bar + 8)  # в низком окне — под заголовком (окно станет выше, если надо)
+                placed.append([n, x, y, w, h, *self._fit(n, w, h)])
+            base = max((y + h for _, _, y, _, h, _, _ in placed), default=0.0)
+            for p in placed:  # то, что ниже выросшего текста (и под ним по ширине), сдвигается вниз
+                n = p[0]
+                p[2] += sum(q[6] for q in placed if q[6] != 0 and q[0] is not n
+                            and n["y"] >= q[0]["y"] + q[0]["h"] - 1
+                            and min(n["x"] + n["w"], q[0]["x"] + q[0]["w"]) - max(n["x"], q[0]["x"]) > 1)
+            if not dry:
+                for n, x, y, w, h, draw, _ in placed:
+                    self._set(n, x, y, w, draw)
+            return max(0.0, max((y + h + g for _, _, y, _, h, _, g in placed), default=0.0) - base)
         horiz = box["layout"] == "horizontal"
         dmain, dcross = (dw, dh) if horiz else (dh, dw)
         fills = {i for i, n in enumerate(flat) if n.get("sh" if horiz else "sv") == "fill"}
-        share, shift = (dmain / len(fills) if fills else 0.0), 0.0
+        delta = _stack_delta(flat, fills, dmain, horiz)
+        shift = 0.0
+        grow = pushed = 0.0
         for i, n in enumerate(flat):
             mp, ms = (n["x"], n["w"]) if horiz else (n["y"], n["h"])
             cp, cs = (n["y"], n["h"]) if horiz else (n["x"], n["w"])
-            if fills:
+            if delta:
                 mp += shift
-                if i in fills:
-                    ms, shift = max(0.0, ms + share), shift + share
+                ms, shift = max(0.0, ms + delta.get(i, 0.0)), shift + delta.get(i, 0.0)
             elif box.get("main") == "center":
                 mp += dmain / 2
             elif box.get("main") == "end":
@@ -588,23 +700,51 @@ class Screen(QWidget):
                 cp += dcross / 2
             elif box.get("cross") == "end":
                 cp += dcross
+            if not horiz and n["kind"] == "text":  # надпись не шире места в столбце (иначе её режет край)
+                room = nw - cp - box.get("pad_r", 0.0)
+                cs = max(1.0, min(cs, room))
             if horiz:
-                self._set(n, mp, cp, ms, cs)
+                cs2, push = self._fit(n, ms, cs)  # в ряду текст растёт вниз, соседей не двигает
+                grow = max(grow, push)
+                if not dry:
+                    self._set(n, mp, cp, ms, cs2)
             else:
-                self._set(n, cp, mp, cs, ms)
+                mp += pushed  # в столбце следующие элементы — ниже выросшего текста
+                ms2, push = self._fit(n, cs, ms)
+                pushed += push
+                if not dry:
+                    self._set(n, cp, mp, cs, ms2)
+        return max(grow, pushed)
 
     def _set(self, n, x, y, w, h) -> None:
         for wd in self.byid.get(n["id"], [])[:1]:
             wd.setGeometry(round(x), round(y), max(1, round(w)), max(1, round(h)))
+        lab = self.texts.get(n["id"]) if n["kind"] == "text" else None
+        if lab is not None:  # короткая строка в тесном месте — шрифт меньше (до 60%), а не обрезка
+            f = lab.font()
+            f.setPixelSize(max(1, round(n["size"])))
+            fm = QFontMetrics(f)
+            single = not n.get("wrap") or self.design_h.get(n["id"], 0) < fm.lineSpacing() * 1.6
+            text = lab.property("full") or lab.text()
+            full = fm.horizontalAdvance(text)
+            if single and len(text) <= 24 and full > w >= full * 0.6:  # абзацы не уменьшаются — переносятся
+                f.setPixelSize(max(1, int(n["size"] * w / full)))
+            if f.pixelSize() != lab.font().pixelSize():
+                lab.setFont(f)
+            if not n.get("wrap"):  # строка без переноса не влезает и так — с многоточием, целиком — в подсказке
+                one = " ".join(text.splitlines())
+                cut = QFontMetrics(f).elidedText(one, Qt.TextElideMode.ElideRight, max(1, round(w)))
+                lab.setText(cut if cut != one else text)
+                lab.setToolTip(text if cut != one else "")
         kids = n.get("children")
         if not kids or n["kind"] != "frame":
             return
         if n.get("scroll"):
             inner = self.inner.get(n["id"])
-            if n["scroll"] == "vertical":  # ширина содержимого — по области, длина — как в дизайне
-                if inner is not None:
-                    inner.setFixedSize(max(1, round(w)), inner.height())
-                self._place(kids, n["w"], n["content_h"], w, n["content_h"], n)
+            if n["scroll"] == "vertical":  # ширина содержимого — по области, длина — как в дизайне (+ рост текста)
+                grow = self._place(kids, n["w"], n["content_h"], w, n["content_h"], n)
+                if inner is not None:  # не ниже области (фон до низа) и не длиннее, чем нужно (без пустой прокрутки)
+                    inner.setFixedSize(max(1, round(w)), max(1, round(h), round(n.get("content_b", n["content_h"]) + grow)))
             else:
                 if inner is not None:
                     inner.setFixedSize(inner.width(), max(1, round(h)))
@@ -699,6 +839,7 @@ class Screen(QWidget):
 
     def make_text(self, n, parent):
         lab = QLabel(n["text"], parent)
+        lab.setProperty("full", n["text"])  # полный текст (на экране он может быть с многоточием)
         lab.setTextFormat(Qt.TextFormat.PlainText)  # «<b>» в тексте дизайна — просто символы
         font = QFont(n.get("font") or "Segoe UI")
         font.setPixelSize(max(1, round(n["size"])))
@@ -710,8 +851,11 @@ class Screen(QWidget):
         lab.setWordWrap(bool(n.get("wrap")))
         h = {"left": Qt.AlignmentFlag.AlignLeft, "center": Qt.AlignmentFlag.AlignHCenter,
              "right": Qt.AlignmentFlag.AlignRight}.get(n.get("align"), Qt.AlignmentFlag.AlignLeft)
-        lab.setAlignment(h | Qt.AlignmentFlag.AlignTop)
+        # строка без переноса — по центру своей рамки (с многоточием она остаётся на виду)
+        lab.setAlignment(h | (Qt.AlignmentFlag.AlignTop if n.get("wrap") else Qt.AlignmentFlag.AlignVCenter))
         self.texts[n["id"]] = lab
+        self.design_h[n["id"]] = float(lab.heightForWidth(max(1, round(n["w"]))) if n.get("wrap")
+                                       else lab.sizeHint().height())
         return lab
 
     def make_svg(self, n, parent):
@@ -788,8 +932,18 @@ class Screen(QWidget):
         edit.setMinimumHeight(32)
         edit.setFont(self._font(n))
         edit.setTextMargins(6, 0, 6, 0)
+        edit.setStyleSheet(self._input_css())
         lay.addWidget(edit)
         return box
+
+    def _input_css(self) -> str:
+        """Поле ввода Windows 11: тонкая рамка, линия снизу темнее, при вводе — линия цвета акцента."""
+        dark, acc = self.app.dark, self.app.accent
+        bg, stroke, line, fg = (("#2D2D2D", "#3A3A3A", "#9A9A9A", "#FFFFFF") if dark
+                                else ("#FFFFFF", "#E5E5E5", "#8A8A8A", "#1B1B1B"))
+        return (f"QLineEdit {{ background: {bg}; color: {fg}; border: 1px solid {stroke}; "
+                f"border-bottom: 1px solid {line}; border-radius: 4px; selection-background-color: {acc}; }} "
+                f"QLineEdit:focus {{ border-bottom: 2px solid {acc}; }}")
 
     def make_search(self, n, parent):
         e = QLineEdit(parent)
@@ -797,6 +951,16 @@ class Screen(QWidget):
         e.setClearButtonEnabled(True)
         e.setFont(self._font(n))
         e.setTextMargins(6, 0, 6, 0)
+        e.setStyleSheet(self._input_css())
+        pm = QPixmap(32, 32)  # значок лупы справа, как в поиске Windows 11
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor("#C5C5C5" if self.app.dark else "#5D5D5D"), 2.6))
+        p.drawEllipse(5, 5, 16, 16)
+        p.drawLine(19, 19, 27, 27)
+        p.end()
+        e.addAction(QIcon(pm), QLineEdit.ActionPosition.TrailingPosition)
         return e
 
     def make_checkbox(self, n, parent):
@@ -835,6 +999,15 @@ class Screen(QWidget):
             lay.addWidget(self._caption(n, n["texts"][0]))
         s = QSlider(Qt.Orientation.Horizontal)
         s.setValue(int(n.get("value", 50)))
+        s.setMinimumHeight(22)
+        dark, acc = self.app.dark, self.app.accent  # ползунок Windows 11: тонкая дорожка, круглый бегунок с точкой
+        track, ring = ("#8A8A8A", "#454545") if dark else ("#8A8A8A", "#FFFFFF")
+        s.setStyleSheet(f"QSlider::groove:horizontal {{ height: 4px; background: {track}; border-radius: 2px; }} "
+                        f"QSlider::sub-page:horizontal {{ background: {acc}; border-radius: 2px; }} "
+                        f"QSlider::handle:horizontal {{ width: 10px; height: 10px; margin: -8px 0; "
+                        f"border-radius: 10px; background: {acc}; border: 5px solid {ring}; }} "
+                        f"QSlider::handle:horizontal:hover {{ width: 12px; height: 12px; margin: -9px 0; "
+                        f"border-radius: 11px; border: 5px solid {ring}; }}")
         lay.addWidget(s)
         return box
 
@@ -925,7 +1098,7 @@ class App(QMainWindow):
         page = Screen(self, self.screens[sid])
         for (s_id, nid), text in self.text_state.items():
             if s_id == sid and nid in page.texts:
-                page.texts[nid].setText(self._fmt(text))
+                _put(page.texts[nid], self._fmt(text))
         self.pages.addWidget(page)
         self.pages.setCurrentWidget(page)
         if self.current is not None:
@@ -1028,7 +1201,8 @@ class App(QMainWindow):
                     self.overlays.append(a["node_id"])
             elif t == "set_text" and a.get("node_id") in page.texts:
                 self.text_state[(page.data["id"], a["node_id"])] = str(a.get("text", ""))
-                page.texts[a["node_id"]].setText(self._fmt(str(a.get("text", ""))))
+                _put(page.texts[a["node_id"]], self._fmt(str(a.get("text", ""))))
+                page.relayout()  # длинный текст — выше, то, что под ним, ниже
             elif t == "set_variable" and a.get("var_id") in self.vars:
                 v, mode, kind = a["var_id"], a.get("mode", "set"), self.types.get(a["var_id"], "text")
                 cur = self.vars[v]
