@@ -153,7 +153,7 @@ class _Screen:
         self.scroll_states = {n.id: ident(f"scroll {n.name}", False, self.used, "scroll")
                               for n, _, _ in tree.walk(s.nodes)
                               if n.is_frame and n.scroll != "none" and not n.paging and n.children}
-        # листание страницами: контейнер → состояние HorizontalPager; точки страниц сразу после него
+        # листание страницами: контейнер → состояние HorizontalPager (VerticalPager); точки страниц сразу после него
         self.pagers, self.dots_for = {}, {}
         for n, _, _ in tree.walk(s.nodes):
             if n.is_frame and n.paging and n.children:
@@ -600,19 +600,33 @@ class _Screen:
         return out
 
     def pager(self, n, parent, mode: str, ind: str) -> list[str]:
-        """Контейнер «листать страницами» → HorizontalPager: каждая страница — свой дочерний элемент."""
+        """Контейнер «листать страницами» → HorizontalPager (столбец — VerticalPager, как короткие видео):
+        каждая страница — свой дочерний элемент."""
         from app.core.document.model import Node
         var = self.pagers[n.id]
+        if mode == "abs":  # лента от края до края (короткие видео) — на любом телефоне во весь экран
+            px, py = (parent.x, parent.y) if parent is not None else (0, 0)
+            pw, ph = (parent.w, parent.h) if parent is not None else (self.s.width, self.s.height)
+            full_w = abs(n.x - px) <= 1 and abs(n.x + n.w - px - pw) <= 1
+            full_h = abs(n.y - py) <= 1 and abs(n.y + n.h - py - ph) <= 1
+            if full_w or full_h:
+                n = Node.from_dict(n.to_dict())  # копия: проект при выгрузке не меняется
+                n.constraint_h = "left_right" if full_w else n.constraint_h
+                n.constraint_v = "top_bottom" if full_h else n.constraint_v
         mod = self.modifier(n, parent, mode, ind + "    ")
         mod[0] = mod[0].lstrip()
-        out = [f"{ind}HorizontalPager(", f"{ind}    state = {var},", f"{ind}    modifier = " + "\n".join(mod) + ",",
+        vertical = n.scroll == "vertical"
+        pad = (f"top = {self.dp(n.pad_t)}, bottom = {self.dp(n.pad_b)}" if vertical
+               else f"start = {self.dp(n.pad_l)}, end = {self.dp(n.pad_r)}")
+        out = [f"{ind}{'VerticalPager' if vertical else 'HorizontalPager'}(", f"{ind}    state = {var},",
+               f"{ind}    modifier = " + "\n".join(mod) + ",",
                f"{ind}    pageSpacing = {self.dp(n.gap)},",
-               f"{ind}    contentPadding = PaddingValues(start = {self.dp(n.pad_l)}, end = {self.dp(n.pad_r)}),",
+               f"{ind}    contentPadding = PaddingValues({pad}),",
                f"{ind}) {{ page ->", f"{ind}    when (page) {{"]
         for i, c in enumerate(n.children):
             box = Node(type="frame", x=c.x, y=c.y, w=c.w, h=c.h)  # страница занимает всё место пейджера
             c = Node.from_dict(c.to_dict())  # копия: проект при выгрузке не меняется
-            c.constraint_h, c.constraint_v = "left_right", "top_bottom"  # на любом телефоне — во всю ширину
+            c.constraint_h, c.constraint_v = "left_right", "top_bottom"  # на любом телефоне — во всю страницу
             out.append(f"{ind}        {i} -> Box(Modifier.fillMaxSize()) {{")
             out += self.node(c, box, "abs", ind + "            ")
             out.append(f"{ind}        }}")
@@ -1191,6 +1205,7 @@ class AndroidProject:
             "androidx.compose.runtime.saveable.rememberSaveable",
             "kotlin.math.abs",
             "androidx.compose.ui.platform.LocalDensity", "androidx.compose.foundation.pager.HorizontalPager",
+            "androidx.compose.foundation.pager.VerticalPager",
             "androidx.compose.foundation.pager.rememberPagerState",
             "androidx.compose.foundation.lazy.LazyColumn", "androidx.compose.foundation.lazy.LazyRow",
             "androidx.compose.foundation.lazy.items",

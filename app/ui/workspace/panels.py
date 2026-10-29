@@ -505,8 +505,9 @@ class Inspector(QScrollArea):
         self.sticky.clicked.connect(self._commit_sticky)
         f.addRow(self.sticky)
         self.paging = QCheckBox("Листать страницами (с точками)")
-        self.paging.setToolTip("Горизонтальный ряд листается пальцем по одной странице; «Точки страниц» сразу после "
-                               "него показывают текущую. В Android — HorizontalPager")
+        self.paging.setToolTip("Ряд листается пальцем вбок, столбец — вверх-вниз (как короткие видео), по одной "
+                               "странице; «Точки страниц» сразу после него показывают текущую. В Android — "
+                               "HorizontalPager или VerticalPager")
         self.paging.clicked.connect(lambda v: self.editor.set_paging(self.editor.selected_nodes()[0].id, v))
         f.addRow(self.paging)
 
@@ -1302,10 +1303,10 @@ class Inspector(QScrollArea):
                 self.visible.setChecked(all(n.visible for n in nodes))
                 self.locked.setChecked(all(n.locked for n in nodes))
                 parent = tree.find(ed.screen(), n0.id)[1] if len(nodes) == 1 else None
-                in_scroll = parent is not None and parent.is_frame and parent.scroll == "vertical"
+                in_scroll = parent is not None and parent.is_frame and parent.scroll == "vertical" and not parent.paging
                 self._row_visible(self.sticky, in_scroll)
                 self.sticky.setChecked(n0.sticky)
-                pageable = len(nodes) == 1 and n0.is_frame and len(n0.children) > 1 and n0.layout != "vertical"
+                pageable = len(nodes) == 1 and n0.is_frame and len(n0.children) > 1
                 self._row_visible(self.paging, pageable)
                 self.paging.setChecked(n0.paging)
                 self._refresh_geometry()

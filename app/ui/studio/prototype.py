@@ -428,15 +428,17 @@ class PrototypePlayer(QWidget):
                         for c in sticky:  # поверх остального содержимого
                             n.children.remove(c)
                             n.children.append(c)
-                    if n.paging and n.scroll == "horizontal":
+                    if n.paging:
                         self._sync_dots(screen, n, off)
                 rec(n.children)
         rec(screen.nodes)
 
     def page_offsets(self, frame) -> list[float]:
-        """Положения страниц листаемого контейнера: начало каждого дочернего элемента."""
+        """Положения страниц листаемого контейнера: начало каждого дочернего элемента (по оси листания)."""
         src = tree.node_map(self.interp.screen()).get(frame.id) if self.interp.screen() else None
         base = src or frame
+        if base.scroll == "vertical":
+            return [max(0.0, c.y - base.y - base.pad_t) for c in base.children]
         return [max(0.0, c.x - base.x - base.pad_l) for c in base.children]
 
     def _sync_dots(self, screen, frame, off: float) -> None:
@@ -465,15 +467,23 @@ class PrototypePlayer(QWidget):
             d.radius = min(d.h / 2, d.w / 2)
             x += w + dots.gap
 
-    def snap_page(self, frame_id: str) -> None:
-        """После перетаскивания листаемый контейнер доводится до ближайшей страницы."""
+    def snap_page(self, frame_id: str, start: float | None = None) -> None:
+        """После перетаскивания листаемый контейнер доводится до ближайшей страницы; взмах от страницы
+        больше чем на пятую часть её размера перелистывает в его сторону, как на телефоне."""
         n = tree.node_map(self.screen).get(frame_id) if self.screen else None
         if n is None or not n.paging:
             return
         pages = self.page_offsets(n)
-        if pages:
-            cur = self.scroll.get(frame_id, 0.0)
-            self.scroll_to_offset(frame_id, min(pages, key=lambda v: abs(v - cur)))
+        if not pages:
+            return
+        cur = self.scroll.get(frame_id, 0.0)
+        i = min(range(len(pages)), key=lambda k: abs(pages[k] - cur))
+        if start is not None:
+            s = min(range(len(pages)), key=lambda k: abs(pages[k] - start))
+            size = n.h if n.scroll == "vertical" else n.w
+            if i == s and abs(cur - start) > size / 5:
+                i = max(0, min(len(pages) - 1, s + (1 if cur > start else -1)))
+        self.scroll_to_offset(frame_id, pages[i])
 
     def scroll_to_offset(self, frame_id: str, target: float, ms: float = 280.0) -> None:
         self.scroll_anims[frame_id] = (self.scroll.get(frame_id, 0.0), target, self.now, ms)
@@ -818,8 +828,8 @@ class PrototypePlayer(QWidget):
         pressed, self.pressed, self._press_state = self.pressed, None, None
         if self._dragging:
             self._dragging = False
-            if self._drag is not None and self._drag[2] == "horizontal":
-                self.snap_page(self._drag[0])
+            if self._drag is not None:
+                self.snap_page(self._drag[0], self._drag[1])  # листаемый — до страницы
             scrolled, self._drag = self._drag is not None, None
             d = p - start if start is not None else QPointF()
             u = self.spec.units(self.screen) if self.spec and self.screen else 1.0
@@ -904,6 +914,15 @@ class PrototypePlayer(QWidget):
         if not delta or self.screen is None:
             return
         tgt = self.scroll_target(p, "horizontal" if horizontal else "vertical")
+        n = tree.node_map(self.screen).get(tgt) if tgt else None
+        if n is not None and n.paging:  # колесо листает по одной странице
+            pages = self.page_offsets(n)
+            cur = self.scroll.get(tgt, 0.0)
+            i = min(range(len(pages)), key=lambda k: abs(pages[k] - cur)) if pages else 0
+            i = max(0, min(len(pages) - 1, i + (1 if delta < 0 else -1)))
+            if pages:
+                self.scroll_to_offset(tgt, pages[i])
+            return
         if tgt:
             step = WHEEL_DP * self.spec.units(self.screen) * delta / 120
             self.set_scroll(tgt, self.scroll.get(tgt, 0.0) - step)

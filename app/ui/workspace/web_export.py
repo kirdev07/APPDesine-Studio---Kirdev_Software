@@ -160,6 +160,13 @@ def _dots_of(screen: Screen, frame: Node) -> Node | None:
     return d if d is not None and d.children else None
 
 
+def _pages(f: Node) -> list[float]:
+    """Начала страниц листаемого контейнера по оси листания."""
+    if f.scroll == "vertical":
+        return [round(max(0.0, c.y - f.y - f.pad_t), 2) for c in f.children]
+    return [round(max(0.0, c.x - f.x - f.pad_l), 2) for c in f.children]
+
+
 def _copy(nodes, cleared: set, hidden: set) -> list[Node]:
     out = [Node.from_dict(n.to_dict()) for n in nodes]
     for n, _, _ in tree.walk(out):
@@ -296,7 +303,7 @@ def _state_view(b: _Builder, screen: Screen, edges: dict, scale: float) -> dict:
     nodes_by = tree.node_map(screen)
     dots: dict[str, tuple[Node, Node]] = {}        # id точек → (контейнер, точки)
     for f in scrollers.values():
-        if f.paging and f.scroll == "horizontal":
+        if f.paging:
             d = _dots_of(screen, f)
             if d is not None:
                 dots[d.id] = (f, d)
@@ -317,7 +324,7 @@ def _state_view(b: _Builder, screen: Screen, edges: dict, scale: float) -> dict:
             out.append({"f": f.id, "x": round(d.children[0].x - ox, 2), "y": round(active.y - oy, 2),
                         "h": round(active.h, 2), "gap": d.gap, "aw": active.w, "ow": other.w,
                         "ac": _css(active.fill), "oc": _css(other.fill), "n": len(d.children),
-                        "pages": [round(max(0.0, c.x - base.x - base.pad_l), 2) for c in base.children]})
+                        "pages": _pages(base), "v": base.scroll == "vertical"})
         return out
 
     def layer(key: str, nodes: list[Node], rect, ox, oy, root: bool) -> dict:
@@ -343,8 +350,8 @@ def _state_view(b: _Builder, screen: Screen, edges: dict, scale: float) -> dict:
         lay.update({"id": f.id, "ax": "v" if f.scroll == "vertical" else "h", "x": round(f.x - px, 2),
                     "y": round(f.y - py, 2), "w": round(f.w, 2), "h": round(f.h, 2), "r": round(f.radius, 2),
                     "cw": round(cw, 2), "ch": round(ch, 2)})
-        if f.paging and f.scroll == "horizontal":
-            lay["snap"] = [round(max(0.0, c.x - f.x - f.pad_l), 2) for c in f.children]
+        if f.paging:
+            lay["snap"] = _pages(f)
         st = []
         for c in stickies[f.id]:
             key = "sticky:" + c.id
@@ -473,7 +480,8 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--ink);
 .sv { overflow-y:auto; touch-action:pan-y; }
 .sh { overflow-x:auto; touch-action:pan-x; }
 .sh.snap { scroll-snap-type:x mandatory; }
-.snapm { position:absolute; top:0; height:1px; scroll-snap-align:start; pointer-events:none; }
+.sv.snap { scroll-snap-type:y mandatory; }
+.snapm { position:absolute; scroll-snap-align:start; scroll-snap-stop:always; pointer-events:none; }
 .content { position:relative; }
 .sticky { position:absolute; z-index:2; will-change:transform; }
 .hs { position:absolute; cursor:pointer; border-radius:calc(var(--u, 1px) * 8); transition:background .15s; }
@@ -537,7 +545,9 @@ function scroller(S, dotsOut) {
   el.appendChild(c);
   layer(S, c, S.cw, S.ch, dotsOut);
   (S.snap || []).forEach(function (o) { var m = document.createElement("div"); m.className = "snapm";
-    m.style.left = px(o); m.style.width = px(S.w); c.appendChild(m); });
+    if (S.ax === "v") { m.style.left = "0"; m.style.width = "1px"; m.style.top = px(o); m.style.height = px(S.h); }
+    else { m.style.top = "0"; m.style.height = "1px"; m.style.left = px(o); m.style.width = px(S.w); }
+    c.appendChild(m); });
   el._snap = S.snap || null;
   var st = S.sticky.map(function (s) {
     var d = document.createElement("div"); d.className = "sticky"; box(d, s.x, s.y, s.w, s.h);
@@ -549,7 +559,7 @@ function scroller(S, dotsOut) {
   return el;
 }
 function syncDots(d, el, sc) {
-  var off = sc.scrollLeft, best = 0;
+  var off = d.v ? sc.scrollTop : sc.scrollLeft, best = 0;
   d.pages.forEach(function (p, i) { if (Math.abs(p - off) < Math.abs(d.pages[best] - off)) best = i; });
   for (var k = 0; k < el.children.length; k++) { var on = k === best, i = el.children[k];
     i.style.width = px(on ? d.aw : d.ow); i.style.background = on ? d.ac : d.oc; }
@@ -629,8 +639,9 @@ dev.addEventListener("pointermove", function (ev) {
   var dx = ev.clientX - P.x, dy = ev.clientY - P.y;
   if (!P.moved && Math.hypot(dx, dy) > 8) { P.moved = true; clearTimeout(P.lt); if (P.hs) P.hs.classList.remove("down"); }
   if (P.moved && P.mouse && P.sc) {
+    P.sc.style.scrollSnapType = "none";
     if (P.sc.classList.contains("sv")) P.sc.scrollTop = P.st - dy / scale;
-    else { P.sc.style.scrollSnapType = "none"; P.sc.scrollLeft = P.sl - dx / scale; }
+    else P.sc.scrollLeft = P.sl - dx / scale;
   }
 });
 function end(ev, cancel) {
@@ -638,10 +649,11 @@ function end(ev, cancel) {
   var p = P; P = null; clearTimeout(p.lt);
   if (p.hs) p.hs.classList.remove("down");
   if (p.mouse && p.sc && p.sc._snap && p.moved) {
-    var off = p.sc.scrollLeft, v = (ev.clientX - p.x) / scale, best = p.sc._snap[0];
-    var target = off - v * 0.3;
+    var vert = p.sc.classList.contains("sv");
+    var off = vert ? p.sc.scrollTop : p.sc.scrollLeft, best = p.sc._snap[0];
+    var v = (vert ? ev.clientY - p.y : ev.clientX - p.x) / scale, target = off - v * 0.3;
     p.sc._snap.forEach(function (o) { if (Math.abs(o - target) < Math.abs(best - target)) best = o; });
-    p.sc.scrollTo({ left:best, behavior:"smooth" });
+    p.sc.scrollTo(vert ? { top:best, behavior:"smooth" } : { left:best, behavior:"smooth" });
     setTimeout(function () { p.sc.style.scrollSnapType = ""; }, 400);
   }
   if (cancel || p.long) return;

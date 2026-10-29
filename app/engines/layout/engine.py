@@ -421,6 +421,8 @@ class LayoutEngine:
                 else:
                     cross.append(self._intrinsic_h(c, cw))
             inner_main, inner_cross, start_main, start_cross = iw, ih, ix, iy
+        if f.paging and not hug_parent:  # листание страницами: каждая страница — во всю ширину (высоту) контейнера
+            main = [inner_main] * n
         total = sum(main) + gaps
         gap = f.gap
         if f.main_align == "space_between" and n > 1:

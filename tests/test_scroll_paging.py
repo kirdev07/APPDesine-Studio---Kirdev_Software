@@ -1,6 +1,7 @@
 """1.21: прототип до конца — липкие элементы в прокрутке, «Прокрутить к элементу», листание страницами с точками."""
 
 import pytest
+from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.context import AppContext
@@ -122,3 +123,93 @@ def test_paging_with_dots(win):
                   if k.endswith("Screen.kt"))
     assert "HorizontalPager(" in src and "rememberPagerState { 3 }" in src and ".currentPage == i" in src
     assert "horizontalScroll(rememberScrollState())" not in src.split("HorizontalPager(")[1].split(") { page ->")[0]
+
+
+def test_vertical_paging_short_videos(win):
+    """1.35: столбец листается вверх-вниз по одной странице — как короткие видео (VerticalPager)."""
+    page, ed = win.project_page, win.project_page.editor
+    s = ed.add_template_screen("onboarding")
+    sid = s.id
+
+    def add(doc):
+        sc = doc.screen(sid)
+        clips = [Node(type="frame", name=f"Видео {k}", w=sc.width, h=300, fill=col, sizing_h="fill")
+                 for k, col in enumerate(("#FF0000", "#00FF00", "#0000FF"))]
+        sc.nodes.append(Node(type="frame", name="Лента видео", layout="vertical", x=0, y=0, w=sc.width,
+                             h=sc.height, pad_t=0, pad_b=0, fill="#000000", children=clips))
+    assert ed.patch("лента", add)
+    feed = next(n for n in ed.screen().nodes if n.name == "Лента видео")
+    ed.select([feed.id])
+    page.inspector.refresh()
+    assert not page.inspector.paging.isHidden()                          # столбец тоже можно листать
+    page.inspector.paging.click()
+    pg = tree.find(ed.screen(), feed.id)[0]
+    assert pg.paging and pg.scroll == "vertical" and pg.clip
+    assert all(c.h == pytest.approx(pg.h) for c in pg.children)          # каждое видео — на весь экран
+    clip = pg.children[0]
+    ed.select([clip.id])
+    page.inspector.refresh()
+    assert page.inspector.sticky.isHidden()                              # в листалке липких нет
+    from app.ui.studio.prototype import PrototypePlayer
+    p = PrototypePlayer(ed, start_screen_id=ed.screen().id)
+    assert p.page_offsets(pg) == pytest.approx([0, pg.h, 2 * pg.h], abs=1)
+    p.set_scroll(feed.id, pg.h * 0.7)                                    # протянули чуть дальше середины…
+    p.snap_page(feed.id)
+    p.advance(400)
+    assert p.scroll[feed.id] == pytest.approx(pg.h, abs=2)               # …перелистнулось на второе видео
+    p.wheel(QPointF(pg.w / 2, pg.h / 2), -120)                           # колесо — ещё на одну страницу
+    p.advance(400)
+    assert p.scroll[feed.id] == pytest.approx(2 * pg.h, abs=2)
+    p.wheel(QPointF(pg.w / 2, pg.h / 2), -120)                           # дальше последней — некуда
+    p.advance(400)
+    assert p.scroll[feed.id] == pytest.approx(2 * pg.h, abs=2)
+    src = next(v.decode() for k, v in build_package(ed.doc, ExportOptions()).files.items()
+               if k.endswith("Screen.kt") and "Лента видео" in v.decode())
+    assert "VerticalPager(" in src and "rememberPagerState { 3 }" in src
+    assert "import androidx.compose.foundation.pager.VerticalPager" in src
+    head = src.split("VerticalPager(")[1].split(") { page ->")[0]
+    assert "PaddingValues(top = " in head and "verticalScroll(" not in head
+    from app.ui.workspace.web_export import build_html
+    html = build_html(ed.doc, ed.engine, ed.artboard_color(), sid)[0]
+    assert '"snap": [0.0, ' in html or '"snap":[0.0,' in html
+    assert ".sv.snap { scroll-snap-type:y mandatory; }" in html
+
+
+def test_vertical_paging_follows_size_fullscreen_and_swipe(win):
+    """1.35 (замечания тестировщика): страницы следуют за высотой ленты, лента во весь экран в Android,
+    короткий взмах перелистывает."""
+    page, ed = win.project_page, win.project_page.editor
+    s = ed.add_template_screen("onboarding")
+    sid = s.id
+
+    def add(doc):
+        sc = doc.screen(sid)
+        clips = [Node(type="frame", name=f"Видео {k}", w=sc.width, h=300, fill="#FF0000", sizing_h="fill")
+                 for k in range(3)]
+        sc.nodes.append(Node(type="frame", name="Лента видео", layout="vertical", x=0, y=0, w=sc.width,
+                             h=sc.height, fill="#000000", children=clips))
+    assert ed.patch("лента", add)
+    feed = next(n for n in ed.screen().nodes if n.name == "Лента видео")
+    assert ed.set_paging(feed.id, True)
+    new_h = feed.h * 0.75
+
+    def shrink(doc):
+        tree.find(doc.screen(sid), feed.id)[0].h = new_h
+    assert ed.patch("ниже", shrink)
+    pg = tree.find(ed.screen(), feed.id)[0]
+    assert all(c.h == pytest.approx(new_h, abs=1) for c in pg.children)  # страницы — по новой высоте
+    from app.ui.studio.prototype import PrototypePlayer
+    p = PrototypePlayer(ed, start_screen_id=ed.screen().id)
+    p.set_scroll(feed.id, new_h * 0.3)                                    # взмах на 30% от первой страницы
+    p.snap_page(feed.id, 0.0)
+    p.advance(400)
+    assert p.scroll[feed.id] == pytest.approx(new_h, abs=2)              # перелистнулось вперёд
+    p.set_scroll(feed.id, new_h * 0.9)                                    # чуть назад от второй
+    p.snap_page(feed.id, new_h)
+    p.advance(400)
+    assert p.scroll[feed.id] == pytest.approx(new_h, abs=2)              # 10% — остаётся
+    src = next(v.decode() for k, v in build_package(ed.doc, ExportOptions()).files.items()
+               if k.endswith("Screen.kt") and "Лента видео" in v.decode())
+    head = src.split("VerticalPager(")[1].split(") { page ->")[0]
+    assert "fillMaxWidth()" in head or "fillMaxSize()" in head
+    assert ".width(" not in head                                           # не жёсткая ширина телефона

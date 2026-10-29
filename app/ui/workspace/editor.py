@@ -1222,8 +1222,8 @@ class Editor(QObject):
 
     # ---------- прокрутка: листание страницами ----------
     def set_paging(self, frame_id: str, on: bool) -> bool:
-        """Горизонтальный контейнер листается страницами: прокрутка по горизонтали, каждая страница — на всю
-        ширину контейнера. Одна запись истории."""
+        """Контейнер листается страницами: ряд — вбок, столбец — вверх-вниз (как короткие видео); каждая
+        страница — на всю ширину (высоту) контейнера. Одна запись истории."""
         s = self.screen()
         f = tree.find(s, frame_id)[0] if s else None
         if f is None or not f.is_frame:
@@ -1233,7 +1233,12 @@ class Editor(QObject):
         def mutate(doc):
             fr = tree.find(doc.screen(sid), frame_id)[0]
             fr.paging = on
-            if on:
+            if on and fr.layout == "vertical":  # столбец — листание вверх-вниз
+                fr.scroll, fr.clip = "vertical", True
+                inner = fr.h - fr.pad_t - fr.pad_b
+                for c in fr.children:
+                    c.sizing_v, c.h = "fixed", inner
+            elif on:
                 fr.scroll, fr.clip = "horizontal", True
                 if fr.layout == "none":
                     fr.layout = "horizontal"
