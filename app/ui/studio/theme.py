@@ -83,8 +83,13 @@ class ThemeDialog(QDialog):
         root = QHBoxLayout(self)
         left = QVBoxLayout()
         left.addWidget(label("Готовые темы", "H2"))
+        # проект только для Windows: без настроек Android (поколение Material, тема телефона, цвета обоев)
+        self.android = "android" in editor.doc.meta.platforms or any(s.platform == "android"
+                                                                     for s in editor.doc.screens)
         left.addWidget(label("Щёлкните тему — все экраны перекрасятся по ролям цвета Material 3: свои цвета, "
-                             "не входящие в схему, останутся.", "Muted", wrap=True))
+                             "не входящие в схему, останутся." if self.android else
+                             "Щёлкните тему — экраны Windows перекрасятся: цвет акцента, светлое или тёмное окно, "
+                             "шрифт; свои цвета останутся.", "Muted", wrap=True))
         self.presets = QListWidget()
         self.presets.setViewMode(QListWidget.ViewMode.IconMode)
         self.presets.setIconSize(SAMPLE)
@@ -130,14 +135,18 @@ class ThemeDialog(QDialog):
         self.material.setToolTip("Вид компонентов: Material 1 и 2 — малые скругления, кнопки заглавными, цветная "
                                  "шапка; Material 3 — тональные цвета; Expressive — крупные выразительные формы")
         form.addRow("Поколение", self.material)
+        form.setRowVisible(self.material, self.android)
         right.addLayout(form)
-        right.addWidget(label("Готовое Android-приложение", "H2"))
+        android_head = label("Готовое Android-приложение", "H2")
+        right.addWidget(android_head)
         self.follow = QCheckBox("Светлая или тёмная — как в телефоне")
         self.follow.setToolTip("Приложение переключается вместе с темой телефона; иначе — всегда как в дизайне")
         self.dynamic = QCheckBox("Цвета из обоев телефона (Android 12+)")
         self.dynamic.setToolTip("Material You: на Android 12 и новее цвета берутся из обоев, на старых — ваши")
         right.addWidget(self.follow)
         right.addWidget(self.dynamic)
+        for w in (android_head, self.follow, self.dynamic):
+            w.setVisible(self.android)
         right.addWidget(label("Текущий экран: светлая и тёмная версии", "H2"))
         prev = QHBoxLayout()
         self.light_view, self.dark_view = QLabel(), QLabel()

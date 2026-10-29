@@ -96,7 +96,7 @@ def test_tabs_show_their_panel(win):
     vis = p.interp.state.visibility
     assert vis[p2.id] and not vis[p1.id]
     src = _screen_src(ed, s.id)
-    assert src.count("by remember { mutableStateOf(") >= 3          # видимость панелей + вкладка
+    assert src.count("by rememberSaveable { mutableStateOf(") >= 3          # видимость панелей + вкладка
     ed.select([tabs.id])
     page.inspector.refresh()
     assert not page.inspector.sec_switch.isHidden() and page.inspector.switch_combos[1].currentData() == p2.id

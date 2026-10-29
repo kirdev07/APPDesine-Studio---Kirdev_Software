@@ -104,6 +104,9 @@ def win_map(old: Appearance, new: Appearance) -> dict[str, str]:
     return out
 
 
+ABSOLUTE = ("#FFFFFF", "#000000")
+
+
 def restyle_node(n, cmap: dict[str, str], factor: float, old_font: str, new_font: str,
                  exact: dict[str, str] | None = None) -> None:
     for prop in ("fill", "stroke", "text_color", "fill2"):
@@ -111,6 +114,10 @@ def restyle_node(n, cmap: dict[str, str], factor: float, old_font: str, new_font
         # окна Windows: фон и рамки — по палитре Fluent (значки и тексты — по ролям, белая галочка остаётся белой)
         if exact and prop in ("fill", "stroke") and n.type not in ("vector", "text") and v and v.upper() in exact:
             setattr(n, prop, exact[v.upper()])
+            continue
+        # чисто белый и чисто чёрный текст и значки — свои цвета (подписи на фото и видео), а не роль темы:
+        # иначе «тёмная → светлая → тёмная» делала белые подписи почти чёрными
+        if (n.type in ("vector", "text") or prop == "text_color") and v and v[:7].upper() in ABSOLUTE:
             continue
         setattr(n, prop, _map(cmap, v))
     if n.radius > 0 and factor != 1.0:

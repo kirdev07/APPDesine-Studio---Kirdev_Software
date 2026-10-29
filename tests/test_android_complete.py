@@ -137,7 +137,9 @@ def test_strings_resources_escaping_and_a11y(doc):
                                         actions=[{"type": "set_visible", "node_id": price.id, "mode": "toggle"}]))
     files = build_package(doc, ExportOptions()).files
     src, _ = _screen_src(files, doc)
-    assert 'onClickLabel = "Открыть заказ"' in src and '"Rectangle 1"' not in src
+    from tests.conftest import inline_strings
+    assert 'onClickLabel = stringResource(R.string.' in src                 # 1.34: подпись TalkBack — ресурс
+    assert 'onClickLabel = "Открыть заказ"' in inline_strings(src, files) and '"Rectangle 1"' not in src
     strings = files[f"{ROOT}/app/src/main/res/values/strings.xml"].decode()
     assert ">Открыть заказ<" in strings and "stringResource(R.string." in src
     assert src.count("heading()") == 1                                            # «Мои заказы» — да, цена — нет

@@ -75,7 +75,9 @@ def _label(n) -> dict:
 def _node(n, parent, assets: dict) -> dict | None:
     px, py = (parent.x, parent.y) if parent is not None else (0.0, 0.0)
     d = {"id": n.id, "name": n.name, "x": round(n.x - px, 2), "y": round(n.y - py, 2), "w": round(n.w, 2),
-         "h": round(n.h, 2), "visible": n.visible, "opacity": n.opacity}
+         "h": round(n.h, 2), "visible": n.visible, "opacity": n.opacity,
+         # растягиваемое окно: привязки к краям родителя и размер в раскладке (заполнить / фиксированный)
+         "ch": n.constraint_h, "cv": n.constraint_v, "sh": n.sizing_h, "sv": n.sizing_v}
     if n.is_group:
         d.update(kind="group", x=0, y=0, w=0, h=0, children=[c for c in (_node(c, parent, assets) for c in n.children)
                                                               if c])
@@ -108,6 +110,8 @@ def _node(n, parent, assets: dict) -> dict | None:
         d.update(kind="image", src=f"assets/{name}" if name else "", fit=n.fit)
         return d
     d["kind"] = "frame"
+    if n.is_frame:
+        d.update(layout=n.layout if n.auto_layout else "none", main=n.main_align, cross=n.cross_align)
     if n.is_frame and n.scroll != "none" and n.children:
         leaves = [c for c, _, _ in tree.walk(n.children) if not c.is_group]
         d["scroll"] = n.scroll
@@ -118,7 +122,67 @@ def _node(n, parent, assets: dict) -> dict | None:
     return d
 
 
-TRIGGERS = ("tap", "screen_open")  # остальные (двойное нажатие, удержание, наведение) — пока только в прототипе
+# события, которые работают в приложении: нажатие, двойное нажатие, удержание, наведение мышью, свайп мышью
+# (протянуть дальше 48 пикселей), изменение текста в поле и открытие экрана
+def _overlap(a0: float, a1: float, b0: float, b1: float) -> bool:
+    return min(a1, b1) - max(a0, b0) > 1
+
+
+def anchor(nodes: list[dict], pw: float, ph: float, free: bool = True) -> None:
+    """Привязки по умолчанию («слева», «сверху») уточняются по месту в дизайне, чтобы окно растягивалось
+    осмысленно: элемент во всю ширину родителя тянется, прижатый к правому краю — остаётся у края
+    (узкий) или тянется (широкий); так же по высоте. Область между соседями (переписка между шапкой и полем
+    ввода, лента между меню и правой колонкой) тянется до соседа, прижатого к краю. Заданные в дизайне
+    привязки не меняются."""
+    flat = []
+    for n in nodes:  # дети группы лежат в том же родителе
+        if n["kind"] == "group":
+            flat += [c for c in _flat_dicts(n.get("children", []))]
+        else:
+            flat.append(n)
+    loose_h = [n for n in flat if n.get("ch", "left") == "left"] if free else []
+    loose_v = [n for n in flat if n.get("cv", "top") == "top"] if free else []
+    for n in loose_h:
+        left, right = n["x"] <= 1, abs(n["x"] + n["w"] - pw) <= 1
+        if left and right:
+            n["ch"] = "left_right"
+        elif right:
+            n["ch"] = "right" if n["w"] < pw / 2 else "left_right"
+    for n in loose_v:
+        top, bottom = n["y"] <= 1, abs(n["y"] + n["h"] - ph) <= 1
+        if top and bottom:
+            n["cv"] = "top_bottom"
+        elif bottom:
+            n["cv"] = "bottom" if n["h"] < ph / 2 else "top_bottom"
+    for n in loose_h:  # упирается справа в узкий элемент у правого края — тянется до него
+        if n.get("ch", "left") == "left" and any(
+                s is not n and s.get("ch") == "right" and 0 <= s["x"] - (n["x"] + n["w"]) <= GAP
+                and _overlap(n["y"], n["y"] + n["h"], s["y"], s["y"] + s["h"]) for s in flat):
+            n["ch"] = "left_right"
+    for n in loose_v:  # упирается снизу в элемент у нижнего края — тянется до него
+        if n.get("cv", "top") == "top" and any(
+                s is not n and s.get("cv") == "bottom" and 0 <= s["y"] - (n["y"] + n["h"]) <= GAP
+                and _overlap(n["x"], n["x"] + n["w"], s["x"], s["x"] + s["w"]) for s in flat):
+            n["cv"] = "top_bottom"
+    for n in flat:
+        if n.get("children"):
+            cw = n["w"] if n.get("scroll") != "horizontal" else n.get("content_w", n["w"])
+            chh = n["h"] if n.get("scroll") != "vertical" else n.get("content_h", n["h"])
+            anchor(n["children"], cw, chh, n.get("layout", "none") == "none")
+
+
+GAP = 32  # до соседа у края не дальше этого — область тянется до него
+
+
+def _flat_dicts(nodes: list[dict]) -> list[dict]:
+    out = []
+    for n in nodes:
+        out += _flat_dicts(n.get("children", [])) if n["kind"] == "group" else [n]
+    return out
+
+
+TRIGGERS = ("tap", "double_tap", "long_press", "hover_enter", "hover_leave", "swipe_left", "swipe_right", "swipe_up",
+            "swipe_down", "text_changed", "screen_open")
 
 
 def build_ui(doc: ProjectDocument, screens: list[Screen], assets: dict[str, str], fonts: list[str] = ()) -> dict:
@@ -127,11 +191,15 @@ def build_ui(doc: ProjectDocument, screens: list[Screen], assets: dict[str, str]
     theme = doc.meta.appearance.theme
     bg = {"light": "#F3F3F3", "dark": "#202020", "amoled": "#000000", "gray": "#2B2B2B"}.get(
         theme, ARTBOARD_COLORS.get(theme, "#202020"))
+    out_screens = []
+    for s in screens:
+        nodes = [x for x in (_node(n, None, assets) for n in s.nodes) if x]
+        anchor(nodes, s.width, s.height)
+        out_screens.append({"id": s.id, "name": s.name, "w": s.width, "h": s.height, "bg": bg, "nodes": nodes})
     return {
         "title": doc.meta.title, "start": screens[0].id if screens else "", "accent": doc.meta.appearance.accent,
         "dark": theme != "light", "fonts": list(fonts),
-        "screens": [{"id": s.id, "name": s.name, "w": s.width, "h": s.height, "bg": bg,
-                     "nodes": [x for x in (_node(n, None, assets) for n in s.nodes) if x]} for s in screens],
+        "screens": out_screens,
         "interactions": [{"screen": it.screen_id, "node": it.node_id, "trigger": it.trigger,
                           "condition": it.condition, "actions": it.actions}
                          for it in doc.interactions if it.screen_id in ids and it.trigger in TRIGGERS],
@@ -140,7 +208,7 @@ def build_ui(doc: ProjectDocument, screens: list[Screen], assets: dict[str, str]
 
 
 def skipped_triggers(doc: ProjectDocument, screens: list[Screen]) -> int:
-    """Сколько правил с другими событиями (не нажатие и не открытие экрана) в приложение не попало."""
+    """Сколько правил с событиями, которых в приложении нет, в него не попало."""
     ids = {s.id for s in screens if s.platform == "windows"}
     return sum(1 for it in doc.interactions if it.screen_id in ids and it.trigger not in TRIGGERS)
 
@@ -226,10 +294,10 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEvent, QObject, QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QByteArray, QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtSvgWidgets import QSvgWidget
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame,
+from PySide6.QtWidgets import (QAbstractButton, QAbstractSlider, QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame,
                                QGraphicsOpacityEffect, QLabel, QLineEdit, QMainWindow, QProgressBar, QPushButton,
                                QScrollArea, QSlider, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -360,16 +428,92 @@ class _Mark(QAbstractButton):
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
 
 
-class _Tap(QObject):
-    """Нажатие на виджет с правилом: действие выполняется, а сам виджет работает как обычно."""
+LONG_MS, SWIPE_PX = 500, 48
+MIN_SCALE = 0.7  # окно можно сузить до 70 % размера дизайна
 
-    def __init__(self, cb, parent):
-        super().__init__(parent)
-        self.cb = cb
+
+def _constrain(mode: str, pos: float, size: float, old: float, new: float) -> tuple[float, float]:
+    """Привязка к краям родителя, когда он стал размером new вместо old."""
+    if mode in ("right", "bottom"):
+        return pos + new - old, size
+    if mode in ("left_right", "top_bottom"):
+        return pos, max(0.0, size + new - old)
+    if mode == "center":
+        return pos + (new - old) / 2, size
+    if mode == "scale":
+        k = new / old if old else 1.0
+        return pos * k, size * k
+    return pos, size
+
+
+class _Scrim(QWidget):
+    """Затемнение под всплывающим окном: перекрывает экран, щелчок по нему закрывает окно."""
+
+    def __init__(self, page: QWidget, close):
+        super().__init__(page)
+        self.close_cb = close
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("background: rgba(0, 0, 0, 90);")
+        self.setGeometry(page.rect())
+        self.show()
+        self.raise_()
+
+    def mousePressEvent(self, e):
+        self.close_cb()
+
+
+class _Events(QObject):
+    """События мыши на виджете с правилами: нажатие, двойное нажатие, удержание, свайп, наведение.
+    Действие выполняется, а сам виджет работает как обычно (событие не перехватывается)."""
+
+    def __init__(self, fire, triggers: set, widget: QWidget):
+        super().__init__(widget)
+        self.fire, self.triggers, self.widget = fire, triggers, widget
+        self.start = None
+        self.seen = None  # событие, всплывшее от дочернего виджета к родителю, — не второй раз
+        self.long_done = False
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.setInterval(LONG_MS)
+        self.timer.timeout.connect(self._long)
+
+    def _long(self):
+        self.long_done = True
+        self.fire("long_press")
 
     def eventFilter(self, obj, e):
-        if e.type() == QEvent.Type.MouseButtonRelease and e.button() == Qt.MouseButton.LeftButton:
-            self.cb()
+        t = e.type()
+        if t in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick):
+            key = (t, e.timestamp())
+            if key == self.seen:
+                return False
+            self.seen = key
+        if t == QEvent.Type.Enter and obj is self.widget and "hover_enter" in self.triggers:
+            self.fire("hover_enter")
+        elif t == QEvent.Type.Leave and obj is self.widget and "hover_leave" in self.triggers:
+            self.fire("hover_leave")
+        elif t == QEvent.Type.MouseButtonPress and e.button() == Qt.MouseButton.LeftButton:
+            self.start, self.long_done = e.globalPosition(), False
+            if "long_press" in self.triggers:
+                self.timer.start()
+        elif t == QEvent.Type.MouseMove and self.start is not None:
+            d = e.globalPosition() - self.start
+            if max(abs(d.x()), abs(d.y())) > SWIPE_PX / 3:
+                self.timer.stop()  # палец (мышь) поехал — это не удержание
+        elif t == QEvent.Type.MouseButtonRelease and e.button() == Qt.MouseButton.LeftButton and self.start is not None:
+            self.timer.stop()
+            d = e.globalPosition() - self.start
+            self.start = None
+            if max(abs(d.x()), abs(d.y())) > SWIPE_PX:
+                way = ("swipe_right" if d.x() > 0 else "swipe_left") if abs(d.x()) >= abs(d.y()) else \
+                    ("swipe_down" if d.y() > 0 else "swipe_up")
+                if way in self.triggers:
+                    self.fire(way)
+            elif not self.long_done and "tap" in self.triggers and not isinstance(obj, QAbstractButton):
+                self.fire("tap")
+        elif t == QEvent.Type.MouseButtonDblClick and e.button() == Qt.MouseButton.LeftButton:
+            if "double_tap" in self.triggers:
+                self.fire("double_tap")
         return False
 
 
@@ -379,13 +523,94 @@ class Screen(QWidget):
         self.app, self.data = app, data
         self.byid: dict[str, list[QWidget]] = {}  # у группы — все её элементы
         self.texts: dict[str, QLabel] = {}
+        self.inner: dict[str, QWidget] = {}  # содержимое прокручиваемых областей
+        self.scrims: dict[str, QWidget] = {}  # затемнения под открытыми окнами
         self._seq = 0
-        self.setFixedSize(round(data["w"]), round(data["h"]))
+        self.resize(round(data["w"]), round(data["h"]))
+        self.setMinimumSize(round(data["w"] * MIN_SCALE), round(data["h"] * MIN_SCALE))
         self.setObjectName("screen")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)  # без этого фон экрана не рисуется
         self.setStyleSheet(f"#screen {{ background: {data['bg']}; }}")
         for n in data["nodes"]:
             self.build(n, self)
+
+    # ---------- растягиваемое окно ----------
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        for s in self.scrims.values():
+            s.setGeometry(self.rect())
+        self._place(self.data["nodes"], self.data["w"], self.data["h"], self.width(), self.height(), None)
+
+    @staticmethod
+    def _flat(nodes: list[dict]) -> list[dict]:
+        out = []
+        for n in nodes:  # дети группы лежат в том же родителе, что и группа
+            out += Screen._flat(n.get("children", [])) if n["kind"] == "group" else [n]
+        return out
+
+    def _place(self, nodes, ow, oh, nw, nh, box) -> None:
+        """Новое место элементов, когда родитель стал nw × nh вместо ow × oh: в раскладке-стеке растут элементы
+        «заполнить» (остальные сдвигаются за ними), в обычном контейнере — по привязкам к краям."""
+        flat = self._flat(nodes)
+        dw, dh = nw - ow, nh - oh
+        stack = box is not None and box.get("layout") in ("horizontal", "vertical")
+        if box is not None and box.get("layout") in ("grid", "wrap"):  # сетка: колонки шире / уже вместе с окном
+            for n in flat:
+                x, w = _constrain("scale", n["x"], n["w"], ow, nw)
+                self._set(n, x, n["y"], w, n["h"])
+            return
+        if not stack:
+            for n in flat:
+                x, w = _constrain(n.get("ch", "left"), n["x"], n["w"], ow, nw)
+                y, h = _constrain(n.get("cv", "top"), n["y"], n["h"], oh, nh)
+                self._set(n, x, y, w, h)
+            return
+        horiz = box["layout"] == "horizontal"
+        dmain, dcross = (dw, dh) if horiz else (dh, dw)
+        fills = {i for i, n in enumerate(flat) if n.get("sh" if horiz else "sv") == "fill"}
+        share, shift = (dmain / len(fills) if fills else 0.0), 0.0
+        for i, n in enumerate(flat):
+            mp, ms = (n["x"], n["w"]) if horiz else (n["y"], n["h"])
+            cp, cs = (n["y"], n["h"]) if horiz else (n["x"], n["w"])
+            if fills:
+                mp += shift
+                if i in fills:
+                    ms, shift = max(0.0, ms + share), shift + share
+            elif box.get("main") == "center":
+                mp += dmain / 2
+            elif box.get("main") == "end":
+                mp += dmain
+            elif box.get("main") == "space_between" and len(flat) > 1:
+                mp += dmain * i / (len(flat) - 1)
+            if n.get("sv" if horiz else "sh") == "fill" or box.get("cross") == "stretch":
+                cs = max(0.0, cs + dcross)
+            elif box.get("cross") == "center":
+                cp += dcross / 2
+            elif box.get("cross") == "end":
+                cp += dcross
+            if horiz:
+                self._set(n, mp, cp, ms, cs)
+            else:
+                self._set(n, cp, mp, cs, ms)
+
+    def _set(self, n, x, y, w, h) -> None:
+        for wd in self.byid.get(n["id"], [])[:1]:
+            wd.setGeometry(round(x), round(y), max(1, round(w)), max(1, round(h)))
+        kids = n.get("children")
+        if not kids or n["kind"] != "frame":
+            return
+        if n.get("scroll"):
+            inner = self.inner.get(n["id"])
+            if n["scroll"] == "vertical":  # ширина содержимого — по области, длина — как в дизайне
+                if inner is not None:
+                    inner.setFixedSize(max(1, round(w)), inner.height())
+                self._place(kids, n["w"], n["content_h"], w, n["content_h"], n)
+            else:
+                if inner is not None:
+                    inner.setFixedSize(inner.width(), max(1, round(h)))
+                self._place(kids, n["content_w"], n["h"], n["content_w"], h, n)
+            return
+        self._place(kids, n["w"], n["h"], w, h, n)
 
     def _name(self, w: QWidget) -> str:
         self._seq += 1  # имя для правила стиля — своё, а не id из дизайна (в нём могут быть точки и пробелы)
@@ -408,9 +633,10 @@ class Screen(QWidget):
             w.setVisible(n.get("visible", True))
             ws = [w]
         self.byid[n["id"]] = ws
-        if self.app.handles(self.data["id"], n["id"]):
+        triggers = self.app.handles(self.data["id"], n["id"])
+        if triggers:
             for w in ws:
-                self._on_tap(w, n["id"])
+                self._wire(w, n["id"], triggers)
         return ws
 
     def _opacity(self, w: QWidget, value: float) -> None:
@@ -421,18 +647,24 @@ class Screen(QWidget):
         eff.setOpacity(value)
         w.setGraphicsEffect(eff)
 
-    def _on_tap(self, w: QWidget, nid: str) -> None:
-        w.setCursor(Qt.CursorShape.PointingHandCursor)
-        cb = lambda: self.app.tap(self.data["id"], nid)  # noqa: E731
-        if isinstance(w, QAbstractButton):
-            w.clicked.connect(lambda _=False: cb())
-            return
-        f = _Tap(cb, w)
+    def _wire(self, w: QWidget, nid: str, triggers: set) -> None:
+        """Правила элемента: нажатие у кнопок — их сигнал clicked, остальное — фильтр событий мыши."""
+        sid = self.data["id"]
+        fire = lambda trig: self.app.fire(sid, nid, trig)  # noqa: E731
+        if triggers & {"tap", "double_tap", "long_press"}:
+            w.setCursor(Qt.CursorShape.PointingHandCursor)
+        if "text_changed" in triggers:
+            edit = w if hasattr(w, "textChanged") else w.findChild(QLineEdit)  # поле с подписью — внутри
+            if edit is not None:
+                edit.textChanged.connect(lambda *_: fire("text_changed"))
+        f = _Events(fire, triggers, w)
         for x in [w] + w.findChildren(QWidget):
-            if not isinstance(x, QAbstractButton):
-                x.installEventFilter(f)
-            else:
-                x.clicked.connect(lambda _=False: cb())
+            x.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+            if x is not w and isinstance(x, (QAbstractSlider, QLineEdit)):
+                continue  # перетаскивание ползунка и выделение текста — не свайп и не нажатие карточки
+            x.installEventFilter(f)
+            if isinstance(x, QAbstractButton) and "tap" in triggers:
+                x.clicked.connect(lambda _=False: fire("tap"))
 
     # ---------- элементы ----------
     def make_frame(self, n, parent):
@@ -445,12 +677,14 @@ class Screen(QWidget):
                                "QScrollBar:horizontal { height: 6px; background: transparent; } "
                                "QScrollBar::handle { background: rgba(128, 128, 128, 140); border-radius: 3px; } "
                                "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }")
-            area.viewport().setStyleSheet("background: transparent;")
+            area.viewport().setObjectName("vp")
+            area.viewport().setStyleSheet("#vp { background: transparent; }")
             inner = QFrame()
             inner.setStyleSheet(f"#{self._name(inner)} {{ {_style(n['style'])} }}")
             inner.setFixedSize(round(n["w"] if vertical else n["content_w"]),
                                round(n["content_h"] if vertical else n["h"]))
             area.setWidget(inner)
+            self.inner[n["id"]] = inner
             off, need = Qt.ScrollBarPolicy.ScrollBarAlwaysOff, Qt.ScrollBarPolicy.ScrollBarAsNeeded
             area.setHorizontalScrollBarPolicy(off if vertical else need)
             area.setVerticalScrollBarPolicy(need if vertical else off)
@@ -552,6 +786,8 @@ class Screen(QWidget):
         if n.get("texts") and "пароль" in n["texts"][0].lower():  # поле пароля — ввод скрыт
             edit.setEchoMode(QLineEdit.EchoMode.Password)
         edit.setMinimumHeight(32)
+        edit.setFont(self._font(n))
+        edit.setTextMargins(6, 0, 6, 0)
         lay.addWidget(edit)
         return box
 
@@ -559,6 +795,8 @@ class Screen(QWidget):
         e = QLineEdit(parent)
         e.setPlaceholderText(self._first(n, "Поиск"))
         e.setClearButtonEnabled(True)
+        e.setFont(self._font(n))
+        e.setTextMargins(6, 0, 6, 0)
         return e
 
     def make_checkbox(self, n, parent):
@@ -645,6 +883,7 @@ class App(QMainWindow):
         self.setWindowTitle(ui.get("title") or "Приложение")
         self.types = {v["id"]: v.get("type", "text") for v in ui.get("variables", [])}
         self.vars = {}
+        self.text_state: dict = {}  # (экран, элемент) → текст, заданный правилом: при возврате на экран тот же
         for v in ui.get("variables", []):
             try:
                 self.vars[v["id"]] = coerce(self.types[v["id"]], v["default"])
@@ -672,8 +911,10 @@ class App(QMainWindow):
                 f"QPushButton:hover {{ background: {hover_css}; }} "
                 f"QPushButton:pressed {{ background: {_css_color(fill)}; }}")
 
-    def handles(self, sid: str, nid: str) -> bool:
-        return any(i["screen"] == sid and i["node"] == nid and i["trigger"] == "tap" for i in self.ui["interactions"])
+    def handles(self, sid: str, nid: str) -> set:
+        """События, на которые у элемента есть правила."""
+        return {i["trigger"] for i in self.ui["interactions"] if i["screen"] == sid and i["node"] == nid
+                and i["trigger"] != "screen_open"}
 
     # ---------- переходы ----------
     def go(self, sid: str, remember: bool = True) -> None:
@@ -682,6 +923,9 @@ class App(QMainWindow):
         if remember and self.current is not None:
             self.stack.append(self.current.data["id"])
         page = Screen(self, self.screens[sid])
+        for (s_id, nid), text in self.text_state.items():
+            if s_id == sid and nid in page.texts:
+                page.texts[nid].setText(self._fmt(text))
         self.pages.addWidget(page)
         self.pages.setCurrentWidget(page)
         if self.current is not None:
@@ -689,7 +933,11 @@ class App(QMainWindow):
             self.current.deleteLater()
         self.current = page
         self.overlays = []
-        self.setFixedSize(page.size())
+        size = QSize(round(page.data["w"]), round(page.data["h"]))
+        if size != getattr(self, "_design", None):  # экран другого размера — окно по дизайну, иначе размер остаётся
+            self._design = size
+            self.resize(size)
+        self.setMinimumSize(page.minimumSize())
         self.depth += 1
         try:
             for it in self.ui["interactions"]:
@@ -711,8 +959,12 @@ class App(QMainWindow):
 
     def close_overlay(self) -> None:
         if self.overlays and self.current is not None:
-            for w in self.current.byid.get(self.overlays.pop(), []):
+            nid = self.overlays.pop()
+            for w in self.current.byid.get(nid, []):
                 w.setVisible(False)
+            scrim = self.current.scrims.pop(nid, None)
+            if scrim is not None:
+                scrim.deleteLater()
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key.Key_Escape:
@@ -722,10 +974,13 @@ class App(QMainWindow):
 
     # ---------- логика ----------
     def tap(self, sid: str, nid: str) -> None:
+        self.fire(sid, nid, "tap")
+
+    def fire(self, sid: str, nid: str, trigger: str) -> None:
         for it in list(self.ui["interactions"]):  # все правила элемента — по порядку, пока экран тот же
             if self.current is None or self.current.data["id"] != sid:
                 return
-            if it["screen"] == sid and it["node"] == nid and it["trigger"] == "tap":
+            if it["screen"] == sid and it["node"] == nid and it["trigger"] == trigger:
                 self.run(it)
 
     def _ok(self, cond) -> bool:
@@ -765,8 +1020,14 @@ class App(QMainWindow):
                                  False if mode == "hide" else not w.isVisible())
                     w.raise_()
                 if ws and t == "open_overlay":
+                    if a.get("scrim", True):  # затемнение: то, что под окном, не нажимается; щелчок — закрыть
+                        scrim = _Scrim(page, self.close_overlay)
+                        page.scrims[a["node_id"]] = scrim
+                        for w in ws:
+                            w.raise_()
                     self.overlays.append(a["node_id"])
             elif t == "set_text" and a.get("node_id") in page.texts:
+                self.text_state[(page.data["id"], a["node_id"])] = str(a.get("text", ""))
                 page.texts[a["node_id"]].setText(self._fmt(str(a.get("text", ""))))
             elif t == "set_variable" and a.get("var_id") in self.vars:
                 v, mode, kind = a["var_id"], a.get("mode", "set"), self.types.get(a["var_id"], "text")

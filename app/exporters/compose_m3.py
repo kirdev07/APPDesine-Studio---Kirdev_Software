@@ -84,11 +84,11 @@ class Material:
                 elif n.role in live.CHOICES:  # выбран пункт, выделенный в дизайне (меню на другом экране — свой)
                     init = str(live.selected(n))
                 self.state[n.id] = var
-                self.decls.append(f"    var {var} by remember {{ mutableStateOf({init}) }}")
+                self.decls.append(f"    var {var} by rememberSaveable {{ mutableStateOf({init}) }}")
                 if n.role == "m3.password_field":  # показать / скрыть пароль
                     show = gen.ident(f"show {n.name}")
                     self.state[n.id + ":show"] = show
-                    self.decls.append(f"    var {show} by remember {{ mutableStateOf(false) }}")
+                    self.decls.append(f"    var {show} by rememberSaveable {{ mutableStateOf(false) }}")
 
     def _field_kind(self, n) -> tuple[str, list[str]]:
         """Поле ввода по виду в дизайне: линия снизу — TextField (залитое; без заливки — прозрачное, Material 1),
@@ -133,6 +133,8 @@ class Material:
         return "\n".join(m)
 
     def taps(self, node_id: str, ind: str) -> list[str]:
+        if node_id in self.g.row_click:  # строка списка из данных: действие — своё у каждой строки
+            return [f"{ind}{self.g.row_click[node_id]}"]
         out, sets_state = [], False
         for it in self.g.its:
             if it.node_id == node_id and it.trigger == "tap":
@@ -146,10 +148,11 @@ class Material:
         return out
 
     def text(self, t) -> str:
-        return self.g.texts.get(t.id) or self.g.res_text(t.text)  # неизменный текст — строковый ресурс
+        # строка списка — текст из её данных; неизменный текст — строковый ресурс
+        return self.g.bound.get((t.id, "text")) or self.g.texts.get(t.id) or self.g.res_text(t.text)
 
     def icon(self, v, ind: str, size: int = 24) -> str:
-        args = [self.g.kstr(v.path), f"contentDescription = {self.g.kstr(v.name)}"]
+        args = [self.g.kstr(v.path), f"contentDescription = {self.g.res_text(v.name)}"]
         if size != 24:
             args.append(f"iconSize = {size}.dp")
         if v.vb_w != 24 or v.vb_h != 24:
@@ -203,6 +206,8 @@ class Material:
                     [f"{i2}}},"] + ico + [f"{i2}text = {{ Text({label}) }},", f"{i2}modifier = {M},", f"{ind})"])
         if r in ("m3.switch", "m3.checkbox"):
             ctl = "Switch" if r == "m3.switch" else "Checkbox"
+            if r == "m3.switch" and self.g.g.classic_switch:  # Material 1 / 2 — тонкая дорожка, бегунок с тенью
+                ctl = "ClassicSwitch"
             control = ([f"{i2}{ctl}(checked = {var}, onCheckedChange = {{", f"{i3}{var} = it"] +
                        self.taps(n.id, i3) + [f"{i2}}})"])
             txt = [f"{i2}Text({label}{', Modifier.weight(1f)' if r == 'm3.switch' else ''})"]
@@ -266,7 +271,7 @@ class Material:
                           f"{i2}trailingIcon = {{",
                           f"{i3}IconButton(onClick = {{ {show} = !{show} }}) {{",
                           f"{i3}    DesignIcon(if ({show}) {eye_off} else {eye}, contentDescription = "
-                          f"if ({show}) \"Скрыть пароль\" else \"Показать пароль\", evenOdd = true)",
+                          f"if ({show}) {self.g.res_text('Скрыть пароль')} else {self.g.res_text('Показать пароль')}, evenOdd = true)",
                           f"{i3}}}", f"{i2}}},", f"{i2}modifier = {M},", f"{ind})"]
         if r in ("m3.chip_suggestion", "m3.chip_input"):
             lbl = next((t for t in texts if t.name == "Подпись"), texts[0] if texts else None)

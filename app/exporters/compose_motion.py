@@ -4,8 +4,8 @@
   плавностями; действие «Запустить анимацию» запускает их, «Открытие экрана» — при показе экрана.
 - Тень уровня Material 3 → Modifier.shadow, градиент → Brush, размытие → Modifier.blur.
 - Переходы между экранами — в AppNavHost (AnimatedContent): затухание и сдвиги с длительностью и плавностью.
-Дорожки непрозрачности, положения, масштаба, поворота, размера, скругления, размера шрифта и цветов (заливка,
-цвет текста) — рабочий код; остальные (обводка) помечаются TODO.
+Дорожки непрозрачности, положения, масштаба, поворота, размера, скругления, размера шрифта, цветов (заливка —
+и первый цвет градиента, цвет текста, цвет обводки) и толщины обводки — рабочий код; неизвестные помечаются TODO.
 """
 
 from __future__ import annotations
@@ -15,9 +15,10 @@ import math
 from app.core.document import tree
 from app.core.document.model import ELEVATION_DP
 
-SUPPORTED = ("opacity", "x", "y", "scale", "rotation", "w", "h", "radius", "font_size", "fill", "text_color")
-COLORS = ("fill", "text_color")       # Animatable(Color)
-LENGTHS = ("w", "h", "radius", "font_size")  # в dp / sp
+SUPPORTED = ("opacity", "x", "y", "scale", "rotation", "w", "h", "radius", "font_size", "fill", "text_color",
+             "stroke", "stroke_width")
+COLORS = ("fill", "text_color", "stroke")       # Animatable(Color)
+LENGTHS = ("w", "h", "radius", "font_size", "stroke_width")  # в dp / sp
 
 
 def _kcolor(c: str) -> str:
@@ -63,7 +64,7 @@ class Motion:
                 n = m.get(tr.node_id)
                 if n is None or len(tr.keyframes) < 1:
                     continue
-                if tr.prop not in SUPPORTED or (tr.prop == "fill" and n.gradient not in ("", "none")):  # градиент
+                if tr.prop not in SUPPORTED:
                     self.todo.append(f"«{a.name}»: дорожка «{tr.prop}» элемента «{n.name}»")
                     continue
                 key = (n.id, tr.prop)
@@ -76,7 +77,7 @@ class Motion:
                                           f"{_kcolor(init)}) }}")
                     else:
                         init = {"opacity": n.opacity, "scale": n.scale, "rotation": n.rotation, "w": n.w / gen.k,
-                                "h": n.h / gen.k, "radius": n.radius / gen.k,
+                                "h": n.h / gen.k, "radius": n.radius / gen.k, "stroke_width": n.stroke_width / gen.k,
                                 "font_size": n.font_size / gen.k}.get(tr.prop, 0.0)
                         if a.id in opening:
                             init = self._value(n, tr.prop, tr.keyframes[0].value)
@@ -208,13 +209,14 @@ def stroke_draw(n, dp, kcolor, shape: str, ind: str) -> list[str]:
     return out + [f"{ind}}}"]
 
 
-def brush(n, kcolor) -> str | None:
-    """Градиент заливки → Brush (угол как в CSS: 180° — сверху вниз)."""
+def brush(n, kcolor, first: str | None = None) -> str | None:
+    """Градиент заливки → Brush (угол как в CSS: 180° — сверху вниз). first — код первого цвета вместо
+    заливки (анимация заливки меняет первый цвет градиента)."""
     if n.gradient == "none" or not n.fill or not n.fill2:
         return None
-    stops = [n.fill] + ([n.fill3] if n.fill3 else []) + [n.fill2]  # средний цвет — посередине
-    colors = f"listOf({', '.join(kcolor(c) for c in stops)})"
-    back = f"listOf({', '.join(kcolor(c) for c in reversed(stops))})"
+    stops = [first or kcolor(n.fill)] + ([kcolor(n.fill3)] if n.fill3 else []) + [kcolor(n.fill2)]
+    colors = f"listOf({', '.join(stops)})"
+    back = f"listOf({', '.join(reversed(stops))})"
     if n.gradient == "radial":
         return f"Brush.radialGradient({colors})"
     a = n.grad_angle % 360

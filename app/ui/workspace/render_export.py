@@ -56,6 +56,45 @@ def widget_previews(doc, screens: list[Screen]) -> dict[str, bytes]:
         buf.open(QIODevice.OpenModeFlag.WriteOnly)
         img.save(buf, "PNG")
         out[s.id] = bytes(ba.data())
+        out.update(widget_parts(doc, s))
+    return out
+
+
+def _png(img: QImage) -> bytes:
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    img.save(buf, "PNG")
+    return bytes(ba.data())
+
+
+def widget_parts(doc, s: Screen, scale: float = 2.0) -> dict[str, bytes]:
+    """Фигуры виджета, которые Glance не рисует (градиент, тень, обводка, овал), — картинкой без содержимого:
+    {«part:<id>»: PNG}. Рисуется только сама фигура в своих границах, дети остаются элементами Glance."""
+    import copy
+    from app.exporters.glance import PART_PREFIX, needs_backdrop
+    out = {}
+    for n, _parent, _depth in tree.walk(s.nodes):
+        if not needs_backdrop(n) or n.w < 1 or n.h < 1:
+            continue
+        alone = copy.deepcopy(n)
+        alone.children = []
+        alone.visible = True
+        single = Screen(name="part", platform=s.platform, width=s.width, height=s.height, nodes=[alone])
+        scene = QGraphicsScene()
+        build_scene(scene, single, "#00000000", asset_lookup(doc))
+        for item in scene.items():
+            if isinstance(item, ArtboardItem):
+                item.setVisible(False)
+        w, h = max(1, round(n.w * scale)), max(1, round(n.h * scale))
+        img = QImage(w, h, QImage.Format.Format_ARGB32)
+        img.fill(QColor(0, 0, 0, 0))
+        p = QPainter(img)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        scene.render(p, QRectF(0, 0, w, h), QRectF(n.x, n.y, n.w, n.h))
+        p.end()
+        out[PART_PREFIX + n.id] = _png(img)
     return out
 
 

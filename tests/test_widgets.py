@@ -58,7 +58,7 @@ def test_add_widgets_and_export_glance(win):
     assert len(kts) == len(WIDGETS)
     clock = next(v for k, v in kts.items() if "Chasy" in k)
     assert "class ChasyIPogodaWidget : GlanceAppWidget()" in clock and "provideContent" in clock
-    assert "actionStartActivity<MainActivity>()" in clock and 'Text("10:24"' in clock
+    assert "actionStartActivity<MainActivity>()" in clock and 'Text(context.getString(R.string.text_10_24)' in clock
     assert "ImageProvider(R.drawable." in clock and clock.count("{") == clock.count("}")
     manifest = files[f"{ROOT}/app/src/main/AndroidManifest.xml"].decode()
     assert manifest.count("<receiver") == len(WIDGETS) and "android.appwidget.provider" in manifest
@@ -71,7 +71,7 @@ def test_add_widgets_and_export_glance(win):
     assert "ChasyIPogoda" not in nav                                       # виджет — не экран приложения
     assert any(k.endswith("_icon_1.xml") for k in files)
     strings = files[f"{ROOT}/app/src/main/res/values/strings.xml"].decode()
-    assert "chasyipogoda_widget_description" in strings
+    assert "chasyipogoda_widget_description" in strings and '<string name="text_10_24">10:24</string>' in strings
 
 
 def test_widget_preview_image(win):

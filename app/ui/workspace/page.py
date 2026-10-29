@@ -820,6 +820,11 @@ class WorkspacePage(QMainWindow):
         self.a_reset_over.setEnabled(has_inst)
         self.a_paste.setEnabled(has_doc)
         self.a_select_all.setEnabled(has_doc)
+        for a in (self.a_theme, self.a_zoom_in, self.a_zoom_out, self.a_zoom_fit, self.a_zoom_100, self.a_run):
+            a.setEnabled(has_doc)  # без открытого проекта команды ничего не делают — неактивны
+        self.a_image.setEnabled(ed.screen() is not None)
+        self.a_copy_style.setEnabled(sel)
+        self.a_paste_style.setEnabled(sel)
 
     def _sync_tools(self) -> None:
         a = self.tool_actions.get(self.editor.tool)

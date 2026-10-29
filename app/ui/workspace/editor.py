@@ -589,8 +589,9 @@ class Editor(QObject):
         return out
 
     def link_nav_item(self, nav_id: str, index: int, screen_id: str) -> bool:
-        """Пункт нижнего меню ведёт на экран. На каждом назначенном экране — такое же меню, где выбран «свой» пункт,
-        и все пункты переходят на свои экраны. Меню, что уже было на экране, заменяется. Одна запись истории."""
+        """Пункт меню (нижнее меню Android или панель навигации Windows) ведёт на экран. На каждом назначенном
+        экране — такое же меню, где выбран «свой» пункт, и все пункты переходят на свои экраны. Меню, что уже было
+        на экране, заменяется. Одна запись истории."""
         from app.core.document.behavior import Interaction
         from app.engines.material.color import scheme
         from app.engines.preview import live
@@ -599,8 +600,9 @@ class Editor(QObject):
             return False
         nav = tree.node_map(s).get(nav_id)
         items = self.switch_items(nav_id)
-        if nav is None or nav.role != "m3.nav_bar" or not 0 <= index < len(items):
+        if nav is None or nav.role not in live.NAVS or not 0 <= index < len(items):
             return False
+        role = nav.role
         if screen_id and not any(x.id == screen_id for x in self.doc.screens):  # doc.screen() бросает исключение
             return False
         targets = self.nav_targets(nav_id)
@@ -610,9 +612,19 @@ class Editor(QObject):
         master = nav.to_dict()
         sid = s.id
         added: list[str] = []
+        replaced: list[str] = []
 
         def mutate(doc):
             added.clear()
+            replaced.clear()
+
+            def drop(old_menu, scr):  # правила старого меню (его пункты удалены) — убрать, чтобы не висели
+                gone = {d.id for d, _, _ in tree.walk([old_menu])}
+                doc.interactions = [x for x in doc.interactions if not (x.screen_id == scr.id and x.node_id in gone)]
+                old_labels = [d.text for d, _, _ in tree.walk([old_menu]) if d.type == "text"]
+                new_labels = [d.text for d, _, _ in tree.walk([nav]) if d.type == "text"]
+                if old_labels != new_labels:
+                    replaced.append(scr.name)
             for tid in dict.fromkeys(t for t in [sid, *targets] if t):
                 scr = doc.screen(tid)
                 if scr is None or scr.platform != s.platform:
@@ -620,13 +632,35 @@ class Editor(QObject):
                 if tid == sid:
                     copy = tree.find(scr, nav_id)[0]
                 else:
-                    old = next((n for n in scr.nodes if n.role == "m3.nav_bar"), None)
+                    old = next((n for n in scr.nodes if n.role == role), None)
                     copy = Node.from_dict(Editor._reid(master))
-                    copy.y = scr.height - copy.h
-                    if old is not None:  # меню на экране уже было — новое встаёт на его место
+                    if role == "win.navpane":  # панель Windows — слева, на той же высоте, что на исходном экране
+                        if old is not None:
+                            dx, dy = old.x - copy.x, old.y - copy.y
+                            for d, _, _ in tree.walk([copy]):
+                                d.x, d.y = d.x + dx, d.y + dy
+                            copy.h = old.h
+                            drop(old, scr)
+                            scr.nodes[scr.nodes.index(old)] = copy
+                        else:  # панели не было: содержимое рядом с ней сдвигается вправо
+                            copy.h = max(1.0, scr.height - copy.y)
+                            edge = copy.x + copy.w
+                            band = [n for n in scr.nodes if n.y + n.h > copy.y + 0.5]  # всё ниже шапки окна
+                            dx = max(0.0, edge - min((n.x for n in band), default=edge))
+                            for n in band:  # вся раскладка сдвигается целиком, колонки не налезают друг на друга
+                                for d, _, _ in tree.walk([n]):
+                                    d.x += dx
+                                if n.x + n.w > scr.width:  # то, что упёрлось в правый край, — уже
+                                    n.w = max(1.0, scr.width - n.x)
+                            scr.nodes.append(copy)
+                            added.append(scr.name)
+                    elif old is not None:  # меню на экране уже было — новое встаёт на его место
+                        copy.y = scr.height - copy.h
                         copy.x, copy.y, copy.w = old.x, old.y, old.w
+                        drop(old, scr)
                         scr.nodes[scr.nodes.index(old)] = copy
                     else:  # меню не было: всё, что у нижнего края, поднимается над ним, содержимое — короче
+                        copy.y = scr.height - copy.h
                         line = scr.height - copy.h
                         for n in scr.nodes:
                             if n.y >= line - 0.5 or (n.constraint_v == "bottom" and n.y + n.h > line + 0.5):
@@ -649,7 +683,13 @@ class Editor(QObject):
                             actions=[{"type": "navigate", "screen_id": target, "transition": "fade",
                                       "duration": 200, "easing": "ease_out"}]))
         ok = self.patch("Пункт меню → экран", mutate)
-        if ok and added:  # меню не было — оно встало внизу и может закрыть поле ввода или кнопки
+        if ok and replaced:
+            self.message.emit("Меню заменено этим: " + ", ".join(f"«{x}»" for x in replaced) +
+                              " — у прежнего были другие пункты, их переходы убраны")
+        if ok and added and role == "win.navpane":
+            self.message.emit("Панель навигации добавлена слева: " + ", ".join(f"«{x}»" for x in added) +
+                              " — содержимое сдвинуто вправо, проверьте экран")
+        elif ok and added:  # меню не было — оно встало внизу и может закрыть поле ввода или кнопки
             self.message.emit("Меню добавлено внизу: " + ", ".join(f"«{x}»" for x in added) +
                               " — нижние элементы подняты над ним, проверьте экран")
         return ok
@@ -675,7 +715,7 @@ class Editor(QObject):
             skip = set()
         inside = {d.id for d in tree.descendants(tree.node_map(s)[tabs_id])}
         return [n for n, _, _ in tree.walk(s.nodes) if n.is_frame and n.id != tabs_id and n.id not in skip
-                and n.id not in inside and n.role not in ("m3.nav_bar", "m3.top_app_bar")
+                and n.id not in inside and n.role not in ("m3.nav_bar", "m3.top_app_bar", "win.navpane")
                 and not n.role.startswith("m3.top_app_bar")]
 
     def link_tab_panel(self, tabs_id: str, index: int, panel_id: str) -> bool:

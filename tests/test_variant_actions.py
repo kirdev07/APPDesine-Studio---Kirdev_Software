@@ -98,7 +98,7 @@ def test_tap_menu_prototype_and_compose(win):
     f = build_package(ed.doc, ExportOptions()).files
     base = f"{ROOT}/app/src/main/java/{package_name(ed.doc.meta.title).replace('.', '/')}/ui/screens/"
     src = next(v.decode() for k, v in f.items() if k.startswith(base) and b"when (variant" in v)
-    assert 'by remember { mutableStateOf("Заливка") }' in src
+    assert 'by rememberSaveable { mutableStateOf("Заливка") }' in src
     assert '= when (variant' in src and '"Заливка" -> "Тональный"' in src and 'else -> "Заливка"' in src
     for comp in ("FilledTonalButton(", "OutlinedButton(", "TextButton("):
         assert comp in src

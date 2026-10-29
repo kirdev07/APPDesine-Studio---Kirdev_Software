@@ -32,8 +32,9 @@ class TextBlock:
 
     def __init__(self, text: str, font: QFont, size: float, width: float | None, line_h: float = 0.0,
                  max_lines: int = 0, align=Qt.AlignmentFlag.AlignLeft):
-        self.font, self.width = font, width
+        self.font, self.width, self.max_lines = font, width, max_lines
         src = text if text else " "
+        self.src = src
         self.layout = QTextLayout(src.replace("\n", "\u2028"), font)
         opt = QTextOption(align)
         opt.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere if width is not None
@@ -63,6 +64,11 @@ class TextBlock:
         self.height = len(self.lines) * self.step
 
     def draw(self, p, rect: QRectF, align) -> None:
+        if self.max_lines and self.elided is None and self.lines and \
+                self.lines[-1].naturalTextWidth() > rect.width() + 0.5:  # строка шире места — с многоточием, как в Android
+            last = self.lines[-1]
+            self.elided = QFontMetricsF(self.font).elidedText(
+                self.src[last.textStart():].replace("\n", " "), Qt.TextElideMode.ElideRight, max(1.0, rect.width()))
         for i, ln in enumerate(self.lines):
             if self.elided is not None and i == len(self.lines) - 1:
                 p.drawText(QRectF(rect.x(), rect.y() + ln.y(), rect.width(), ln.height()),

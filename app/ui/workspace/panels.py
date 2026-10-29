@@ -873,7 +873,7 @@ class Inspector(QScrollArea):
         nodes = ed.selected_nodes()
         n = nodes[0] if len(nodes) == 1 else None
         role = n.role if n is not None else ""
-        nav, tabs = role == "m3.nav_bar", role in ("m3.tabs", "m3.segmented")
+        nav, tabs = role in ("m3.nav_bar", "win.navpane"), role in ("m3.tabs", "m3.segmented")
         self.sec_switch.setVisible(nav or tabs)
         if not (nav or tabs):
             self._switch_key = None

@@ -384,6 +384,11 @@ class ExportPage(QWidget):
             buf.open(QIODevice.OpenModeFlag.WriteOnly)
             pm.save(buf, "PNG")
             out[s.id] = bytes(ba.data())
+        from app.exporters.glance import is_widget  # фигуры виджетов, которые Glance не рисует, — картинкой
+        from app.ui.workspace.render_export import widget_parts
+        for s in screens:
+            if is_widget(s):
+                out.update(widget_parts(self.main.doc, s))
         return out
 
     def _fill_files(self, pkg) -> None:
@@ -566,8 +571,8 @@ class ExportPage(QWidget):
             QMessageBox.warning(self, "Приложение Windows", f"Не удалось сохранить приложение: {exc}")
             return None
         skipped = windows_app.skipped_triggers(doc, screens)
-        note = (f"\nВ приложение попали нажатия и открытие экранов; правил с другими событиями (двойное нажатие, "
-                f"удержание, наведение): {skipped} — они работают только в прототипе.") if skipped else ""
+        note = (f"\nПравил с событиями, которых нет в приложении: {skipped} — они работают только "
+                f"в прототипе.") if skipped else ""
         self.steps.setText(f"✓ Приложение Windows сохранено: {target}\nЗапуск: pip install -r requirements.txt, "
                            f"затем python main.py (нужен Python 3.10+).{note}")
         return target

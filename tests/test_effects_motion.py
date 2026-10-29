@@ -112,8 +112,8 @@ def test_compose_effects_animations_and_transitions():
     for code in (".shadow(elevation = 6.dp", ".blur(", "linearAngleBrush(listOf(", "remember { Animatable(0f) }",
                  "keyframes { durationMillis = 600; 0f at 0 using CubicBezierEasing(0f, 0f, 0.58f, 1f)",
                  "scope.launch { playPoyavlenie() }", ".graphicsLayer { alpha = ", "translationY = ",
-                 'onNavigate("screen2", NavMotion("slide_left", 350, "ease_out"))', "AnimatedVisibility(visible = ",
-                 "onNavigate: (String, NavMotion) -> Unit", "// TODO: анимации, которые не переведены"):
+                 'onNavigate("gotovo", NavMotion("slide_left", 350, "ease_out"))', "AnimatedVisibility(visible = ",
+                 "onNavigate: (String, NavMotion) -> Unit", ".background(linearAngleBrush(listOf(anim"):
         assert code in src, code
     nav = f[f"{base}/navigation/AppNavHost.kt"].decode()
     assert "AnimatedContent(" in nav and "screenTransition(" in nav and _balanced(nav)

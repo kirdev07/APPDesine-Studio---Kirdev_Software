@@ -71,6 +71,21 @@ def package_name(title: str) -> str:
     return f"com.design.{seg}"
 
 
+def route_names(screens) -> dict[str, str]:
+    """Маршруты экранов из названий: «Корзина товаров» → korzina-tovarov (буквы, цифры, дефис; без повторов)."""
+    out, used = {}, set()
+    for i, s in enumerate(screens):
+        base = re.sub(r"[^a-z0-9]+", "-", _translit(s.name)).strip("-")[:40].strip("-") or f"screen{i + 1}"
+        if base[0].isdigit():
+            base = "s-" + base
+        name, k = base, 2
+        while name in used:
+            name, k = f"{base}-{k}", k + 1
+        used.add(name)
+        out[s.id] = name
+    return out
+
+
 def kstr(text: str) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("\n", "\\n") \
         .replace("\r", "\\r") + '"'
@@ -112,6 +127,11 @@ class _Screen:
         self.inputs: dict[str, str] = {}  # node_id → имя переменной поля ввода
         self.todo: list[str] = []
         self.pre: list[str] = []  # объявления перед элементом (цвет темы нельзя читать внутри рисования)
+        # списки из данных (LazyColumn): свойство элемента шаблона строки → поле item, нажатие строки
+        self.bound: dict[tuple[str, str], str] = {}
+        self.row_click: dict[str, str] = {}
+        self.data_classes: list[str] = []
+        self.res_vals: dict[str, str] = {}  # текст из «Задать текст» → val с stringResource в начале экрана
         m = tree.node_map(s)
         overlays = set()
         for it in self.its:
@@ -264,6 +284,12 @@ class _Screen:
 
     def template(self, text: str) -> str:
         by_name = {v.name: v for v in self.g.doc.variables}
+        if text.strip() and not any(m.group(1) in by_name for m in re.finditer(r"\{([^{}]{1,64})\}", text)):
+            # неизменный текст — строковый ресурс (переводится); в обработчике нажатия stringResource недоступен,
+            # поэтому строка читается в начале экрана
+            if text not in self.res_vals:
+                self.res_vals[text] = ident(f"str {text[:24]}", False, self.used, "str")
+            return self.res_vals[text]
 
         def sub(m):
             v = by_name.get(m.group(1))
@@ -273,6 +299,8 @@ class _Screen:
 
     def handlers(self, n, ind: str) -> list[str]:
         """Modifier-обработчики событий узла (нажатие, долгое, двойное)."""
+        if n.id in self.row_click:  # строка списка: своё действие у каждой строки — в её данных
+            return [f"{ind}.clickable {{ {self.row_click[n.id]} }}"]
         mine, swipes = {}, {}
         for it in self.its:
             if it.node_id == n.id and it.trigger in ("tap", "long_press", "double_tap"):
@@ -300,7 +328,7 @@ class _Screen:
         if set(mine) == {"tap"}:  # подпись действия для TalkBack — видимая надпись элемента (имя слоя — нет)
             shown = next((d.text.strip() for d in tree.descendants(n) if d.type == "text" and d.text.strip()), "") \
                 if n.is_container else (n.text.strip() if n.type == "text" else "")
-            label = f"onClickLabel = {kstr(shown[:60])}" if shown else ""
+            label = f"onClickLabel = {self.res_text(shown[:60])}" if shown else ""
             return [f"{ind}.clickable({label}) {{"] + body("tap") + [f"{ind}}}"] + out_swipe
         out = [f"{ind}.combinedClickable("]
         for trig, arg in (("tap", "onClick"), ("long_press", "onLongClick"), ("double_tap", "onDoubleClick")):
@@ -375,8 +403,11 @@ class _Screen:
         if n.stroke and n.stroke_width and n.type not in ("text", "vector") and not plain_stroke(n):
             # до обрезки по форме: обводка снаружи и по краю не срезается, рисуется поверх заливки
             color = self.ident(f"stroke {n.name}")
-            self.pre.append(f"val {color} = {self.g.color(n.stroke)}")
-            m += stroke_draw(n, self.dp, lambda _c, v=color: v, shape, ind + "    ")
+            sv = self.motion.var(n, "stroke")  # анимация цвета обводки
+            self.pre.append(f"val {color} = {sv + '.value' if sv else self.g.color(n.stroke)}")
+            sw = self.motion.var(n, "stroke_width")
+            m += stroke_draw(n, (lambda v, w=sw: f"{w}.value.dp") if sw else self.dp, lambda _c, v=color: v, shape,
+                             ind + "    ")
         if n.type == "image" and n.clip_path:  # маска любой формой
             m.append(f"{ind}    .clip({shape})")
         elif n.type == "image" and n.radius > 0:  # маска картинки: круг или скругление
@@ -392,10 +423,11 @@ class _Screen:
                 tint = self.ident(f"glass {n.name}")
                 self.pre.append(f"val {tint} = {self.g.color(fill)}")
                 m.append(f"{ind}    .drawWithContent {{ drawContent(); drawRect({tint}) }}")
-            elif self.motion.var(n, "fill"):  # анимация цвета заливки
-                m.append(f"{ind}    .background({self.motion.var(n, 'fill')}.value)")
+            elif self.motion.var(n, "fill"):  # анимация цвета заливки (у градиента — первого цвета)
+                av = f"{self.motion.var(n, 'fill')}.value"
+                m.append(f"{ind}    .background({brush(n, self.g.color, av) or av})")
             else:
-                m.append(f"{ind}    .background({brush(n, self.g.color) or self.g.color(fill)})")
+                m.append(f"{ind}    .background({self.bound.get((n.id, 'fill')) or brush(n, self.g.color) or self.g.color(fill)})")
         inner = shadow(n, self.dp, self.g.color, shape, inset=True)
         if inner:
             m.append(f"{ind}    {inner}")
@@ -411,7 +443,9 @@ class _Screen:
             m.append(f"{ind}    .border(1.dp, Color.White.copy(alpha = 0.35f), {shape})")
         if n.stroke and n.stroke_width and n.type not in ("text", "vector"):
             if plain_stroke(n):
-                m.append(f"{ind}    .border({self.dp(n.stroke_width)}, {self.g.color(n.stroke)}, {shape})")
+                sv, sw = self.motion.var(n, "stroke"), self.motion.var(n, "stroke_width")  # анимация обводки
+                width = f"{sw}.value.dp" if sw else self.dp(n.stroke_width)
+                m.append(f"{ind}    .border({width}, {sv + '.value' if sv else self.g.color(n.stroke)}, {shape})")
         if handlers:
             m += self.handlers(n, ind + "    ")
         if n.is_frame and n.scroll in ("vertical", "horizontal") and not n.paging:  # пейджер листает сам
@@ -531,8 +565,8 @@ class _Screen:
         elif n.type == "image":
             res = self.g.drawables.get(n.asset_id)
             if res:
-                out += [f"{ind2}Image(", f"{ind2}    painter = painterResource(R.drawable.{res}),",
-                        f"{ind2}    contentDescription = {kstr(n.name)},",
+                out += [f"{ind2}Image(", f"{ind2}    painter = painterResource({self.bound.get((n.id, 'image')) or 'R.drawable.' + res}),",
+                        f"{ind2}    contentDescription = {self.res_text(n.name)},",
                         f"{ind2}    contentScale = ContentScale.{ {'cover': 'Crop', 'contain': 'Fit'}.get(n.fit, 'FillBounds') },",
                         f"{ind2}    modifier = {modtxt},", f"{ind2})"]
             else:
@@ -540,7 +574,7 @@ class _Screen:
                         f"{ind2}Box(modifier = {modtxt}.background(Color(0x22FFFFFF)))"]
         elif n.type == "vector" and n.path:
             tint = self.ident(f"tint {n.name}")  # цвет темы читается до рисования (в Canvas он недоступен)
-            out.append(f"{ind2}val {tint} = {self.g.color(n.fill or '#00000000')}")
+            out.append(f"{ind2}val {tint} = {self.bound.get((n.id, 'fill')) or self.g.color(n.fill or '#00000000')}")
             out += [f"{ind2}Canvas(modifier = {modtxt}) {{",
                     f"{ind2}    scale(size.width / {_num(n.vb_w)}f, size.height / {_num(n.vb_h)}f, pivot = Offset.Zero) {{",
                     f"{ind2}        val p = PathParser().parsePathString({kstr(n.path)}).toPath()"
@@ -723,10 +757,11 @@ class _Screen:
                      f"{ind}    decorationBox = {{ inner ->",
                      f"{ind}        if ({var}.isEmpty()) Text({kstr(n.text)}, {style.replace(self.g.color(n.text_color), self.g.color(n.text_color[:7] + '88'))})",
                      f"{ind}        inner()", f"{ind}    }},", f"{ind})"])
-        value = self.texts.get(n.id)
+        bound = self.bound.get((n.id, "text"))  # строка списка: текст — из её данных (уже в нужном регистре)
+        value = bound or self.texts.get(n.id)
         if value is None:
             value = self.res_text(_cased(n.text, n.text_case))
-        elif n.text_case != "none":  # текст меняется при работе — регистр в коде
+        elif bound is None and n.text_case != "none":  # текст меняется при работе — регистр в коде
             value += {"upper": ".uppercase()", "lower": ".lowercase()",
                       "title": '.split(" ").joinToString(" ") { it.replaceFirstChar(Char::titlecase) }'}[n.text_case]
         lines = ([f"{ind}    maxLines = {n.max_lines},", f"{ind}    overflow = TextOverflow.Ellipsis,"]
@@ -820,7 +855,126 @@ class _Screen:
         flush()
         return out
 
+    def _row_ok(self, row) -> bool:
+        """Карточку можно сделать строкой списка: у неё и внутри нет своего поведения (показ, смена текста,
+        состояния, анимации, поля ввода, прокрутки), только нажатие на саму карточку."""
+        ids = {d.id for d, _, _ in tree.walk([row])}
+        busy = (set(self.vis) | set(self.texts) | set(self.inputs) | set(self.state_vars) | set(self.variant_vars)
+                | set(self.pagers) | set(self.dots_for) | set(self.scroll_states) | set(self.m3.state)
+                | {nid for nid, _ in self.motion.vars} | set(self.smart.values()))
+        if ids & busy or any(d.sticky for d, _, _ in tree.walk([row])):
+            return False
+        for it in self.its:
+            if it.node_id in ids and (it.node_id != row.id or it.trigger != "tap"):
+                return False
+            if any(a.get("node_id") in ids for a in it.actions):
+                return False
+        return True
+
+    def lazy(self, n, modtxt: str, ind: str) -> list[str] | None:
+        """Прокручиваемый столбец (строка) с одинаковыми карточками подряд → LazyColumn (LazyRow) с данными."""
+        from app.exporters import compose_lists as cl
+        vertical = n.layout == "vertical"
+        if n.paging or n.layout not in ("vertical", "horizontal") or n.main_align == "space_between" or \
+                n.scroll != ("vertical" if vertical else "horizontal") or self.scroll_to or                 any(c.sticky for c in n.children):  # «прокрутить к» и липкие элементы — по состоянию прокрутки
+            return None
+        found = cl.runs(n.children, self.g.drawables, self._row_ok)
+        if not found:
+            return None
+        lines = [x for x in modtxt.split("\n") if ".verticalScroll(" not in x and ".horizontalScroll(" not in x]
+        pad = ""
+        if len(lines) > 1 and lines[-1].strip().startswith(".padding(start = ") and (n.pad_t or n.pad_r or n.pad_b
+                                                                                      or n.pad_l):
+            lines.pop()  # поля контейнера — внутри списка (contentPadding), прокручиваются вместе с ним
+            pad = (f"PaddingValues(start = {self.dp(n.pad_l)}, top = {self.dp(n.pad_t)}, end = {self.dp(n.pad_r)}, "
+                   f"bottom = {self.dp(n.pad_b)})")
+        mod = "\n".join(lines)
+        if vertical:
+            cross = {"start": "Start", "center": "CenterHorizontally", "end": "End", "stretch": "Start"}[n.cross_align]
+            head = [f"{ind}LazyColumn(", f"{ind}    modifier = {mod},"] + \
+                ([f"{ind}    contentPadding = {pad},"] if pad else []) + \
+                [f"{ind}    verticalArrangement = Arrangement.spacedBy({self.dp(n.gap)}),",
+                 f"{ind}    horizontalAlignment = Alignment.{cross},", f"{ind}) {{"]
+            wrap, ctx = f"Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.{cross})", "col"
+        else:
+            vcross = {"start": "Top", "center": "CenterVertically", "end": "Bottom", "stretch": "Top"}[n.cross_align]
+            head = [f"{ind}LazyRow(", f"{ind}    modifier = {mod},"] + \
+                ([f"{ind}    contentPadding = {pad},"] if pad else []) + \
+                [f"{ind}    horizontalArrangement = Arrangement.spacedBy({self.dp(n.gap)}),",
+                 f"{ind}    verticalAlignment = Alignment.{vcross},", f"{ind}) {{"]
+            wrap, ctx = f"Row(verticalAlignment = Alignment.{vcross})", "row"
+        body, i, k = [], 0, 0
+        ends = dict(found)
+        while i < len(n.children):
+            if i in ends:
+                k += 1
+                body += self.lazy_items(n, n.children[i:ends[i]], wrap, ctx, ind + "    ", k)
+                i = ends[i]
+                continue
+            code = self.node(n.children[i], n, ctx, ind + "            ")
+            if any(not x.strip().startswith("//") for x in code):  # заголовок и прочее — отдельный item
+                body += [f"{ind}    item {{", f"{ind}        {wrap} {{"] + code + [f"{ind}        }}", f"{ind}    }}"]
+            i += 1
+        return head + body + [f"{ind}}}"]
+
+    def lazy_items(self, parent, rows: list, wrap: str, ctx: str, ind: str, k: int) -> list[str]:
+        """items(данные) { item -> строка }: данные — объявлением перед списком, строка — по первой карточке."""
+        from app.exporters import compose_lists as cl
+        walks = [[d for d, _, _ in tree.walk([r])] for r in rows]
+        flds = [(i, p) for i, p in cl.fields(rows)
+                if p != "image" or all(w[i].asset_id in self.g.drawables for w in walks)]
+        cls = self.fn + ident(f"{parent.name} {k if k > 1 else ''} item", True, set(), "ListItem")
+        taken: set[str] = {"onClick", "key"}
+        names = {}
+        for idx, prop in flds:
+            names[(idx, prop)] = ident(f"{prop} {walks[0][idx].name}", False, taken, prop)
+        row_ids = {r.id for r in rows}
+        clicks = any(it.node_id in row_ids and it.trigger == "tap" for it in self.its)
+        params = [f"val {names[f]}: {dict(text='String', image='Int', fill='Color')[f[1]]}" for f in flds]
+        if clicks:
+            params.append("val onClick: () -> Unit")
+        if not params:
+            params.append("val key: Int")
+        self.data_classes.append(f"/** Строка списка «{parent.name}»: данные, которыми карточки отличаются. */\n"
+                                 f"private data class {cls}({', '.join(params)})")
+        var = ident(f"{parent.name} items", False, self.used, "items")
+        self.pre.append(f"// список «{parent.name}»: замените данными приложения (сеть, база) — вид строки ниже")
+        self.pre.append(f"val {var} = listOf(")
+        for r_i, (r, w) in enumerate(zip(rows, walks)):
+            args = []
+            for (idx, prop) in flds:
+                d = w[idx]
+                v = (self.res_text(_cased(d.text, d.text_case)) if prop == "text" else
+                     f"R.drawable.{self.g.drawables[d.asset_id]}" if prop == "image" else
+                     self.g.color(d.fill) if d.fill else "Color.Transparent")
+                args.append(f"{names[(idx, prop)]} = {v}")
+            if not flds and not clicks:
+                args.append(f"key = {r_i}")
+            if clicks:
+                acts = [x for it in self.its if it.node_id == r.id and it.trigger == "tap"
+                        for x in self.actions_code(it, "        ")]
+                self.pre.append(f"    {cls}({', '.join(args + ['onClick = {'])}")
+                self.pre += acts + ["    }),"]
+            else:
+                self.pre.append(f"    {cls}({', '.join(args)}),")
+        self.pre.append(")")
+        tmpl = rows[0]
+        for (idx, prop), nm in names.items():
+            self.bound[(walks[0][idx].id, prop)] = f"item.{nm}"
+        if clicks:
+            self.row_click[tmpl.id] = "item.onClick()"
+        try:
+            code = self.node(tmpl, parent, ctx, ind + "        ")
+        finally:
+            for (idx, prop) in names:
+                self.bound.pop((walks[0][idx].id, prop), None)
+            self.row_click.pop(tmpl.id, None)
+        return [f"{ind}items({var}) {{ item ->", f"{ind}    {wrap} {{"] + code + [f"{ind}    }}", f"{ind}}}"]
+
     def stack(self, n, modtxt: str, ind: str) -> list[str]:
+        lazy = self.lazy(n, modtxt, ind)
+        if lazy is not None:
+            return lazy
         main = {"start": "Start", "center": "Center", "end": "End", "space_between": "SpaceBetween"}[n.main_align]
         cross = {"start": "Start", "center": "CenterHorizontally", "end": "End", "stretch": "Start"}[n.cross_align]
         if n.layout == "vertical":
@@ -873,19 +1027,19 @@ class _Screen:
             L.append(f"    val {var} = rememberPagerState {{ {len(tree.find(s, nid)[0].children)} }}")
         m = tree.node_map(s)
         for nid, var in self.vis.items():
-            L.append(f"    var {var} by remember {{ mutableStateOf({'true' if m[nid].visible and nid not in self.overlays else 'false'}) }}")
+            L.append(f"    var {var} by rememberSaveable {{ mutableStateOf({'true' if m[nid].visible and nid not in self.overlays else 'false'}) }}")
         for nid, var in self.texts.items():
-            L.append(f"    var {var} by remember {{ mutableStateOf({kstr(m[nid].text)}) }}")
+            L.append(f"    var {var} by rememberSaveable {{ mutableStateOf({kstr(m[nid].text)}) }}")
         for nid, axes in self.variant_vars.items():
             d = g.doc.component(m[nid].component_id)
             for axis, var in axes.items():
                 vals = list(d.variants[axis])
                 cur = m[nid].variant.get(axis) if m[nid].variant.get(axis) in vals else vals[0]
-                L.append(f"    var {var} by remember {{ mutableStateOf({kstr(cur)}) }}")
+                L.append(f"    var {var} by rememberSaveable {{ mutableStateOf({kstr(cur)}) }}")
         for nid, var in self.inputs.items():
-            L.append(f"    var {var} by remember {{ mutableStateOf(\"\") }}")
+            L.append(f"    var {var} by rememberSaveable {{ mutableStateOf(\"\") }}")
         for nid, var in self.state_vars.items():
-            L.append(f"    var {var} by remember {{ mutableStateOf({kstr(m[nid].state)}) }}")
+            L.append(f"    var {var} by rememberSaveable {{ mutableStateOf({kstr(m[nid].state)}) }}")
         opens = [it for it in self.its if it.trigger == "screen_open"]
         if opens:
             L.append("    LaunchedEffect(Unit) {")
@@ -893,6 +1047,12 @@ class _Screen:
                 L += self.actions_code(it, "        ")
             L.append("    }")
         L += self.scaffold(bg)
+        if self.res_vals:  # строки для действий «Задать текст» — ресурсы, прочитанные до обработчиков
+            at = next(i for i, x in enumerate(L) if x.startswith(f"fun {self.fn}(")) + 1
+            L[at:at] = [f"    val {v} = {self.res_text(t)}" for t, v in self.res_vals.items()]
+        if self.data_classes:  # строки списков из данных (LazyColumn) — классы данных перед экраном
+            at = next(i for i, x in enumerate(L) if x.startswith("/** Экран «"))
+            L[at:at] = [x for c in self.data_classes for x in (c, "")]
         wdp, hdp = round(s.width / self.k), round(s.height / self.k)
         L += ["", f"@Preview(name = \"Телефон\", widthDp = {wdp}, heightDp = {hdp}, showBackground = true)",
               "@Preview(name = \"Маленький телефон\", widthDp = 360, heightDp = 640, showBackground = true)",
@@ -941,13 +1101,15 @@ class AndroidProject:
             self.faces.setdefault(fam, []).append((name, w, it))
         self.screens = [s for s in screens if s.platform == PLATFORM_ANDROID]
         self.pkg = package_name(doc.meta.title)
+        from app.engines.material.generations import OLD
+        self.classic_switch = doc.meta.appearance.material in OLD  # переключатель Material 1 / 2
         self.link_scheme = re.sub(r"[^a-z0-9]", "", self.pkg.rsplit(".", 1)[-1]) or "app"  # ссылки на экраны
         self.artboard = ARTBOARD_COLORS.get(doc.meta.appearance.theme, "#000000")
         self.drawables = {aid: name for aid, (name, _, _) in drawables.items()}
         self._drawable_files = drawables
         used: set[str] = set()
         self.fns = {s.id: ident(s.name, True, used, "Screen") + "Screen" for s in self.screens}
-        self.routes = {s.id: f"screen{i + 1}" for i, s in enumerate(self.screens)}
+        self.routes = route_names(self.screens)  # «Корзина» → korzina: ссылка dostavka://korzina
         vused: set[str] = set()
         self.state_names = {v.id: ident(v.name, False, vused, "value") for v in doc.variables}
         self.roles = self._role_map()
@@ -1026,9 +1188,12 @@ class AndroidProject:
             "androidx.compose.foundation.gestures.detectDragGestures", "androidx.compose.ui.input.pointer.pointerInput",
             "androidx.compose.ui.res.stringResource", "androidx.compose.ui.semantics.heading",
             "androidx.compose.ui.semantics.semantics",
+            "androidx.compose.runtime.saveable.rememberSaveable",
             "kotlin.math.abs",
             "androidx.compose.ui.platform.LocalDensity", "androidx.compose.foundation.pager.HorizontalPager",
             "androidx.compose.foundation.pager.rememberPagerState",
+            "androidx.compose.foundation.lazy.LazyColumn", "androidx.compose.foundation.lazy.LazyRow",
+            "androidx.compose.foundation.lazy.items",
             "androidx.compose.animation.slideOutVertically",
             "androidx.compose.foundation.interaction.MutableInteractionSource", "kotlinx.coroutines.delay",
             f"{self.pkg}.navigation.smart",
@@ -1040,7 +1205,8 @@ class AndroidProject:
             f"{self.pkg}.ui.components.DesignIcon", f"{self.pkg}.ui.components.linearAngleBrush",
             f"{self.pkg}.ui.components.maskShape", "androidx.compose.ui.graphics.BlendMode",
             f"{self.pkg}.ui.theme.AppTheme", "kotlinx.coroutines.coroutineScope", "kotlinx.coroutines.launch")] + \
-            [f"import {self.pkg}.ui.theme.{v}" for v in self.families.values()]
+            [f"import {self.pkg}.ui.theme.{v}" for v in self.families.values()] + \
+            ([f"import {self.pkg}.ui.components.ClassicSwitch"] if self.classic_switch else [])
 
     def literal(self, var_type: str, value) -> str:
         from app.core.document.behavior import coerce
@@ -1281,7 +1447,7 @@ class MainActivity : ComponentActivity() {{
         installSplashScreen()  // заставка запуска, затем — тема приложения
         super.onCreate(savedInstanceState)
         enableEdgeToEdge({bars})
-        // ссылка «{self.link_scheme}://screen2» открывает нужный экран (маршрут — в README_ANDROID.md)
+        // ссылка «{self.link_scheme}://{self.routes[self.screens[-1].id] if self.screens else 'screen1'}» открывает нужный экран (маршруты — в README_ANDROID.md)
         val link = intent?.data?.host
         setContent {{
             AppTheme {{
@@ -1295,15 +1461,27 @@ class MainActivity : ComponentActivity() {{
         for var in self.doc.variables:
             t = {"bool": "Boolean", "number": "Double", "text": "String"}[var.type]
             fields.append(f"    /** «{var.name}» */\n    var {self.state_names[var.id]} by mutableStateOf<{t}>({self.literal(var.type, var.default)})")
+        names = [self.state_names[v.id] for v in self.doc.variables]
+        kinds = {"bool": "Boolean", "number": "Double", "text": "String"}
+        restore = "; ".join(f"{n} = it[{i}] as {kinds[v.type]}" for i, (n, v) in enumerate(zip(names, self.doc.variables)))
         out[f"{src}/AppState.kt"] = f'''package {pkg}
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 
 /** Переменные прототипа (общие для всех экранов). */
 class AppState {{
 {chr(10).join(fields) if fields else "    // переменных в дизайне нет"}
+
+    companion object {{
+        /** Значения переменных переживают поворот экрана и выгрузку приложения из памяти. */
+        val Saver = listSaver<AppState, Any>(
+            save = {{ listOf<Any>({", ".join(f"it.{n}" for n in names)}) }},
+            restore = {{ AppState().apply {{ {restore} }} }},
+        )
+    }}
 }}
 
 /** Число без «.0» для подстановки в текст. */
@@ -1327,11 +1505,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import {pkg}.AppState
 {imports}
 
 private data class Entry(val route: String, val motion: NavMotion)
+
+/** Стек экранов переживает поворот: маршрут и переход каждого шага — строками и числами. */
+private val StackSaver = listSaver<SnapshotStateList<Entry>, Any>(
+    save = {{ it.flatMap {{ e -> listOf(e.route, e.motion.kind, e.motion.durationMs, e.motion.easing) }} }},
+    restore = {{ list ->
+        mutableStateListOf<Entry>().apply {{
+            list.chunked(4).forEach {{ (r, k, d, e) -> add(Entry(r as String, NavMotion(k as String, d as Int, e as String))) }}
+        }}
+    }},
+)
 
 /** Маршруты экранов (для ссылок вида схема://маршрут). */
 val ROUTES = setOf({routes_set})
@@ -1344,11 +1535,11 @@ val ROUTES = setOf({routes_set})
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun AppNavHost(startRoute: String? = null) {{
-    val state = remember {{ AppState() }}
+    val state = rememberSaveable(saver = AppState.Saver) {{ AppState() }}
     val first = if (startRoute in ROUTES) startRoute!! else "{start}"  // ссылка на неизвестный экран — первый
-    val stack = remember {{ mutableStateListOf(Entry(first, NavMotion("none", 0))) }}
-    var forward by remember {{ mutableStateOf(true) }}
-    var smartOn by remember {{ mutableStateOf(false) }}  // умный переход: общие элементы перетекают
+    val stack = rememberSaveable(saver = StackSaver) {{ mutableStateListOf(Entry(first, NavMotion("none", 0))) }}
+    var forward by rememberSaveable {{ mutableStateOf(true) }}
+    var smartOn by rememberSaveable {{ mutableStateOf(false) }}  // умный переход: общие элементы перетекают
     val go: (String, NavMotion) -> Unit = {{ route, motion ->
         forward = true; smartOn = motion.kind == "smart"; stack.add(Entry(route, motion))
     }}
@@ -1383,6 +1574,8 @@ fun AppNavHost(startRoute: String? = null) {{
         if self.families:
             out[f"{src}/ui/theme/Fonts.kt"] = self.fonts_kt()
         out[f"{src}/ui/components/DesignIcon.kt"] = DESIGN_ICON.replace("{pkg}", pkg)
+        if self.classic_switch:
+            out[f"{src}/ui/components/ClassicSwitch.kt"] = CLASSIC_SWITCH.replace("{pkg}", pkg)
         for s in self.screens:
             out[f"{src}/ui/screens/{self.fns[s.id]}.kt"] = _Screen(self, s, self.fns[s.id]).source()
         if self.strings:  # тексты экранов — ресурсы: приложение можно перевести (values-en/strings.xml и т. п.)
@@ -1535,7 +1728,7 @@ val AppTypography = Typography({chr(10) + typo + "," + chr(10) if typo else ""})
                  "`AppState.kt` — переменные прототипа.",
                  "- Стандартные компоненты из библиотеки студии — настоящие компоненты Material 3 (Button, Switch, "
                  "Checkbox, Slider, NavigationBar, TopAppBar, …) с состоянием; значки — `ui/components/DesignIcon.kt`.",
-                 "- `navigation/AppNavHost.kt` — переходы между экранами (стек маршрутов `screen1`, `screen2`, …; системная «Назад»).",
+                 "- `navigation/AppNavHost.kt` — переходы между экранами (стек маршрутов по названиям экранов; системная «Назад»; стек и переменные переживают поворот экрана).",
                  "- `ui/screens/*Screen.kt` — экраны: Auto Layout → Column / Row, остальное — Box со смещениями; "
                  "нажатия, переходы, переменные, показ/скрытие и поля ввода — рабочий код.", "",
                  "## Что доработать", "",
@@ -1550,7 +1743,7 @@ val AppTypography = Typography({chr(10) + typo + "," + chr(10) if typo else ""})
                  "- Заставка запуска (Splash Screen API, `res/values/splash.xml`), жест «назад» с предпросмотром "
                  "(Android 14+), крупные заголовки и подписи нажатий для TalkBack.",
                  f"- Ссылки на экраны: `{self.link_scheme}://маршрут` открывает экран (например, "
-                 f"`{self.link_scheme}://screen2` — второй экран); неизвестный маршрут открывает первый экран.", "",
+                 f"`{self.link_scheme}://{self.routes[self.screens[-1].id] if self.screens else 'screen1'}` — экран «{self.screens[-1].name if self.screens else ''}»); неизвестный маршрут открывает первый экран.", "",
                  "## Экраны", ""]
         lines += [f"- `{self.fns[s.id]}` — «{s.name}» (маршрут `{self.routes[s.id]}`)" for s in self.screens]
         return "\n".join(lines) + "\n"
@@ -1567,6 +1760,48 @@ def drawable_name(name: str, used: set[str]) -> str:
         n, i = f"{base}_{i}", i + 1
     used.add(n)
     return n
+
+
+CLASSIC_SWITCH = """package {pkg}.ui.components
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
+
+/** Переключатель Material 1 / 2: тонкая полупрозрачная дорожка и круглый бегунок с тенью. */
+@Composable
+fun ClassicSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier) {
+    val primary = MaterialTheme.colorScheme.primary
+    val offset by animateDpAsState(if (checked) 16.dp else 0.dp, label = "thumb")
+    val track by animateColorAsState(
+        if (checked) primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+        label = "track",
+    )
+    val thumb by animateColorAsState(if (checked) primary else Color(0xFFECECEC), label = "thumbColor")
+    val toggle = if (onCheckedChange != null)
+        Modifier.toggleable(value = checked, role = Role.Switch) { onCheckedChange(it) } else Modifier
+    Box(modifier = modifier.then(toggle).size(width = 36.dp, height = 20.dp), contentAlignment = Alignment.CenterStart) {
+        Box(Modifier.size(width = 36.dp, height = 14.dp).clip(RoundedCornerShape(7.dp)).background(track))
+        Box(Modifier.offset(x = offset).size(20.dp).shadow(2.dp, CircleShape).background(thumb, CircleShape))
+    }
+}
+"""
 
 
 DESIGN_ICON = """package {pkg}.ui.components

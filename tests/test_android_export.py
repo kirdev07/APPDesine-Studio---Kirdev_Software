@@ -81,11 +81,11 @@ def test_android_project_structure_and_code():
     assert "painterResource(R.drawable.foto_geroya)" in screen
     assert f[f"{ROOT}/app/src/main/res/drawable/foto_geroya.png"] == PNG
     nav = f[f"{base}/navigation/AppNavHost.kt"].decode()
-    assert '"screen1" -> FormaScreen' in nav and "BackHandler" in nav
+    assert '"forma" -> FormaScreen' in nav and "BackHandler" in nav
     state = f[f"{base}/AppState.kt"].decode()
     assert 'var imya by mutableStateOf<String>("")' in state
     man = pkg.manifest["android_project"]
-    assert man["package"] == p and man["screens"][ids["form"]]["route"] == "screen1"
+    assert man["package"] == p and man["screens"][ids["form"]]["route"] == "forma"
     assert "## Готовый каркас Android-проекта" in pkg.task
     assert build_package(doc, ExportOptions()).zip_bytes() == pkg.zip_bytes()     # детерминизм
     off = build_package(doc, ExportOptions(include_android_project=False))

@@ -5,7 +5,8 @@ Text со стилем, фигуры — Box с заливкой и скругл
 картинки — Image из ресурса. Нажатие на виджет открывает приложение. Для каждого виджета — приёмник
 (GlanceAppWidgetReceiver), описание в res/xml и запись в манифесте; виджет появляется в списке виджетов телефона.
 Ограничения Glance: нет свободного смещения (элементы вне раскладки ставятся отступами внутри Box), нет теней,
-градиентов и масок; скругление углов работает на Android 12+.
+градиентов, обводок и овалов — такие фигуры выгружаются картинкой (подложка элемента рисуется из дизайна, дети
+остаются настоящими элементами Glance). Тексты и подписи — строковые ресурсы (переводятся вместе с приложением).
 """
 
 from __future__ import annotations
@@ -18,6 +19,17 @@ from app.core.document.model import Screen
 WIDGET_PREFIX = "android_widget_"
 GLANCE_VERSION = "1.1.1"
 _WEIGHT = {(0, 449): "FontWeight.Normal", (450, 599): "FontWeight.Medium", (600, 1000): "FontWeight.Bold"}
+
+
+PART_PREFIX = "part:"  # ключ картинки-подложки элемента в снимках виджетов: part:<id элемента>
+
+
+def needs_backdrop(n) -> bool:
+    """Фигура, которую Glance не нарисует сам: градиент, тень, обводка, овал, разные углы, размытие."""
+    if n.type in ("text", "vector", "image", "group", "instance") or not n.visible:
+        return False
+    return (n.gradient != "none" or bool(n.shadow_color) or n.elevation > 0 or (n.stroke and n.stroke_width > 0)
+            or n.type == "ellipse" or n.blur > 0 or any(r >= 0 for r in (n.radius_tl, n.radius_tr, n.radius_br, n.radius_bl)))
 
 
 def is_widget(s: Screen) -> bool:
@@ -62,6 +74,7 @@ class GlanceWidget:
         self.k = screen_dpi(s) / 160
         self.res = name.lower()
         self.icons: dict[str, str] = {}   # имя ресурса → XML
+        self.parts: dict[str, bytes] = {}  # подложки фигур (PNG) — имя ресурса → данные
         self._icon_names: dict[str, str] = {}
         from app.exporters.android_project import kstr
         self.kstr = kstr
@@ -78,7 +91,28 @@ class GlanceWidget:
             self.icons[res] = vector_xml(n)
         return self._icon_names[k]
 
-    def _mod(self, n, parent, extra: list[str] | None = None) -> str:
+    def text_res(self, text: str) -> str:
+        """Неизменный текст — строковый ресурс (переводится вместе с приложением); пустой — как есть."""
+        if not text.strip():
+            return self.kstr(text)
+        return f"context.getString(R.string.{self.p.string_key(text)})"
+
+    def backdrop(self, n) -> str | None:
+        data = self.p.widget_previews.get(PART_PREFIX + n.id) if needs_backdrop(n) else None
+        if not data:
+            return None
+        res = f"{self.res}_part_{len(self.parts) + 1}"
+        self.parts[res] = data
+        return res
+
+    def _mod(self, n, parent, extra: list[str] | None = None, plain: bool = False) -> str:
+        """plain — только место и размер (вид фигуры рисует картинка-подложка)."""
+        if plain == "inner":  # содержимое поверх подложки: на всю фигуру, отступы рамки
+            m = ["GlanceModifier.fillMaxSize()"]
+            if n.is_frame and any((n.pad_t, n.pad_r, n.pad_b, n.pad_l)):
+                m.append(f".padding(start = {self.dp(n.pad_l)}, top = {self.dp(n.pad_t)}, end = {self.dp(n.pad_r)}, "
+                         f"bottom = {self.dp(n.pad_b)})")
+            return "".join(m)
         m = ["GlanceModifier"]
         if parent is not None and not parent.auto_layout:  # свободное место в Box — отступом
             dx, dy = n.x - parent.x - parent.pad_l, n.y - parent.y - parent.pad_t
@@ -96,6 +130,8 @@ class GlanceWidget:
             m.append(".fillMaxHeight()" if parent.layout != "vertical" else ".defaultWeight()")
         elif n.sizing_v != "hug" and n.type != "text":
             m.append(f".height({self.dp(n.h)})")
+        if plain:
+            return "".join(m + (extra or []))
         if n.fill and n.type not in ("text", "vector", "image"):
             m.append(f".background({_kc(n.fill)})")
         if n.radius and n.type not in ("text", "vector"):
@@ -106,26 +142,36 @@ class GlanceWidget:
         m += extra or []
         return "".join(m)
 
-    def node(self, n, parent, ind: str) -> list[str]:
+    def node(self, n, parent, ind: str, inner: bool = False) -> list[str]:
         if not n.visible:
             return []
+        if not inner:
+            res = self.backdrop(n)
+            if res:  # фигура картинкой из дизайна, содержимое — поверх неё
+                out = [f"{ind}Box(modifier = {self._mod(n, parent, plain=True)}) {{",
+                       f"{ind}    Image(provider = ImageProvider(R.drawable.{res}), contentDescription = null, "
+                       "contentScale = ContentScale.FillBounds, modifier = GlanceModifier.fillMaxSize())"]
+                if [c for c in n.children if c.visible]:
+                    out += self.node(n, parent, ind + "    ", inner=True)
+                return out + [f"{ind}}}"]
+        M = (lambda: self._mod(n, parent, plain="inner")) if inner else (lambda: self._mod(n, parent))
         if n.is_group:
             return [x for c in n.children for x in self.node(c, parent, ind)]
         if n.type == "text":
             style = (f"TextStyle(color = ColorProvider({_kc(n.text_color)}), fontSize = {round(n.font_size / self.k, 1):g}.sp, "
                      f"fontWeight = {_w(n)})")
             lines = f", maxLines = {n.max_lines}" if n.max_lines else ""
-            return [f"{ind}Text({self.kstr(n.text)}, style = {style}, modifier = {self._mod(n, parent)}{lines})"]
+            return [f"{ind}Text({self.text_res(n.text)}, style = {style}, modifier = {self._mod(n, parent)}{lines})"]
         if n.type == "vector" and n.path:
             res = self._icon(n)
             tint = f", colorFilter = ColorFilter.tint(ColorProvider({_kc(n.fill)}))" if n.fill else ""
             return [f"{ind}Image(provider = ImageProvider(R.drawable.{res}), contentDescription = "
-                    f"{self.kstr(n.name)}, modifier = GlanceModifier.size({self.dp(n.w)}, {self.dp(n.h)}){tint})"]
+                    f"{self.text_res(n.name)}, modifier = GlanceModifier.size({self.dp(n.w)}, {self.dp(n.h)}){tint})"]
         if n.type == "image":
             res = self.p.drawables.get(n.asset_id)
             if not res:
                 return [f"{ind}// картинка «{n.name}» не включена в пакет"]
-            return [f"{ind}Image(provider = ImageProvider(R.drawable.{res}), contentDescription = {self.kstr(n.name)}, "
+            return [f"{ind}Image(provider = ImageProvider(R.drawable.{res}), contentDescription = {self.text_res(n.name)}, "
                     f"contentScale = ContentScale.{'Crop' if n.fit == 'cover' else 'Fit'}, modifier = {self._mod(n, parent)})"]
         if not n.is_container or not n.children:  # фигура: прямоугольник / круг
             return [f"{ind}Box(modifier = {self._mod(n, parent)}) {{}}"]
@@ -133,7 +179,7 @@ class GlanceWidget:
         if n.layout == "vertical":
             h = {"start": "Start", "center": "CenterHorizontally", "end": "End", "stretch": "Start"}[n.cross_align]
             v = {"start": "Top", "center": "CenterVertically", "end": "Bottom", "space_between": "Top"}[n.main_align]
-            out = [f"{ind}Column(modifier = {self._mod(n, parent)}, verticalAlignment = Alignment.{v}, "
+            out = [f"{ind}Column(modifier = {M()}, verticalAlignment = Alignment.{v}, "
                    f"horizontalAlignment = Alignment.{h}) {{"]
             for i, c in enumerate(kids):
                 if i and n.gap:
@@ -143,7 +189,7 @@ class GlanceWidget:
         if n.layout in ("horizontal", "wrap"):
             v = {"start": "Top", "center": "CenterVertically", "end": "Bottom", "stretch": "Top"}[n.cross_align]
             h = {"start": "Start", "center": "CenterHorizontally", "end": "End", "space_between": "Start"}[n.main_align]
-            out = [f"{ind}Row(modifier = {self._mod(n, parent)}, horizontalAlignment = Alignment.{h}, "
+            out = [f"{ind}Row(modifier = {M()}, horizontalAlignment = Alignment.{h}, "
                    f"verticalAlignment = Alignment.{v}) {{"]
             for i, c in enumerate(kids):
                 if i and (n.gap or n.main_align == "space_between"):
@@ -154,7 +200,7 @@ class GlanceWidget:
             return out + [f"{ind}}}"]
         if n.layout == "grid":
             cols = max(1, n.grid_columns)
-            out = [f"{ind}Column(modifier = {self._mod(n, parent)}) {{"]
+            out = [f"{ind}Column(modifier = {M()}) {{"]
             for r in range(0, len(kids), cols):
                 if r:
                     out.append(f"{ind}    Spacer(GlanceModifier.height({self.dp(n.row_gap)}))")
@@ -165,7 +211,7 @@ class GlanceWidget:
                     out += self.node(c, n, ind + "        ")
                 out.append(f"{ind}    }}")
             return out + [f"{ind}}}"]
-        out = [f"{ind}Box(modifier = {self._mod(n, parent)}) {{"]
+        out = [f"{ind}Box(modifier = {M()}) {{"]
         for c in kids:
             out += self.node(c, n, ind + "    ")
         return out + [f"{ind}}}"]
@@ -255,6 +301,8 @@ class {self.name}WidgetReceiver : GlanceAppWidgetReceiver() {{
                f"app/src/main/res/xml/{self.res}_widget_info.xml": self.info_xml()}
         for res, xml in self.icons.items():
             out[f"app/src/main/res/drawable/{res}.xml"] = xml
+        for res, data in self.parts.items():  # фигуры, которые Glance не рисует, — картинкой из дизайна
+            out[f"app/src/main/res/drawable-nodpi/{res}.png"] = data
         if self.s.id in self.p.widget_previews:  # снимок виджета из дизайна — в списке виджетов телефона
             out[f"app/src/main/res/drawable-nodpi/{self.res}_preview.png"] = self.p.widget_previews[self.s.id]
         return out

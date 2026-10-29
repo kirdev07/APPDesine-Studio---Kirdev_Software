@@ -58,6 +58,14 @@ class ProjectHubPage(QWidget):
         root.addWidget(self._build_details(), 0)
         self.refresh()
 
+    COMPACT_H = 860  # ниже — без приветственной плашки и подсказки к шаблонам: больше места карточкам проектов
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        roomy = self.height() >= self.COMPACT_H
+        self.banner.setVisible(roomy)
+        self.tpl_hint.setVisible(roomy)
+
     # ---------- левая колонка ----------
     def _build_left(self) -> QWidget:
         frame, lay = panel()
@@ -124,6 +132,7 @@ class ProjectHubPage(QWidget):
         bl.addWidget(label("Создавайте, открывайте и организуйте свои дизайны. Всё хранится локально.", "Muted",
                            wrap=True))
         lay.addWidget(banner)
+        self.banner = banner
 
         projects, play = panel()
         from app.ui.widgets import FlowLayout
@@ -175,8 +184,9 @@ class ProjectHubPage(QWidget):
 
         tpl, tlay = panel()
         tlay.addWidget(label("Шаблоны проектов", "H2"))
-        tlay.addWidget(label("Пустые стартовые шаблоны и ваши шаблоны (Проект → Сохранить как шаблон). "
-                             "Шаблон удаляется через контекстное меню.", "Muted", wrap=True))
+        self.tpl_hint = label("Пустые стартовые шаблоны и ваши шаблоны (Проект → Сохранить как шаблон). "
+                              "Шаблон удаляется через контекстное меню.", "Muted", wrap=True)
+        tlay.addWidget(self.tpl_hint)
         self.templates = QListWidget()
         self.templates.setObjectName("Cards")
         self.templates.setViewMode(QListView.ViewMode.IconMode)

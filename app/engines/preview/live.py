@@ -11,7 +11,8 @@ from __future__ import annotations
 from app.core.document import tree
 
 TOGGLES = ("m3.switch", "m3.checkbox", "m3.chip_filter")
-CHOICES = ("m3.radio_group", "m3.tabs", "m3.nav_bar", "m3.segmented")
+CHOICES = ("m3.radio_group", "m3.tabs", "m3.nav_bar", "m3.segmented", "win.navpane")
+NAVS = ("m3.nav_bar", "win.navpane")  # меню, пункты которого ведут на экраны
 LIVE_ROLES = TOGGLES + CHOICES + ("m3.slider",)
 
 
@@ -56,6 +57,8 @@ def selected(n) -> int:
         if n.role == "m3.nav_bar":
             from app.engines.material.generations import nav_selected
             return nav_selected(n)
+        elif n.role == "win.navpane":  # Windows: подсветка пункта или полоска акцента слева
+            on = bool(it.fill) or any(c.type == "rect" and c.fill for c in it.children)
         elif n.role == "m3.tabs":
             rects = [c for c in it.children if c.type == "rect"]
             on = bool(rects) and bool(rects[-1].fill)
@@ -99,6 +102,11 @@ def _switch(n, on, s, u):
     if track is None or on:
         return
     thumb = track.children[0]
+    if s.get("__gen", "m3") in ("m1", "m2"):  # старый вид: бегунок слева, светло-серый, дорожка серая
+        track.fill = s["onSurface"][:7] + "4D"
+        thumb.fill = "#ECECEC"
+        thumb.x, thumb.y = track.x, track.y + (track.h - thumb.h) / 2
+        return
     track.fill, track.stroke, track.stroke_width = s["surfaceContainerHighest"], s["outline"], 2 * u
     thumb.w = thumb.h = 16 * u
     thumb.x, thumb.y = track.x + 8 * u, track.y + (track.h - thumb.w) / 2
@@ -159,6 +167,26 @@ def _nav(n, sel, s, u):
         nav_item_look(it, i == sel, s.get("__gen", "m3"), s)
 
 
+def _navpane(n, sel, s, u):
+    """Панель навигации Windows: у выбранного пункта — подсветка, полоска акцента и полужирная подпись.
+    Цвета берутся у пункта, выбранного сейчас (они из палитры Windows, а не из схемы Material)."""
+    items = _items(n)
+    cur = next((i for i, it in enumerate(items) if it.fill or any(c.type == "rect" and c.fill for c in it.children)),
+               None)
+    if cur is None or not 0 <= sel < len(items):
+        return
+    hl = items[cur].fill
+    mark = next((c.fill for c in items[cur].children if c.type == "rect" and c.fill), s.get("primary", "#0067C0"))
+    for i, it in enumerate(items):
+        on = i == sel
+        it.fill = hl if on else ""
+        for c in it.children:
+            if c.type == "rect":
+                c.fill = mark if on else ""
+            elif c.type == "text":
+                c.font_weight = 600 if on else 400
+
+
 def _segmented(n, sel, s, u):
     for i, it in enumerate(_items(n)):
         on = i == sel
@@ -183,4 +211,5 @@ def _slider(n, frac, s, u):
 
 
 _APPLY = {"m3.switch": _switch, "m3.checkbox": _checkbox, "m3.chip_filter": _chip, "m3.radio_group": _radio,
-          "m3.tabs": _tabs, "m3.nav_bar": _nav, "m3.segmented": _segmented, "m3.slider": _slider}
+          "m3.tabs": _tabs, "m3.nav_bar": _nav, "m3.segmented": _segmented, "m3.slider": _slider,
+          "win.navpane": _navpane}

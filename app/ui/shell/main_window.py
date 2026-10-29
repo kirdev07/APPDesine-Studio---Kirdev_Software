@@ -518,6 +518,8 @@ class MainWindow(QMainWindow):
         for a in getattr(self, "studio_actions", []):
             a.setEnabled(has)
         self.act_template.setEnabled(has)
+        self.act_version.setEnabled(has)
+        self.act_history.setEnabled(has)
         self.nav_project.setToolTip("" if has else "Откройте или создайте проект")
         title = APP_NAME
         if has:

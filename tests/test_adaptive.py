@@ -54,7 +54,7 @@ def test_scaffold_slots_scroll_and_tablet_rail():
                  "floatingActionButton = {", "FloatingActionButton(", "Row(modifier = Modifier.fillMaxSize().padding(inner))",
                  "if (wide) {", "NavigationRail {", "NavigationRailItem(",
                  "LocalConfiguration.current.screenWidthDp >= 600", "Modifier.widthIn(max = 600.dp).fillMaxSize()",
-                 ".verticalScroll(scroll", "= rememberScrollState()",  # 1.21: состояние прокрутки по имени
+                 "LazyColumn(", "items(", "= listOf(",  # 1.34: лента одинаковых карточек — список из данных
                  '@Preview(name = "Планшет"',
                  '@Preview(name = "Маленький телефон"'):
         assert code in src, code

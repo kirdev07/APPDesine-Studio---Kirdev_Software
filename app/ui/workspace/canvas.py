@@ -902,11 +902,12 @@ class CanvasView(QGraphicsView):
         if not s:
             return
         vp = self.viewport().rect()
-        side, top = 16, 84  # сверху — место для плавающей панели выделенного и подписи экрана над рамкой
-        z = min((vp.width() - 2 * side) / s.width, (vp.height() - top - side) / s.height)
+        # сверху — место для плавающей панели выделенного и подписи экрана над рамкой, снизу — для поля масштаба
+        side, top, bottom = 16, 84, 60
+        z = min((vp.width() - 2 * side) / s.width, (vp.height() - top - bottom) / s.height)
         z = max(ZOOM_MIN, min(ZOOM_MAX, z))
         self.setTransform(QTransform.fromScale(z, z))
-        self.centerOn(s.width / 2, s.height / 2 - (top - side) / 2 / z)
+        self.centerOn(s.width / 2, s.height / 2 - (top - bottom) / 2 / z)
         self._auto_fit = True
         self.zoom_changed.emit(z)
 
@@ -1373,13 +1374,33 @@ def render_thumbnail(screen: Screen, color: str, w: int, h: int, doc=None, bg: s
     pm.fill(QColor(bg or TOKENS["surface_2"]))
     scene = QGraphicsScene()
     build_scene(scene, screen, color, asset_lookup(doc))
+    scale = min((w - 8) / screen.width, (h - 8) / screen.height)
+    if scale <= 0:
+        return pm
+    tw, th = screen.width * scale, screen.height * scale
+    target = QRectF((w - tw) / 2, (h - th) / 2, tw, th)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    scale = min((w - 8) / screen.width, (h - 8) / screen.height)
-    tw, th = screen.width * scale, screen.height * scale
-    scene.render(p, QRectF((w - tw) / 2, (h - th) / 2, tw, th), QRectF(0, 0, screen.width, screen.height))
+    if scale < MIN_RENDER_SCALE:
+        # крошечная миниатюра: сначала крупнее, потом уменьшить — при прямой отрисовке обрезка по форме
+        # контейнера получает пустой буфер, и Qt пишет в журнал «QPainter not active»
+        from PySide6.QtGui import QImage
+        big = QImage(max(1, round(screen.width * MIN_RENDER_SCALE)), max(1, round(screen.height * MIN_RENDER_SCALE)),
+                     QImage.Format.Format_ARGB32_Premultiplied)
+        big.fill(QColor(0, 0, 0, 0))
+        bp = QPainter(big)
+        bp.setRenderHint(QPainter.RenderHint.Antialiasing)
+        scene.render(bp, QRectF(0, 0, big.width(), big.height()), QRectF(0, 0, screen.width, screen.height))
+        bp.end()
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        p.drawImage(target, big)
+    else:
+        scene.render(p, target, QRectF(0, 0, screen.width, screen.height))
     p.end()
     return pm
+
+
+MIN_RENDER_SCALE = 0.25
 
 
 __all__ = ["CanvasView", "render_thumbnail", "qcolor", "QCursor", "QPainterPath"]

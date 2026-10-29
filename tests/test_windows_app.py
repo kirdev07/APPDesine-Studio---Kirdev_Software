@@ -186,3 +186,67 @@ def test_exported_state_from_design_and_skipped_triggers(win):
         walk(s["nodes"])
     assert toggles == [True, True, False]                                   # переключатели карточек — как в дизайне
     assert windows_app.skipped_triggers(ed.doc, ed.doc.screens) == 0
+
+
+def test_runtime_events_and_resizable_window(tmp_path, qtbot):
+    """1.34: двойное нажатие, удержание, наведение и свайп мышью; окно растягивается по привязкам."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+    m = _runtime(tmp_path)
+    var = [{"id": "v", "name": "v", "type": "text", "default": ""}]
+
+    def rule(trig, value):
+        return {"screen": "a", "node": "box", "trigger": trig, "condition": None,
+                "actions": [{"type": "set_variable", "var_id": "v", "mode": "set", "value": value}]}
+    bar = _f("bar", 0, 0, 400, 40)                                          # во всю ширину — тянется
+    side = _f("side", 340, 60, 60, 40)                                      # у правого края — остаётся у края
+    row = _f("row", 0, 100, 400, 50, layout="horizontal", main="start", cross="center",
+             children=[_f("fix", 0, 5, 100, 40, sh="fixed"), _f("grow", 100, 5, 300, 40, sh="fill")])
+    box = _f("box", 10, 200, 100, 80)
+    ui = _ui([{"id": "a", "name": "A", "nodes": [bar, side, row, box]}],
+             [rule("double_tap", "2"), rule("hover_enter", "in"), rule("swipe_left", "sw")], var)
+    windows_app.anchor(ui["screens"][0]["nodes"], 400, 300)                # привязки по месту в дизайне
+    app = m.App(ui)
+    qtbot.addWidget(app)
+    app.show()
+    w = app.current.byid["box"][0]
+    QTest.mouseDClick(w, Qt.MouseButton.LeftButton)
+    assert app.vars["v"] == "2"
+    app.fire("a", "box", "hover_enter")
+    assert app.vars["v"] == "in"
+    QTest.mousePress(w, Qt.MouseButton.LeftButton, pos=QPoint(90, 40))
+    QTest.mouseMove(w, QPoint(10, 40))
+    QTest.mouseRelease(w, Qt.MouseButton.LeftButton, pos=QPoint(10, 40))
+    assert app.vars["v"] == "sw"
+    assert app.minimumSize().width() < 400                                  # окно не фиксированного размера
+    app.resize(800, 300)
+    qtbot.waitUntil(lambda: app.current.width() == 800)
+    g = lambda nid: app.current.byid[nid][0].geometry()                     # noqa: E731
+    assert g("bar").width() == 800 and g("side").x() == 740 and g("box").x() == 10
+    assert g("fix").width() == 100 and g("grow").width() == 700
+
+
+def test_link_windows_nav_pane_items(win):
+    """1.34: пункт панели навигации Windows связывается с экраном одной кнопкой, как нижнее меню Android."""
+    from app.engines.preview import live
+    ed = win.project_page.editor
+    blank = ed.screen().id
+    settings, files = ed.add_template_screen("win_settings"), ed.add_template_screen("win_files")
+    empty = ed.add_blank_screen()
+    ed.remove_screen(blank)
+    ed.set_screen(settings.id)
+    pane = next(n for n in ed.screen().nodes if n.role == "win.navpane")
+    sel = live.selected(pane)
+    ed.select([pane.id])
+    win.project_page.inspector.refresh()
+    assert not win.project_page.inspector.sec_switch.isHidden()            # список «Пункт → экран» на виду
+    assert ed.link_nav_item(pane.id, 0, empty.id) and ed.link_nav_item(pane.id, 1, files.id)
+    other = next(n for n in ed.doc.screen(empty.id).nodes if n.role == "win.navpane")
+    assert live.selected(other) == 0 and other.x == pane.x                  # своя панель, выбран свой пункт
+    assert all(n.x >= other.x + other.w - 0.5 for n in ed.doc.screen(empty.id).nodes if n is not other)
+    assert live.selected(next(n for n in ed.doc.screen(files.id).nodes if n.role == "win.navpane")) == 1
+    assert ed.nav_targets(pane.id)[:2] == [empty.id, files.id]
+    if sel > 1:
+        assert ed.nav_targets(pane.id)[sel] == settings.id                  # выбранный пункт — этот же экран
+    ed.undo()
+    assert ed.nav_targets(pane.id)[1] != files.id

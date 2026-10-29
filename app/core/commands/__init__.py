@@ -483,10 +483,14 @@ class RemoveScreen(Command):
         self.index, self.data = doc.screens.index(s), s.to_dict()
         doc.screens.pop(self.index)
         self.links = prune_links(doc, self.screen_id)  # правила экрана и переходы на него
+        self.anims = list(doc.animations)  # анимации экрана — вместе с ним
+        doc.animations = [a for a in doc.animations if a.screen_id != self.screen_id]
 
     def undo(self, doc):
         doc.screens.insert(self.index, Screen.from_dict(self.data))
         restore_links(doc, getattr(self, "links", None))
+        if getattr(self, "anims", None) is not None:
+            doc.animations = self.anims
 
 
 class SetScreenProps(Command):

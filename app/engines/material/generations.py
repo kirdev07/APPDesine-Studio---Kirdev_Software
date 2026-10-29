@@ -85,6 +85,35 @@ def nav_item_look(it, on: bool, gen: str, s: dict) -> None:
             c.font_weight = 600 if on else 500
 
 
+def switch_track(n):
+    """Дорожка переключателя (фрейм с бегунком-кругом) или None."""
+    return next((d for d in tree.descendants(n) if d.is_frame and d.children and d.children[0].type == "ellipse"), None)
+
+
+def switch_look(track, on: bool, gen: str, s: dict, k: float) -> None:
+    """Переключатель по поколению. M1 / M2 — тонкая полупрозрачная дорожка и круглый бегунок с тенью, который
+    выступает за неё; M3 — широкая дорожка-капсула с бегунком внутри."""
+    thumb = track.children[0]
+    if gen in OLD:
+        track.w, track.h, track.radius = round(36 * k, 2), round(14 * k, 2), round(7 * k, 2)
+        track.pad_l = track.pad_r = 0
+        track.clip, track.stroke, track.stroke_width = False, "", 0
+        track.fill = (s["primary"][:7] + "80") if on else (s["onSurface"][:7] + "4D")
+        thumb.w = thumb.h = round(20 * k, 2)
+        thumb.fill = s["primary"] if on else "#ECECEC"
+        thumb.elevation = 1
+    else:
+        track.w, track.h, track.radius = round(52 * k, 2), round(32 * k, 2), round(16 * k, 2)
+        track.pad_l = track.pad_r = round(4 * k, 2)
+        track.clip = True
+        track.fill = s["primary"] if on else s["surfaceContainerHighest"]
+        track.stroke, track.stroke_width = ("", 0) if on else (s["outline"], round(2 * k, 2))
+        thumb.w = thumb.h = round((24 if on else 16) * k, 2)
+        thumb.fill = s["onPrimary"] if on else s["outline"]
+        thumb.elevation = 0
+    track.main_align = "end" if on else "start"
+
+
 def restyle_component(n, gen: str, s: dict, k: float) -> bool:
     """Вид одного компонента по его роли под поколение. True — компонент узнан и перестроен."""
     r, old = n.role, gen in OLD
@@ -129,6 +158,12 @@ def restyle_component(n, gen: str, s: dict, k: float) -> bool:
         n.elevation = 3 if old else 0
         for i, it in enumerate(_items(n)):
             nav_item_look(it, i == sel, gen, s)
+        return True
+    if r == "m3.switch":
+        track = switch_track(n)
+        if track is None:
+            return False
+        switch_look(track, track.main_align == "end", gen, s, k)
         return True
     if r in CARDS:
         n.radius = _r("card", gen, n, k)
